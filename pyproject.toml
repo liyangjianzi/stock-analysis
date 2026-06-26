@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stockanalysis"
+version = "0.1.0"
+description = "End-to-end North American equity analysis: fundamental screener, technical indicators, and a fused Buy/Hold/Watch signal engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas",
+    "numpy",
+    "yfinance",
+    "ta",
+    "plotly",
+    "openpyxl",
+]
+
+[project.optional-dependencies]
+# Google Sheets exporter. Excel works without these.
+gsheets = ["gspread", "google-auth"]
+# Test suite (fully offline; no network / yfinance calls).
+test = ["pytest"]
+# Demo notebook runtime — the full kernel-side rendering stack the notebook
+# needs (the core package charts with plotly and needs none of these):
+#   ipykernel  — run this venv as a Jupyter kernel
+#   nbformat   — Plotly's notebook / mime figure rendering (fig.show)
+#   matplotlib — Styler.background_gradient colormaps
+#   jinja2     — the pandas .style accessor
+notebook = ["ipykernel", "nbformat", "matplotlib", "jinja2"]
+
+[project.scripts]
+stock-analysis = "stockanalysis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]   # import stockanalysis straight from the src layout

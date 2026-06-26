@@ -1,0 +1,16 @@
+ticker,company,exchange,sector
+AAPL,Apple,NASDAQ,Technology
+MSFT,Microsoft,NASDAQ,Technology
+NVDA,NVIDIA,NASDAQ,Technology
+GOOGL,Alphabet,NASDAQ,Technology
+SHOP.TO,Shopify,TSX,Technology
+JPM,JPMorgan Chase,NYSE,Financials
+BAC,Bank of America,NYSE,Financials
+TD.TO,Toronto-Dominion Bank,TSX,Financials
+RY.TO,Royal Bank of Canada,TSX,Financials
+BNS.TO,Bank of Nova Scotia,TSX,Financials
+JNJ,Johnson & Johnson,NYSE,Healthcare
+PFE,Pfizer,NYSE,Healthcare
+UNH,UnitedHealth,NYSE,Healthcare
+ABBV,AbbVie,NYSE,Healthcare
+GILD,Gilead Sciences,NASDAQ,Healthcare

@@ -1,0 +1,33 @@
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Generated pipeline outputs
+output/
+*.xlsx
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Credentials (never commit service-account keys)
+*-credentials.json
+service-account*.json
+
+# OS / IDE
+.DS_Store
+.idea/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Legacy notebook superseded by notebooks/stock_analysis.ipynb (pending removal)
+/stock_analysis.ipynb

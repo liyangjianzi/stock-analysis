@@ -1,0 +1,46 @@
+ticker,company,exchange,sector
+AAPL,Apple,NASDAQ,Technology
+MSFT,Microsoft,NASDAQ,Technology
+NVDA,NVIDIA,NASDAQ,Technology
+GOOGL,Alphabet,NASDAQ,Technology
+SHOP.TO,Shopify,TSX,Technology
+JPM,JPMorgan Chase,NYSE,Financials
+BAC,Bank of America,NYSE,Financials
+TD.TO,Toronto-Dominion Bank,TSX,Financials
+RY.TO,Royal Bank of Canada,TSX,Financials
+BNS.TO,Bank of Nova Scotia,TSX,Financials
+JNJ,Johnson & Johnson,NYSE,Healthcare
+PFE,Pfizer,NYSE,Healthcare
+UNH,UnitedHealth,NYSE,Healthcare
+ABBV,AbbVie,NYSE,Healthcare
+GILD,Gilead Sciences,NASDAQ,Healthcare
+SNDK,SanDisk,NASDAQ,Technology
+MU,Micron Technology,NASDAQ,Technology
+WDC,Western Digital,NASDAQ,Technology
+STX,Seagate Technology,NASDAQ,Technology
+VICR,Vicor,NASDAQ,Technology
+ALAB,Astera Labs,NASDAQ,Technology
+STRL,Sterling Infrastructure,NASDAQ,Industrials
+ADEA,Adeia,NASDAQ,Technology
+AMAT,Applied Materials,NASDAQ,Technology
+LRCX,Lam Research,NASDAQ,Technology
+TER,Teradyne,NASDAQ,Technology
+FLEX,Flex,NASDAQ,Technology
+GLW,Corning,NYSE,Technology
+SEZL,Sezzle,NASDAQ,Technology
+SNEX,StoneX Group,NASDAQ,Financials
+VRT,Vertiv,NYSE,Industrials
+LQDA,Liquidia,NASDAQ,Healthcare
+ATRO,Astronics,NASDAQ,Industrials
+INSW,International Seaways,NYSE,Industrials
+INOD,Innodata,NASDAQ,Technology
+EXTR,Extreme Networks,NASDAQ,Technology
+VIRT,Virtu Financial,NASDAQ,Financials
+ATEN,A10 Networks,NYSE,Technology
+CRS,Carpenter Technology,NYSE,Industrials
+TXN,Texas Instruments,NASDAQ,Technology
+KEYS,Keysight Technologies,NYSE,Technology
+ECG,Everus Construction,NYSE,Industrials
+GEO,GEO Group,NYSE,Industrials
+FTNT,Fortinet,NASDAQ,Technology
+JBL,Jabil,NYSE,Technology
