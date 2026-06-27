@@ -85,7 +85,7 @@ src/stockanalysis/
   ingest.py       yfinance fetch + load_watchlist() driver
   screener.py     screen_fundamentals (0–6)
   indicators.py   add_indicators + regression channel + support/resistance
-  signals.py      compute_technical_posture (0–5) + generate_signals
+  signals.py      compute_technical_posture (registry-driven, default 0–6) + generate_signals
   overview.py     Stage-0 daily market overview (data only)
   profile.py      build_profile (deep fundamental report)
   charts.py       build_* Plotly figures + save_html
@@ -100,10 +100,12 @@ notebooks/
 
 - **Fundamental score (0–6):** one point per threshold passed — P/E, EPS growth,
   revenue growth, debt/equity, dividend yield, positive free cash flow.
-- **Technical score (0–5):** price > EMA50, RSI in 35–70, recent bullish MACD
-  crossover, positive regression-channel slope, volume confirmation.
-- **Composite:** `0.70·(fund/6) + 0.30·(tech/5)` → **Buy ≥ 0.60 · Hold ≥ 0.40 ·
-  Watch < 0.40**.
+- **Technical score (registry-driven, default 0–6):** price > EMA50, RSI in
+  35–70, recent bullish MACD crossover, positive close-regression slope, rising
+  EMA50, volume confirmation. Components live in `TECHNICAL_COMPONENTS`; the max
+  follows its length.
+- **Composite:** `0.70·(fund/6) + 0.30·(tech/N)` (N = len(TECHNICAL_COMPONENTS),
+  default 6) → **Buy ≥ 0.60 · Hold ≥ 0.40 · Watch < 0.40**.
 
 A strong company in a poor tape lands in *Hold/Watch*; a fundamentally weak name
 never reaches *Buy* on technicals alone.

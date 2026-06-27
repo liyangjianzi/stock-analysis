@@ -4,22 +4,28 @@ from __future__ import annotations
 import pandas as pd
 
 from stockanalysis.indicators import add_indicators
-from stockanalysis.signals import compute_technical_posture, generate_signals
+from stockanalysis.signals import (compute_technical_posture, generate_signals,
+                                    TECHNICAL_COMPONENTS, _ema50_up)
 
-DETAIL_KEYS = {"above_ema50", "rsi_ok", "macd_cross_up", "trend_up",
-               "vol_confirm", "nearest_level"}
+DETAIL_KEYS = {name for name, _ in TECHNICAL_COMPONENTS} | {"nearest_level"}
+MAX_TECH = len(TECHNICAL_COMPONENTS)
 OUTPUT_COLS = ["Ticker", "Sector", "Fundamental Score", "Technical Posture",
                "Tech Score", "Composite", "Final Action Signal"]
+
+# Trivial predicates for exercising the configurable component registry.
+ALWAYS = ("always", lambda df: True)
+NEVER = ("never", lambda df: False)
 
 
 # --- compute_technical_posture -------------------------------------------------
 
 def test_posture_uptrend_is_constructive(uptrend_ohlcv):
     label, score, detail = compute_technical_posture(add_indicators(uptrend_ohlcv))
-    assert 0 <= score <= 5
+    assert 0 <= score <= MAX_TECH
     assert set(detail) == DETAIL_KEYS
     assert detail["above_ema50"] is True
     assert detail["trend_up"] is True
+    assert detail["ema50_up"] is True
     assert label in {"Bullish", "Neutral"}
 
 
@@ -27,6 +33,7 @@ def test_posture_downtrend_is_weak(downtrend_ohlcv):
     label, score, detail = compute_technical_posture(add_indicators(downtrend_ohlcv))
     assert detail["above_ema50"] is False
     assert detail["trend_up"] is False
+    assert detail["ema50_up"] is False
     assert label in {"Bearish", "Neutral"}
 
 
@@ -66,3 +73,22 @@ def test_output_columns_and_ordering(make_screened):
 def test_empty_screened_returns_empty():
     assert generate_signals(pd.DataFrame(), tech_data={}).empty
     assert generate_signals(None, tech_data={}).empty
+
+
+def test_ema50_up_component_directly(uptrend_ohlcv, downtrend_ohlcv):
+    assert _ema50_up(add_indicators(uptrend_ohlcv)) is True
+    assert _ema50_up(add_indicators(downtrend_ohlcv)) is False
+
+
+def test_components_override_scales_max_and_posture(uptrend_ohlcv):
+    enriched = add_indicators(uptrend_ohlcv)
+    one = [ALWAYS]
+    label, score, detail = compute_technical_posture(enriched, components=one)
+    assert score == 1
+    assert set(detail) == {"always", "nearest_level"}
+    assert label == "Bullish"        # 1 >= ceil(2/3 * 1) == 1
+
+    two = [ALWAYS, NEVER]
+    label2, score2, _ = compute_technical_posture(enriched, components=two)
+    assert score2 == 1               # max 2
+    assert label2 == "Neutral"       # 0 < 1 < ceil(2/3*2)=2
