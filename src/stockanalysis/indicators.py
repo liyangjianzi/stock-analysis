@@ -3,7 +3,8 @@
 ``add_indicators`` writes a fixed set of per-bar columns that the dashboard and
 signal engine read by exact name (the column contract):
 ``EMA20/EMA50/EMA200``, ``ENV_UP/ENV_DOWN``, ``MACD/MACD_SIG/MACD_HIST``,
-``RSI``, ``VOL_SMA20``, ``OBV``.
+``RSI``, ``VOL_SMA20``, ``OBV``. The envelope is a *data-driven* asymmetric band
+around EMA20 sized so ~``envelope_coverage`` of closes fall inside it.
 
 Trend channels and support/resistance are *window-dependent overlays* (not
 per-bar columns), so they are computed on demand by ``fit_regression_channel``
@@ -18,13 +19,19 @@ from ta.trend import EMAIndicator, MACD
 from ta.volume import OnBalanceVolumeIndicator
 
 
-def add_indicators(df: pd.DataFrame, envelope_pct: float = 0.025) -> pd.DataFrame:
+def add_indicators(df: pd.DataFrame, envelope_coverage: float = 0.95,
+                   envelope_fallback_pct: float = 0.025) -> pd.DataFrame:
     """Return a copy of an OHLCV DataFrame enriched with EMA/Envelope/MACD/RSI/Volume.
 
     Parameters
     ----------
     df : OHLCV DataFrame with a 'Close' column (and High/Low/Open/Volume).
-    envelope_pct : half-width of the EMA20 envelope band (0.025 == ±2.5%).
+    envelope_coverage : target fraction of closes inside the EMA20 envelope. The
+        band is asymmetric — its lower/upper edges sit at the ``(1-coverage)/2`` and
+        ``1-(1-coverage)/2`` percentiles of the relative deviation ``Close/EMA20-1``
+        (0.95 -> 2.5th/97.5th percentiles).
+    envelope_fallback_pct : symmetric half-width used when there are too few finite
+        deviations (<20 bars) to estimate stable percentiles.
     """
     if df is None or df.empty or "Close" not in df:
         return df
@@ -37,9 +44,17 @@ def add_indicators(df: pd.DataFrame, envelope_pct: float = 0.025) -> pd.DataFram
     out["EMA50"]  = EMAIndicator(close, window=50).ema_indicator()
     out["EMA200"] = EMAIndicator(close, window=200).ema_indicator()
 
-    # --- EMA Envelopes: ±envelope_pct band around the 20-day EMA ---
-    out["ENV_UP"]  = out["EMA20"] * (1 + envelope_pct)
-    out["ENV_DOWN"] = out["EMA20"] * (1 - envelope_pct)
+    # --- EMA Envelopes: data-driven asymmetric band covering ~envelope_coverage of
+    #     closes. Edges are the lower/upper percentiles of the price's relative
+    #     deviation from EMA20; a constant band per series (parallel to EMA20).
+    tail = (1 - envelope_coverage) / 2
+    dev = (close / out["EMA20"] - 1).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(dev) >= 20:
+        lo, hi = dev.quantile(tail), dev.quantile(1 - tail)
+    else:                                    # short series -> symmetric fallback
+        lo, hi = -envelope_fallback_pct, envelope_fallback_pct
+    out["ENV_UP"]  = out["EMA20"] * (1 + hi)
+    out["ENV_DOWN"] = out["EMA20"] * (1 + lo)   # lo is negative
 
     # --- MACD (12, 26, 9): momentum via EMA differential ---
     macd = MACD(close, window_slow=26, window_fast=12, window_sign=9)

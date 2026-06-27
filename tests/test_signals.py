@@ -5,7 +5,7 @@ import pandas as pd
 
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import (compute_technical_posture, generate_signals,
-                                    TECHNICAL_COMPONENTS, _ema50_up)
+                                    TECHNICAL_COMPONENTS, _ema50_up, _near_lower_env)
 
 DETAIL_KEYS = {name for name, _ in TECHNICAL_COMPONENTS} | {"nearest_level"}
 MAX_TECH = len(TECHNICAL_COMPONENTS)
@@ -92,3 +92,16 @@ def test_components_override_scales_max_and_posture(uptrend_ohlcv):
     label2, score2, _ = compute_technical_posture(enriched, components=two)
     assert score2 == 1               # max 2
     assert label2 == "Neutral"       # 0 < 1 < ceil(2/3*2)=2
+
+
+def test_near_lower_env_component_directly():
+    # Normalized band position pos = (Close - ENV_DOWN)/(ENV_UP - ENV_DOWN) <= 0.25.
+    def row(close, down=10.0, up=14.0):
+        return pd.DataFrame({"Close": [close], "ENV_DOWN": [down], "ENV_UP": [up]})
+
+    assert _near_lower_env(row(10.1)) is True     # pos = 0.025 -> bottom zone
+    assert _near_lower_env(row(11.0)) is True     # pos = 0.25  -> boundary (inclusive)
+    assert _near_lower_env(row(13.0)) is False    # pos = 0.75  -> upper zone
+    # Degenerate / missing band -> False, never raises.
+    assert _near_lower_env(row(10.0, down=12.0, up=12.0)) is False  # zero-width band
+    assert _near_lower_env(pd.DataFrame({"Close": [10.0]})) is False  # no ENV columns

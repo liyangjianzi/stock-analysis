@@ -7,7 +7,7 @@ the registry, so adding/removing a component is a one-line edit there.
 
 Score contract:
   - fundamental score: 0-6 (from :mod:`stockanalysis.screener`)
-  - technical score:   0-len(TECHNICAL_COMPONENTS) (default 6)
+  - technical score:   0-len(TECHNICAL_COMPONENTS) (default 7)
   - composite = 0.70*(fund/6) + 0.30*(tech/len) -> Buy >=0.60, Hold >=0.40, else Watch
 """
 from __future__ import annotations
@@ -79,6 +79,18 @@ def _vol_confirm(df: pd.DataFrame, obv_lookback: int = 20) -> bool:
     return False
 
 
+def _near_lower_env(df: pd.DataFrame, frac: float = 0.25) -> bool:
+    """Price hugging the lower EMA envelope (potential mean-reversion entry):
+    normalized band position in the bottom ``frac`` of ``[ENV_DOWN, ENV_UP]``."""
+    last = df.iloc[-1]
+    close = last.get("Close", np.nan)
+    up, down = last.get("ENV_UP", np.nan), last.get("ENV_DOWN", np.nan)
+    rng = up - down
+    if not all(np.isfinite(v) for v in (close, up, down)) or rng <= 0:
+        return False
+    return bool((close - down) / rng <= frac)
+
+
 TechnicalComponent = tuple[str, Callable[[pd.DataFrame], bool]]
 
 #: Single source of truth for the technical score. Add/remove a (name, predicate)
@@ -91,6 +103,7 @@ TECHNICAL_COMPONENTS: list[TechnicalComponent] = [
     ("trend_up", _trend_up),
     ("ema50_up", _ema50_up),
     ("vol_confirm", _vol_confirm),
+    ("near_lower_env", _near_lower_env),
 ]
 
 #: Default posture cutoff: Bullish once at least two-thirds of components fire.

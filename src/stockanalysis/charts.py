@@ -60,12 +60,22 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
         ), row=1, col=1)
 
     # Envelope band: upper line + lower line filled to the upper (shaded band).
+    # The band is data-driven and asymmetric, so derive its actual ± percentages
+    # from the last finite EMA20 bar (the band is a constant multiple of EMA20).
+    ema20_valid = d["EMA20"].dropna()
+    if not ema20_valid.empty:
+        i = ema20_valid.index[-1]
+        up_pct = d["ENV_UP"][i] / d["EMA20"][i] - 1
+        dn_pct = d["ENV_DOWN"][i] / d["EMA20"][i] - 1
+        up_name, dn_name = f"Env +{up_pct:.1%}", f"Env {dn_pct:.1%}"
+    else:
+        up_name, dn_name = "Env upper", "Env lower"
     fig.add_trace(go.Scatter(
-        x=d.index, y=d["ENV_UP"], name="Env +2.5%", mode="lines",
+        x=d.index, y=d["ENV_UP"], name=up_name, mode="lines",
         line=dict(color="rgba(127,127,127,0.5)", width=1, dash="dash"),
     ), row=1, col=1)
     fig.add_trace(go.Scatter(
-        x=d.index, y=d["ENV_DOWN"], name="Env -2.5%", mode="lines",
+        x=d.index, y=d["ENV_DOWN"], name=dn_name, mode="lines",
         line=dict(color="rgba(127,127,127,0.5)", width=1, dash="dash"),
         fill="tonexty", fillcolor="rgba(127,127,127,0.08)",
     ), row=1, col=1)

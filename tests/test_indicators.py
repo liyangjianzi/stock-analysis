@@ -23,11 +23,35 @@ def test_add_indicators_writes_contract_columns(uptrend_ohlcv):
         assert col in out.columns, f"missing contract column {col}"
 
 
-def test_envelope_is_ema20_band(uptrend_ohlcv):
-    out = add_indicators(uptrend_ohlcv)
+def test_envelope_is_data_driven_band(uptrend_ohlcv):
+    out = add_indicators(uptrend_ohlcv, envelope_coverage=0.95)
     valid = out["EMA20"].notna()
-    np.testing.assert_allclose(out.loc[valid, "ENV_UP"], out.loc[valid, "EMA20"] * 1.025)
-    np.testing.assert_allclose(out.loc[valid, "ENV_DOWN"], out.loc[valid, "EMA20"] * 0.975)
+    up_ratio = out.loc[valid, "ENV_UP"] / out.loc[valid, "EMA20"]
+    dn_ratio = out.loc[valid, "ENV_DOWN"] / out.loc[valid, "EMA20"]
+    # Global scalar band: each edge is a constant multiple of EMA20, upper >= lower.
+    # (The band need not straddle EMA20 — in a trend it sits to one side.)
+    np.testing.assert_allclose(up_ratio, up_ratio.iloc[0])
+    np.testing.assert_allclose(dn_ratio, dn_ratio.iloc[0])
+    assert (out.loc[valid, "ENV_UP"] >= out.loc[valid, "ENV_DOWN"]).all()
+    # ~95% of closes fall inside the band (the coverage target, measured in-sample).
+    inside = ((out.loc[valid, "Close"] >= out.loc[valid, "ENV_DOWN"]) &
+              (out.loc[valid, "Close"] <= out.loc[valid, "ENV_UP"]))
+    assert 0.92 <= inside.mean() <= 0.98
+
+
+def test_envelope_short_series_uses_fallback():
+    # Fewer than 20 finite deviations -> symmetric ±envelope_fallback_pct band.
+    n = 30
+    base = np.linspace(10.0, 11.0, n)
+    df = pd.DataFrame({
+        "Open": base, "High": base * 1.01, "Low": base * 0.99,
+        "Close": base, "Volume": np.full(n, 1_000_000.0),
+    })
+    out = add_indicators(df, envelope_fallback_pct=0.03)
+    valid = out["EMA20"].notna()
+    assert valid.any()
+    np.testing.assert_allclose(out.loc[valid, "ENV_UP"], out.loc[valid, "EMA20"] * 1.03)
+    np.testing.assert_allclose(out.loc[valid, "ENV_DOWN"], out.loc[valid, "EMA20"] * 0.97)
 
 
 def test_rsi_bounded_0_100(uptrend_ohlcv):
