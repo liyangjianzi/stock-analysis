@@ -104,3 +104,13 @@ def test_posture_timeline_labels_are_technical():
     tl = posture_timeline(_spike_ohlcv(), min_bars=60)
     assert set(tl.columns) == {"tech_score", "label"}
     assert set(tl["label"]).issubset({"Bearish", "Neutral", "Bullish"})
+
+
+def test_posture_timeline_composite_uses_fundamentals(uptrend_ohlcv):
+    low = posture_timeline(uptrend_ohlcv, mode="composite", fundamental_score=0)
+    high = posture_timeline(uptrend_ohlcv, mode="composite", fundamental_score=6)
+
+    assert set(low["label"]).issubset({"Buy", "Hold", "Watch"})
+    # With a strong uptrend, raising the fundamental score can only push the
+    # composite up, so the count of "Buy" labels must be >= the low-score count.
+    assert (high["label"] == "Buy").sum() >= (low["label"] == "Buy").sum()
