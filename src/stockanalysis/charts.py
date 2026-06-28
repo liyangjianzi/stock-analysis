@@ -220,3 +220,35 @@ def build_index_overview(index_data: dict) -> go.Figure:
     fig.update_xaxes(showspikes=True, spikemode="across")
     fig.update_yaxes(showspikes=True)
     return fig
+
+
+def build_backtest_report(results, title: str = "Backtest Report") -> go.Figure:
+    """Two-panel report: equity curve (+ benchmark) and hit-rate by horizon."""
+    fig = make_subplots(
+        rows=2, cols=1, row_heights=[0.62, 0.38], vertical_spacing=0.12,
+        subplot_titles=("Equity Curve vs Benchmark", "Forward-Return Hit Rate by Horizon"),
+    )
+
+    eq = results.portfolio_curve
+    if eq is not None and not eq.empty:
+        fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name="Strategy",
+                                 line=dict(color="#1F77B4")), row=1, col=1)
+    bm = results.benchmark_curve
+    if bm is not None and not bm.empty:
+        fig.add_trace(go.Scatter(x=bm.index, y=bm.values, name="Benchmark",
+                                 line=dict(color="#999999", dash="dot")), row=1, col=1)
+
+    bucket = results.config.get("entry_bucket")
+    stats = results.event_stats.get(bucket, {})
+    horizons = list(stats)
+    hit = [stats[h].get("hit_rate") for h in horizons]
+    if horizons:
+        fig.add_trace(go.Bar(x=horizons, y=hit, name="Hit rate",
+                             marker_color="#2CA02C"), row=2, col=1)
+
+    caveat = "" if results.mode == "technical" else \
+        "   ⚠ COMPOSITE MODE — fundamentals frozen at today (lookahead bias)"
+    fig.update_layout(title=title + caveat, height=config.PLOT_HEIGHT, showlegend=True)
+    fig.update_yaxes(title_text="Equity", row=1, col=1)
+    fig.update_yaxes(title_text="Hit rate", range=[0, 1], row=2, col=1)
+    return fig
