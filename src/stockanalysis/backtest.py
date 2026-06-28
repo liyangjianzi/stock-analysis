@@ -91,3 +91,34 @@ def forward_returns(hist, entry_dates, horizons=("1m", "3m", "6m")) -> pd.DataFr
         rows[ts] = rec
 
     return pd.DataFrame.from_dict(rows, orient="index", columns=horizons)
+
+
+def aggregate_event_stats(event_returns, baseline_returns=None) -> dict:
+    """Per-horizon hit-rate / mean / median / win-loss, optionally baseline-relative."""
+    stats: dict = {}
+    for h in event_returns.columns:
+        s = event_returns[h].dropna()
+        wins, losses = s[s > 0], s[s < 0]
+        d = {
+            "n": int(s.size),
+            "hit_rate": float((s > 0).mean()) if s.size else float("nan"),
+            "mean": float(s.mean()) if s.size else float("nan"),
+            "median": float(s.median()) if s.size else float("nan"),
+            "avg_win": float(wins.mean()) if wins.size else float("nan"),
+            "avg_loss": float(losses.mean()) if losses.size else float("nan"),
+        }
+        if baseline_returns is not None and h in baseline_returns:
+            b = baseline_returns[h].dropna()
+            d["baseline_mean"] = float(b.mean()) if b.size else float("nan")
+            d["excess_mean"] = (d["mean"] - d["baseline_mean"]
+                                if s.size and b.size else float("nan"))
+        stats[h] = d
+    return stats
+
+
+def yearly_means(event_returns) -> dict:
+    """Per-horizon mean forward return grouped by entry year (regime robustness)."""
+    if event_returns is None or event_returns.empty:
+        return {}
+    by_year = event_returns.groupby(event_returns.index.year).mean()
+    return {h: by_year[h].dropna().to_dict() for h in event_returns.columns}

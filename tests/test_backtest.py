@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockanalysis.backtest import posture_timeline, entry_events, forward_returns
+from stockanalysis.backtest import posture_timeline, entry_events, forward_returns, aggregate_event_stats, yearly_means
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import compute_technical_posture, TECHNICAL_COMPONENTS
 
@@ -140,3 +140,24 @@ def test_forward_returns_one_month_horizon():
     entry = hist["Open"].iloc[1]                      # next-day open
     expected = hist["Close"].iloc[1 + 21] / entry - 1
     assert np.isclose(fr.loc[hist.index[0], "1m"], expected)
+
+
+def test_aggregate_event_stats_basic():
+    idx = pd.bdate_range("2023-01-02", periods=4)
+    ev = pd.DataFrame({"1m": [0.10, -0.05, 0.20, np.nan]}, index=idx)
+    base = pd.DataFrame({"1m": [0.01, 0.01, 0.01, 0.01]}, index=idx)
+    stats = aggregate_event_stats(ev, base)["1m"]
+
+    assert stats["n"] == 3
+    assert np.isclose(stats["hit_rate"], 2 / 3)
+    assert np.isclose(stats["mean"], (0.10 - 0.05 + 0.20) / 3)
+    assert np.isclose(stats["baseline_mean"], 0.01)
+    assert np.isclose(stats["excess_mean"], stats["mean"] - 0.01)
+
+
+def test_yearly_means_groups_by_year():
+    idx = [pd.Timestamp("2022-06-01"), pd.Timestamp("2023-06-01")]
+    ev = pd.DataFrame({"1m": [0.10, 0.20]}, index=idx)
+    ym = yearly_means(ev)
+    assert np.isclose(ym["1m"][2022], 0.10)
+    assert np.isclose(ym["1m"][2023], 0.20)
