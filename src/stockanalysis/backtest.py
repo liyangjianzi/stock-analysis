@@ -9,6 +9,7 @@ This is O(N^2) per ticker — fine for a watchlist of dozens over a few years.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from .indicators import add_indicators
@@ -62,3 +63,31 @@ def entry_events(timeline, entry_labels=("Bullish",)) -> list:
     is_in = timeline["label"].isin(entry_labels)
     prev = is_in.shift(1, fill_value=False)
     return list(timeline.index[is_in & ~prev])
+
+
+def forward_returns(hist, entry_dates, horizons=("1m", "3m", "6m")) -> pd.DataFrame:
+    """Forward returns from a next-day-open entry to each horizon's close."""
+    horizons = list(horizons)
+    if hist is None or hist.empty or not entry_dates:
+        return pd.DataFrame(columns=horizons)
+
+    opens = hist["Open"].to_numpy(float)
+    closes = hist["Close"].to_numpy(float)
+    pos = {ts: i for i, ts in enumerate(hist.index)}
+    n = len(hist)
+
+    rows: dict = {}
+    for ts in entry_dates:
+        i = pos.get(ts)
+        if i is None or i + 1 >= n:
+            continue
+        entry = opens[i + 1]                          # execute at next-day open
+        if not np.isfinite(entry) or entry <= 0:
+            continue
+        rec = {}
+        for h in horizons:
+            j = i + 1 + HORIZONS_BARS[h]
+            rec[h] = (closes[j] / entry - 1) if j < n and np.isfinite(closes[j]) else np.nan
+        rows[ts] = rec
+
+    return pd.DataFrame.from_dict(rows, orient="index", columns=horizons)

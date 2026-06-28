@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from stockanalysis.backtest import posture_timeline, entry_events
+from stockanalysis.backtest import posture_timeline, entry_events, forward_returns
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import compute_technical_posture, TECHNICAL_COMPONENTS
 
@@ -126,3 +127,16 @@ def test_entry_events_collapse_consecutive_bullish():
     events = entry_events(tl, entry_labels=("Bullish",))
     # Two runs of Bullish -> two entry events, at the first bar of each run.
     assert events == [idx[1], idx[4]]
+
+
+def test_forward_returns_one_month_horizon():
+    # Entry executes at the NEXT bar's open; 1m horizon = 21 trading days later.
+    n = 40
+    closes = pd.Series(
+        np.linspace(100.0, 139.0, n), index=pd.bdate_range("2023-01-02", periods=n)
+    )
+    hist = pd.DataFrame({"Open": closes.shift(1).fillna(closes.iloc[0]), "Close": closes})
+    fr = forward_returns(hist, [hist.index[0]], horizons=("1m",))
+    entry = hist["Open"].iloc[1]                      # next-day open
+    expected = hist["Close"].iloc[1 + 21] / entry - 1
+    assert np.isclose(fr.loc[hist.index[0], "1m"], expected)
