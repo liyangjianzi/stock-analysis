@@ -28,6 +28,8 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
     is the fused action (Buy/Hold/Watch) using ``fundamental_score``.
     """
     cols = ["tech_score", "label"]
+    # NOTE: strict inequality (<=) means exactly min_bars rows returns empty;
+    # min_bars+1 rows produces one entry (the first bar after the warmup window).
     if hist is None or hist.empty or "Close" not in hist or len(hist) <= min_bars:
         return pd.DataFrame(columns=cols)
 
