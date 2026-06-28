@@ -152,7 +152,11 @@ def _portfolio_summary(equity, trades) -> dict:
 def simulate_portfolio(prices, timeline_map, *, entry_labels=("Bullish",),
                        max_positions=10, max_hold_bars=63, cost_bps=10.0,
                        slippage_mult=1.0, start_cash=100_000.0) -> dict:
-    """Equal-slot long-only simulation over the union calendar of all tickers."""
+    """Equal-slot long-only simulation over the union calendar of all tickers.
+
+    max_hold_bars is counted from the entry bar: a position entered at bar i
+    is force-exited at bar i+max_hold_bars's close (label-based exits may trigger sooner).
+    """
     cost = cost_bps / 10_000.0 * slippage_mult
     closes, labels, ipos, entries = {}, {}, {}, {}
     for tk, hist in prices.items():

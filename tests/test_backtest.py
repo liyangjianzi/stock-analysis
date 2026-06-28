@@ -180,5 +180,5 @@ def test_simulate_portfolio_runs_a_winning_trade():
 
     assert not out["curve"].empty
     assert out["summary"]["n_trades"] == 1
-    assert out["summary"]["win_rate"] == 1.0           # bought ~110, exited ~140
+    assert out["summary"]["win_rate"] == 1.0           # entered at 100, exited at 130, +30%
     assert out["curve"].iloc[-1] > 1_000.0             # equity grew
