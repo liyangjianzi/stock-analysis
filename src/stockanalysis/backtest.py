@@ -9,9 +9,14 @@ This is O(N^2) per ticker — fine for a watchlist of dozens over a few years.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
+from . import config
 from .indicators import add_indicators
 from .signals import TECHNICAL_COMPONENTS, compute_technical_posture
 
@@ -218,3 +223,119 @@ def simulate_portfolio(prices, timeline_map, *, entry_labels=("Bullish",),
 
     equity = pd.Series(curve).sort_index()
     return {"curve": equity, "summary": _portfolio_summary(equity, trades), "trades": trades}
+
+
+def _bars(label) -> int:
+    return HORIZONS_BARS[label] if isinstance(label, str) and label in HORIZONS_BARS else int(label)
+
+
+@dataclass
+class BacktestResults:
+    mode: str = "technical"
+    event_stats: dict = field(default_factory=dict)          # bucket -> horizon -> stats
+    yearly: dict = field(default_factory=dict)               # horizon -> {year: mean}
+    portfolio_curve: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    portfolio_summary: dict = field(default_factory=dict)
+    benchmark_curve: "pd.Series | None" = None
+    per_ticker_returns: dict = field(default_factory=dict)   # ticker -> forward-returns df
+    config: dict = field(default_factory=dict)
+    report_path: "str | None" = None
+    excel_path: "str | None" = None
+
+
+def build_results_from_prices(prices, *, mode="technical", fundamental_scores=None,
+                              horizons=("1m", "3m", "6m"), max_hold="3m",
+                              max_positions=10, cost_bps=10.0,
+                              slippage_mult=1.0) -> BacktestResults:
+    """Assemble a BacktestResults from an in-memory price dict (no network).
+
+    This is the offline-testable core of :func:`run_backtest`.
+    """
+    fundamental_scores = fundamental_scores or {}
+    horizons = list(horizons)
+    entry_labels = ("Buy",) if mode == "composite" else ("Bullish",)
+    bucket = entry_labels[0]
+
+    timeline_map, ev_returns, base_returns, per_ticker = {}, [], [], {}
+    for tk, hist in prices.items():
+        tl = posture_timeline(hist, mode=mode, fundamental_score=fundamental_scores.get(tk))
+        if tl.empty:
+            continue
+        timeline_map[tk] = tl
+        ev = forward_returns(hist, entry_events(tl, entry_labels), horizons)
+        per_ticker[tk] = ev
+        if not ev.empty:
+            ev_returns.append(ev)
+        base_returns.append(forward_returns(hist, list(hist.index[:-1]), horizons))
+
+    ev_all = pd.concat(ev_returns) if ev_returns else pd.DataFrame(columns=horizons)
+    base_all = pd.concat(base_returns) if base_returns else pd.DataFrame(columns=horizons)
+
+    port = simulate_portfolio(prices, timeline_map, entry_labels=entry_labels,
+                              max_positions=max_positions, max_hold_bars=_bars(max_hold),
+                              cost_bps=cost_bps, slippage_mult=slippage_mult)
+
+    return BacktestResults(
+        mode=mode,
+        event_stats={bucket: aggregate_event_stats(ev_all, base_all)},
+        yearly=yearly_means(ev_all),
+        portfolio_curve=port["curve"],
+        portfolio_summary=port["summary"],
+        per_ticker_returns=per_ticker,
+        config={"mode": mode, "horizons": horizons, "max_hold": max_hold,
+                "max_positions": max_positions, "cost_bps": cost_bps,
+                "slippage_mult": slippage_mult, "entry_bucket": bucket},
+    )
+
+
+def _benchmark_curve(ticker, period, strat_curve):
+    from .ingest import fetch_stock_data
+    hist, _ = fetch_stock_data(ticker, period=period)
+    if hist is None or hist.empty or strat_curve is None or strat_curve.empty:
+        return None
+    close = hist["Close"].reindex(strat_curve.index).ffill().dropna()
+    if close.empty:
+        return None
+    return close / float(close.iloc[0]) * float(strat_curve.iloc[0])
+
+
+def run_backtest(watchlist=None, period="5y", *, mode="technical",
+                 horizons=("1m", "3m", "6m"), max_hold="3m", max_positions=10,
+                 cost_bps=10.0, slippage_mult=1.0, benchmark="SPY",
+                 out_dir="output/backtest", export_excel=True,
+                 save_report=True) -> BacktestResults:
+    """Network-driven entry point: fetch history, build results, write outputs."""
+    from .ingest import load_watchlist
+    from .screener import screen_fundamentals
+
+    watchlist = config.load_watchlist_csv() if watchlist is None else watchlist
+    prices, fundamentals_df = load_watchlist(watchlist, period=period)
+
+    f_scores = {}
+    if mode == "composite":
+        screened = screen_fundamentals(fundamentals_df)
+        if not screened.empty:
+            f_scores = screened["Fundamental_Score"].to_dict()
+
+    results = build_results_from_prices(
+        prices, mode=mode, fundamental_scores=f_scores, horizons=horizons,
+        max_hold=max_hold, max_positions=max_positions, cost_bps=cost_bps,
+        slippage_mult=slippage_mult,
+    )
+    results.config["period"] = period
+
+    if benchmark and not results.portfolio_curve.empty:
+        results.benchmark_curve = _benchmark_curve(benchmark, period, results.portfolio_curve)
+
+    out = Path(out_dir) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    if export_excel and results.event_stats.get(results.config["entry_bucket"]):
+        from .outputs.backtest_excel import write_backtest_workbook
+        out.mkdir(parents=True, exist_ok=True)
+        results.excel_path = write_backtest_workbook(results, out / "backtest.xlsx")
+    if save_report and not results.portfolio_curve.empty:
+        from . import charts
+        out.mkdir(parents=True, exist_ok=True)
+        fig = charts.build_backtest_report(results)
+        results.report_path = charts.save_html(fig, out / "backtest_report.html")
+
+    return results

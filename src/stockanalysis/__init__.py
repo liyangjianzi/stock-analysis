@@ -11,13 +11,15 @@ Quick start::
 """
 from __future__ import annotations
 
-from . import charts, config, indicators, ingest, overview, profile, screener, signals
+from . import backtest, charts, config, indicators, ingest, overview, profile, screener, signals
+from .backtest import BacktestResults, run_backtest
 from .pipeline import Results, run, run_output_dir
 
 __all__ = [
     "run", "Results", "run_output_dir",
     "config", "ingest", "screener", "indicators", "signals",
     "overview", "profile", "charts",
+    "backtest", "BacktestResults", "run_backtest",
 ]
 
 __version__ = "0.1.0"

@@ -182,3 +182,17 @@ def test_simulate_portfolio_runs_a_winning_trade():
     assert out["summary"]["n_trades"] == 1
     assert out["summary"]["win_rate"] == 1.0           # entered at 100, exited at 130, +30%
     assert out["curve"].iloc[-1] > 1_000.0             # equity grew
+
+
+def test_build_results_from_prices_offline(uptrend_ohlcv, downtrend_ohlcv):
+    from stockanalysis.backtest import build_results_from_prices  # thin, testable core
+
+    prices = {"UP": uptrend_ohlcv, "DOWN": downtrend_ohlcv}
+    res = build_results_from_prices(prices, mode="technical",
+                                    horizons=("1m", "3m"), max_hold="1m",
+                                    max_positions=2, cost_bps=10.0, slippage_mult=1.0)
+    assert res.mode == "technical"
+    assert "Bullish" in res.event_stats
+    assert set(res.event_stats["Bullish"]).issubset({"1m", "3m"})
+    assert isinstance(res.portfolio_summary, dict)
+    assert "max_drawdown" in res.portfolio_summary
