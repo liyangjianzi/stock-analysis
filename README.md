@@ -45,6 +45,30 @@ Outputs land in `output/`:
 Useful flags: `--period 5y`, `--no-charts`, `-v` (verbose), `--target none`
 (compute only, no export).
 
+## Backtest / signal validation
+
+Validate the signals against history (does a Bullish/Buy signal precede
+above-baseline returns?):
+
+```bash
+stock-analysis backtest --scope technical --period 5y          # honest, price-only
+stock-analysis backtest --scope composite                      # lookahead-caveated
+stock-analysis backtest --slippage-mult 2.0                    # stress execution costs
+```
+
+Outputs land in `output/backtest/<timestamp>/`:
+- `backtest.xlsx` — *Backtest Summary* + *Event Study* sheets
+- `backtest_report.html` — equity curve vs SPY + hit-rate by horizon
+
+**Scopes.** `technical` replays only the price/volume technical posture — it is
+recomputed point-in-time (each date sees only past bars), so it is free of
+lookahead bias. `composite` replays the full `0.70·fundamental + 0.30·technical`
+Buy/Hold/Watch signal, but yfinance exposes only *today's* fundamentals, so past
+composites apply current financials to past prices — **lookahead-biased**, useful
+only as a sanity check. Composite output is stamped with that warning.
+
+Library entry point: `from stockanalysis import run_backtest`.
+
 ## Google Sheets export
 
 1. Create a Google Cloud **service account** and download its JSON key.

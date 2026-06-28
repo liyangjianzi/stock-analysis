@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from unittest import mock
 
-import pandas as pd
-
 from stockanalysis import cli
 from stockanalysis.backtest import BacktestResults
 
