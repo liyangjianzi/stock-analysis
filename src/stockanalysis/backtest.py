@@ -49,3 +49,16 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
         out[hist.index[i]] = {"tech_score": tscore, "label": label}
 
     return pd.DataFrame.from_dict(out, orient="index", columns=cols)
+
+
+def entry_events(timeline, entry_labels=("Bullish",)) -> list:
+    """Dates where ``label`` transitions *into* ``entry_labels`` (de-overlapped).
+
+    Collapsing runs of consecutive in-label bars to their first bar prevents
+    autocorrelated daily samples from inflating the event count.
+    """
+    if timeline is None or timeline.empty or "label" not in timeline:
+        return []
+    is_in = timeline["label"].isin(entry_labels)
+    prev = is_in.shift(1, fill_value=False)
+    return list(timeline.index[is_in & ~prev])

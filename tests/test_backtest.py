@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from stockanalysis.backtest import posture_timeline
+from stockanalysis.backtest import posture_timeline, entry_events
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import compute_technical_posture, TECHNICAL_COMPONENTS
 
@@ -114,3 +114,15 @@ def test_posture_timeline_composite_uses_fundamentals(uptrend_ohlcv):
     # With a strong uptrend, raising the fundamental score can only push the
     # composite up, so the count of "Buy" labels must be >= the low-score count.
     assert (high["label"] == "Buy").sum() >= (low["label"] == "Buy").sum()
+
+
+def test_entry_events_collapse_consecutive_bullish():
+    idx = pd.bdate_range("2023-01-02", periods=6)
+    tl = pd.DataFrame(
+        {"tech_score": [0, 0, 0, 0, 0, 0],
+         "label": ["Neutral", "Bullish", "Bullish", "Neutral", "Bullish", "Bullish"]},
+        index=idx,
+    )
+    events = entry_events(tl, entry_labels=("Bullish",))
+    # Two runs of Bullish -> two entry events, at the first bar of each run.
+    assert events == [idx[1], idx[4]]
