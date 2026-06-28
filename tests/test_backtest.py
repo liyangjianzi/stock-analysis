@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockanalysis.backtest import posture_timeline, entry_events, forward_returns, aggregate_event_stats, yearly_means
+from stockanalysis.backtest import posture_timeline, entry_events, forward_returns, aggregate_event_stats, yearly_means, simulate_portfolio
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import compute_technical_posture, TECHNICAL_COMPONENTS
 
@@ -161,3 +161,24 @@ def test_yearly_means_groups_by_year():
     ym = yearly_means(ev)
     assert np.isclose(ym["1m"][2022], 0.10)
     assert np.isclose(ym["1m"][2023], 0.20)
+
+
+def test_simulate_portfolio_runs_a_winning_trade():
+    idx = pd.bdate_range("2023-01-02", periods=6)
+    closes = pd.Series([100, 100, 110, 120, 130, 140], index=idx)
+    hist = pd.DataFrame({"Open": closes, "High": closes, "Low": closes,
+                         "Close": closes, "Volume": 1_000_000})
+    prices = {"AAA": hist}
+    # Enter on bar 1 (transition into Bullish), hold, force exit by max_hold.
+    tl = pd.DataFrame(
+        {"tech_score": [0] * 6,
+         "label": ["Neutral", "Bullish", "Bullish", "Bullish", "Bullish", "Bullish"]},
+        index=idx,
+    )
+    out = simulate_portfolio(prices, {"AAA": tl}, max_positions=1,
+                             max_hold_bars=3, cost_bps=0.0, start_cash=1_000.0)
+
+    assert not out["curve"].empty
+    assert out["summary"]["n_trades"] == 1
+    assert out["summary"]["win_rate"] == 1.0           # bought ~110, exited ~140
+    assert out["curve"].iloc[-1] > 1_000.0             # equity grew

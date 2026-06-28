@@ -122,3 +122,95 @@ def yearly_means(event_returns) -> dict:
         return {}
     by_year = event_returns.groupby(event_returns.index.year).mean()
     return {h: by_year[h].dropna().to_dict() for h in event_returns.columns}
+
+
+def _portfolio_summary(equity, trades) -> dict:
+    if equity is None or equity.empty:
+        return {"total_return": float("nan"), "cagr": float("nan"),
+                "max_drawdown": float("nan"), "n_trades": 0,
+                "win_rate": float("nan"), "avg_win": float("nan"),
+                "avg_loss": float("nan"), "years": 0.0}
+    start, end = float(equity.iloc[0]), float(equity.iloc[-1])
+    days = (equity.index[-1] - equity.index[0]).days
+    years = days / 365.25 if days else 0.0
+    cagr = (end / start) ** (1 / years) - 1 if years > 0 and start > 0 else float("nan")
+    max_dd = float((equity / equity.cummax() - 1).min())
+    t = pd.Series(trades, dtype=float)
+    wins, losses = t[t > 0], t[t < 0]
+    return {
+        "total_return": end / start - 1,
+        "cagr": cagr,
+        "max_drawdown": max_dd,
+        "n_trades": int(t.size),
+        "win_rate": float((t > 0).mean()) if t.size else float("nan"),
+        "avg_win": float(wins.mean()) if wins.size else float("nan"),
+        "avg_loss": float(losses.mean()) if losses.size else float("nan"),
+        "years": years,
+    }
+
+
+def simulate_portfolio(prices, timeline_map, *, entry_labels=("Bullish",),
+                       max_positions=10, max_hold_bars=63, cost_bps=10.0,
+                       slippage_mult=1.0, start_cash=100_000.0) -> dict:
+    """Equal-slot long-only simulation over the union calendar of all tickers."""
+    cost = cost_bps / 10_000.0 * slippage_mult
+    closes, labels, ipos, entries = {}, {}, {}, {}
+    for tk, hist in prices.items():
+        tl = timeline_map.get(tk)
+        if hist is None or hist.empty or tl is None or tl.empty:
+            continue
+        closes[tk] = hist["Close"]
+        labels[tk] = tl["label"].reindex(hist.index)
+        ipos[tk] = {ts: i for i, ts in enumerate(hist.index)}
+        entries[tk] = set(entry_events(tl, entry_labels))
+
+    if not closes:
+        empty = pd.Series(dtype=float)
+        return {"curve": empty, "summary": _portfolio_summary(empty, []), "trades": []}
+
+    calendar = sorted(set().union(*[set(c.index) for c in closes.values()]))
+    cash = start_cash
+    slot = start_cash / max_positions
+    positions: dict = {}     # tk -> {shares, entry_pos, cost_basis}
+    trades: list = []
+    curve: dict = {}
+
+    for date in calendar:
+        # 1) exits
+        for tk in list(positions):
+            i = ipos[tk].get(date)
+            if i is None:
+                continue
+            p = positions[tk]
+            held = i - p["entry_pos"]
+            lab = labels[tk].get(date)
+            left = (lab not in entry_labels) if lab is not None else False
+            if held >= max_hold_bars or left:
+                px = float(closes[tk].iloc[i]) * (1 - cost)
+                proceeds = p["shares"] * px
+                cash += proceeds
+                trades.append(proceeds / p["cost_basis"] - 1)
+                del positions[tk]
+        # 2) entries (transition into entry_labels today), filled at this close
+        for tk in closes:
+            if tk in positions or len(positions) >= max_positions:
+                continue
+            if date in entries.get(tk, ()):
+                i = ipos[tk].get(date)
+                if i is None:
+                    continue
+                px = float(closes[tk].iloc[i]) * (1 + cost)
+                if not np.isfinite(px) or px <= 0 or cash < slot:
+                    continue
+                positions[tk] = {"shares": slot / px, "entry_pos": i, "cost_basis": slot}
+                cash -= slot
+        # 3) mark-to-market
+        mtm = 0.0
+        for tk, p in positions.items():
+            i = ipos[tk].get(date)
+            px = float(closes[tk].iloc[i]) if i is not None else np.nan
+            mtm += p["shares"] * (px if np.isfinite(px) else 0.0)
+        curve[date] = cash + mtm
+
+    equity = pd.Series(curve).sort_index()
+    return {"curve": equity, "summary": _portfolio_summary(equity, trades), "trades": trades}
