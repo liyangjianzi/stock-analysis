@@ -178,6 +178,12 @@ def simulate_portfolio(prices, timeline_map, *, entry_labels=("Bullish",),
         return {"curve": empty, "summary": _portfolio_summary(empty, []), "trades": []}
 
     calendar = sorted(set().union(*[set(c.index) for c in closes.values()]))
+    # Forward-filled marks for valuation only: a held name with no bar on a union
+    # date (e.g. a US name on a US-only holiday a TSX peer trades through) is carried
+    # at its last close, not zeroed — otherwise equity craters to cash on the gap day
+    # and snaps back next day, producing phantom drawdowns. Entries/exits still use
+    # real bars via ``ipos`` below.
+    marks = {tk: c.reindex(calendar).ffill() for tk, c in closes.items()}
     cash = start_cash
     slot = start_cash / max_positions
     positions: dict = {}     # tk -> {shares, entry_pos, cost_basis}
@@ -213,11 +219,10 @@ def simulate_portfolio(prices, timeline_map, *, entry_labels=("Bullish",),
                     continue
                 positions[tk] = {"shares": slot / px, "entry_pos": i, "cost_basis": slot}
                 cash -= slot
-        # 3) mark-to-market
+        # 3) mark-to-market (carry last known close on no-bar dates, never $0)
         mtm = 0.0
         for tk, p in positions.items():
-            i = ipos[tk].get(date)
-            px = float(closes[tk].iloc[i]) if i is not None else np.nan
+            px = marks[tk].get(date, np.nan)
             mtm += p["shares"] * (px if np.isfinite(px) else 0.0)
         curve[date] = cash + mtm
 

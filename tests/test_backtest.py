@@ -184,6 +184,34 @@ def test_simulate_portfolio_runs_a_winning_trade():
     assert out["curve"].iloc[-1] > 1_000.0             # equity grew
 
 
+def test_simulate_portfolio_carries_mark_on_missing_bar():
+    """Mixed exchange calendars: a held name with no bar on a union-calendar date
+    (e.g. a US name on a US-only holiday that a peer market trades through) must be
+    carried at its last close, not valued at $0. Otherwise equity collapses to
+    cash-only on the gap day and snaps back next day -> a phantom drawdown."""
+    days = pd.to_datetime(
+        ["2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-10"]
+    )
+    us_days = days.delete(2)                            # US name has NO bar on 2025-01-08
+    us_close = pd.Series([100.0, 101.0, 103.0, 104.0], index=us_days)
+    us = pd.DataFrame({"Open": us_close, "High": us_close, "Low": us_close,
+                       "Close": us_close, "Volume": 1_000_000})
+    peer_close = pd.Series([50.0] * 5, index=days)      # peer trades all 5 days
+    peer = pd.DataFrame({"Open": peer_close, "High": peer_close, "Low": peer_close,
+                         "Close": peer_close, "Volume": 1_000_000})
+    prices = {"US": us, "PEER": peer}
+    # Hold US the whole window; PEER is never entered but puts 2025-01-08 in the calendar.
+    tl_us = pd.DataFrame({"tech_score": [7] * 4, "label": ["Bullish"] * 4}, index=us_days)
+    tl_peer = pd.DataFrame({"tech_score": [0] * 5, "label": ["Neutral"] * 5}, index=days)
+
+    out = simulate_portfolio(prices, {"US": tl_us, "PEER": tl_peer}, max_positions=1,
+                             max_hold_bars=99, cost_bps=0.0, start_cash=1_000.0)
+    curve = out["curve"]
+    gap, prev = pd.Timestamp("2025-01-08"), pd.Timestamp("2025-01-07")
+    # Bug: equity craters to ~cash (0 here, fully invested). Fix: carried near prior.
+    assert curve.loc[gap] > 0.9 * curve.loc[prev]
+
+
 def test_build_results_from_prices_offline(uptrend_ohlcv, downtrend_ohlcv):
     from stockanalysis.backtest import build_results_from_prices  # thin, testable core
 
