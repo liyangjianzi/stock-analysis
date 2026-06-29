@@ -106,8 +106,10 @@ TECHNICAL_COMPONENTS: list[TechnicalComponent] = [
     ("near_lower_env", _near_lower_env),
 ]
 
-#: Default posture cutoff: Bullish once at least two-thirds of components fire.
-DEFAULT_BULL_FRAC = 2 / 3
+#: Default posture cutoff: Bullish once at least 6 of the 7 default components fire
+#: (score >= ceil(bull_frac * N); 6/7 -> ceil(6.0)=6 for N=7). Tightened from the
+#: original 2/3 (which gave >=5 of 7) to demand stronger confirmation before Bullish.
+DEFAULT_BULL_FRAC = 6 / 7
 
 
 def _posture(score: int, max_score: int, bull_frac: float = DEFAULT_BULL_FRAC) -> str:
