@@ -56,3 +56,24 @@ def test_build_html_report_escapes_values(tmp_path):
         [], review.summary_stats(tmp_path), generated_at="<b>2026 & co</b>")
     assert "&lt;b&gt;2026 &amp; co&lt;/b&gt;" in out
     assert "<b>2026" not in out
+
+
+def test_write_report_creates_timestamped_html(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    _closed(state, "MSFT")
+    out_base = tmp_path / "out"
+
+    path = report.write_report(state, out_base=str(out_base))
+
+    p = Path(path)
+    assert p.name == "report.html"
+    assert p.exists() and p.stat().st_size > 0
+    assert p.parent.parent == out_base          # out_base/<timestamp>/report.html
+    assert "MSFT" in p.read_text()
+
+
+def test_write_report_empty_store_still_writes(tmp_path):
+    path = report.write_report(tmp_path / "state2", out_base=str(tmp_path / "out2"))
+    assert Path(path).exists()
+    assert "No theses yet" in Path(path).read_text()

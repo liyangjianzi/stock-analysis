@@ -11,8 +11,10 @@ I/O wrapper that resolves a timestamped ``output/theses/<ts>/`` folder and saves
 from __future__ import annotations
 
 import html
+from datetime import datetime
+from pathlib import Path
 
-from . import model
+from . import model, review, store
 
 # Mirrors pipeline.RUN_DIR_FMT — replicated so the thesis subpackage stays free
 # of the heavy pipeline import chain (charts/plotly/ingest/yfinance).
@@ -112,3 +114,22 @@ def build_html_report(theses: list[dict], summary: dict, *, generated_at: str) -
         f"{_summary_block(summary)}{table}"
         "</body></html>"
     )
+
+
+def write_report(state_dir, *, out_base: str = "output/theses") -> str:
+    """Build the journal report and save it under a fresh timestamped folder.
+
+    Queries every thesis + summary stats from ``state_dir``, renders the HTML,
+    and writes it to ``<out_base>/<YYYY-MM-DD_HHMMSS>/report.html``. Returns the
+    path. Pure data in, one file out — no network.
+    """
+    now = datetime.now()
+    theses = store.query(state_dir)
+    summary = review.summary_stats(state_dir)
+    doc = build_html_report(theses, summary,
+                            generated_at=now.strftime("%Y-%m-%d %H:%M:%S"))
+    run_dir = Path(out_base) / now.strftime(RUN_DIR_FMT)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out_path = run_dir / "report.html"
+    out_path.write_text(doc)
+    return str(out_path)
