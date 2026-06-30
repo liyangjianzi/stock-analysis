@@ -18,7 +18,7 @@ import pandas as pd
 
 from .. import config
 from ..outputs.base import SIGNAL_MATRIX_SHEET
-from . import review, sources, store
+from . import report, review, sources, store
 
 
 def add_parser(sub) -> None:
@@ -110,6 +110,10 @@ def add_parser(sub) -> None:
     _action("summary", help="Aggregate realized performance.")
     _action("doctor", help="Validate state vs index.")
     _action("reindex", help="Rebuild _index.json from thesis files.")
+
+    rp = _action("report", help="Write an aggregated HTML journal report of all theses.")
+    rp.add_argument("--out", default="output/theses",
+                    help="Base output dir; report lands in <out>/<timestamp>/report.html.")
 
 
 def _state_dir(args) -> Path:
@@ -226,17 +230,22 @@ def dispatch(args) -> int:
         print(f"Postmortem written: {path}")
         return 0
 
+    if cmd == "report":
+        path = report.write_report(state, out_base=args.out)
+        print(f"Report written: {path}")
+        return 0
+
     if cmd == "summary":
         s = review.summary_stats(state)
         print(json.dumps(s, indent=2, sort_keys=True))
         return 0
 
     if cmd == "doctor":
-        report = store.validate_state(state)
-        print("OK" if report["valid"] else "INVALID")
-        for err in report["errors"]:
+        validation = store.validate_state(state)
+        print("OK" if validation["valid"] else "INVALID")
+        for err in validation["errors"]:
             print(f"  - {err}")
-        return 0 if report["valid"] else 1
+        return 0 if validation["valid"] else 1
 
     if cmd == "reindex":
         idx = store.rebuild_index(state)
