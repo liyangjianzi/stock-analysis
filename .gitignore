@@ -15,6 +15,9 @@ dist/
 output/
 *.xlsx
 
+# Thesis-tracking runtime state (JSON journal + postmortems; not source)
+data/theses/
+
 # Notebook checkpoints
 .ipynb_checkpoints/
 
