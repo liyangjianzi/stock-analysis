@@ -51,11 +51,11 @@ Module map (one responsibility each; core modules never import IPython/`display`
 | `pipeline.py` | `Results` dataclass + `run()` orchestrator — **the server-callable API** |
 | `cli.py` | `stock-analysis` console script |
 | `outputs/` | `Exporter` ABC + `ExcelExporter` + `GSheetsExporter`; `get_exporter(target)` factory |
-| `thesis/` | **Thesis memory** — track an idea idea→entry→exit→postmortem. `model` (shape/ids/validation), `store` (JSON-per-thesis persistence + lifecycle), `sources` (`from_signal_matrix`/`from_manual`), `review` (MAE/MFE, postmortem, summary), `cli` (the `thesis` subcommand). Separate persistent feature, **not** part of `pipeline.run`. |
+| `thesis/` | **Thesis memory** — track an idea idea→entry→exit→postmortem. `model` (shape/ids/validation), `store` (JSON-per-thesis persistence + lifecycle), `sources` (`from_signal_matrix`/`from_manual`), `review` (MAE/MFE, postmortem, summary), `report` (aggregated HTML journal → `output/theses/<ts>/report.html`), `cli` (the `thesis` subcommand). Separate persistent feature, **not** part of `pipeline.run`. |
 
 Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df` → `screen_fundamentals` → `screened_df` → `add_indicators` (per ticker) → `tech` → `generate_signals` → `signal_matrix` → exporter / chart HTML.
 
-Thesis flow (separate, on demand): `signal_matrix` (or manual input) → `thesis.sources` → `IDEA` thesis → lifecycle transitions in `thesis.store` (JSON under `data/theses/`, `DEFAULT_THESES_DIR`) → `thesis.review` postmortem/summary. Driven by `stock-analysis thesis …` or the `stockanalysis.thesis` library API; demo in `notebooks/thesis_tracking.ipynb`. The `stock-analysis thesis` command surface and workflow are documented as a project skill: `.claude/skills/thesis-tracking/SKILL.md`.
+Thesis flow (separate, on demand): `signal_matrix` (or manual input) → `thesis.sources` → `IDEA` thesis → lifecycle transitions in `thesis.store` (JSON under `data/theses/`, `DEFAULT_THESES_DIR`) → `thesis.review` postmortem/summary → `thesis.report` aggregated HTML journal (`stock-analysis thesis report` → `output/theses/<ts>/report.html`). Driven by `stock-analysis thesis …` or the `stockanalysis.thesis` library API; demo in `notebooks/thesis_tracking.ipynb`. The `stock-analysis thesis` command surface and workflow are documented as a project skill: `.claude/skills/thesis-tracking/SKILL.md`.
 
 Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives **only** in the notebook/CLI, never in the package core.
 
