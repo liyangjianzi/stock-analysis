@@ -50,8 +50,9 @@ def test_build_html_report_empty_store(tmp_path):
 
 
 def test_build_html_report_escapes_values(tmp_path):
-    _idea(tmp_path, "AAPL", thesis_type="grow<th> & value")
-    out = report.build_html_report(store.query(tmp_path),
-                                   review.summary_stats(tmp_path), generated_at="t")
-    assert "grow&lt;th&gt; &amp; value" in out
-    assert "grow<th>" not in out
+    # generated_at is a rendered, caller-supplied header field, so special
+    # characters in it must be HTML-escaped (exercises the _esc path).
+    out = report.build_html_report(
+        [], review.summary_stats(tmp_path), generated_at="<b>2026 & co</b>")
+    assert "&lt;b&gt;2026 &amp; co&lt;/b&gt;" in out
+    assert "<b>2026" not in out
