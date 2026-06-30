@@ -56,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(sub)
     _add_backtest_parser(sub)
+    from .thesis import cli as thesis_cli
+    thesis_cli.add_parser(sub)
     return parser
 
 
@@ -129,6 +131,14 @@ def main(argv=None) -> int:
         if results.report_path:
             print(f"  Report:   {results.report_path}")
         return 0
+
+    if args.command == "thesis":
+        from .thesis import cli as thesis_cli
+        try:
+            return thesis_cli.dispatch(args)
+        except (ValueError, KeyError, FileNotFoundError) as e:
+            print(f"Thesis command failed: {e}", file=sys.stderr)
+            return 1
 
     return 1
 

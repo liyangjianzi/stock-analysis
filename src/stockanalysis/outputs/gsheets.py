@@ -15,7 +15,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from .base import Exporter
+from .base import FUNDAMENTALS_SHEET, SIGNAL_MATRIX_SHEET, Exporter
 
 log = logging.getLogger(__name__)
 
@@ -84,8 +84,8 @@ class GSheetsExporter(Exporter):
             log.warning("Nothing to export — signal matrix is empty.")
             return ""
         sh = self._open()
-        self._write_sheet(sh, "Signal Matrix", signal_matrix)
+        self._write_sheet(sh, SIGNAL_MATRIX_SHEET, signal_matrix)
         if screened_df is not None and not screened_df.empty:
-            self._write_sheet(sh, "Fundamentals", screened_df.reset_index())
+            self._write_sheet(sh, FUNDAMENTALS_SHEET, screened_df.reset_index())
         log.info("Exported results to Google Sheet '%s'.", sh.title)
         return sh.url

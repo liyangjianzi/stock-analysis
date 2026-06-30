@@ -14,7 +14,7 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .base import Exporter
+from .base import FUNDAMENTALS_SHEET, SIGNAL_MATRIX_SHEET, Exporter
 
 log = logging.getLogger(__name__)
 
@@ -132,13 +132,14 @@ class ExcelExporter(Exporter):
             log.warning("Nothing to export — signal matrix is empty.")
             return ""
         with pd.ExcelWriter(self.path, engine="openpyxl") as xl:
-            signal_matrix.to_excel(xl, sheet_name="Signal Matrix", index=False)
+            signal_matrix.to_excel(xl, sheet_name=SIGNAL_MATRIX_SHEET, index=False)
             if screened_df is not None and not screened_df.empty:
-                screened_df.reset_index().to_excel(xl, sheet_name="Fundamentals", index=False)
+                screened_df.reset_index().to_excel(xl, sheet_name=FUNDAMENTALS_SHEET, index=False)
 
             # Layer styling on top of the written values.
             for name, ws in xl.sheets.items():
                 _style_base(ws)
-            _style_signal_matrix(xl.sheets["Signal Matrix"])
-        log.info("Exported results to '%s' (sheets: Signal Matrix, Fundamentals).", self.path)
+            _style_signal_matrix(xl.sheets[SIGNAL_MATRIX_SHEET])
+        log.info("Exported results to '%s' (sheets: %s, %s).",
+                 self.path, SIGNAL_MATRIX_SHEET, FUNDAMENTALS_SHEET)
         return self.path

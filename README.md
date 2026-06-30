@@ -69,6 +69,27 @@ only as a sanity check. Composite output is stamped with that warning.
 
 Library entry point: `from stockanalysis import run_backtest`.
 
+## Thesis tracking (trading journal)
+
+Records *why* you bought, when to review, and how it turned out — closing the
+**Plan → Trade → Record → Review → Improve** loop the signal matrix alone can't.
+Ideas come from a pipeline run's Buys (or by hand), then move through a
+forward-only lifecycle to a P&L postmortem. JSON-per-thesis under `data/theses/`;
+MAE/MFE uses the same `yfinance` source, so **no extra API key**.
+
+```bash
+stock-analysis thesis ingest --from-latest                     # Buys → IDEA theses
+stock-analysis thesis open  <id> --price 198 --date 2026-06-02 --shares 10
+stock-analysis thesis close <id> --reason target_hit --price 230 --date 2026-06-29
+stock-analysis thesis postmortem <id>                          # report + MAE/MFE
+stock-analysis thesis summary                                  # win rate, avg P&L %
+```
+
+Lifecycle: `IDEA → ENTRY_READY → ACTIVE → PARTIALLY_CLOSED → CLOSED` (+
+`INVALIDATED`). Full command reference and the library API live in
+[`src/stockanalysis/thesis/README.md`](src/stockanalysis/thesis/README.md);
+library entry point: `from stockanalysis.thesis import register, from_signal_matrix`.
+
 ## Google Sheets export
 
 1. Create a Google Cloud **service account** and download its JSON key.
@@ -116,8 +137,10 @@ src/stockanalysis/
   pipeline.py     Results + run() orchestrator  ← server-callable API
   cli.py          `stock-analysis` entry point
   outputs/        Exporter interface + Excel + Google Sheets
+  thesis/         thesis tracking (lifecycle + JSON store + postmortems) — see its README
 notebooks/
-  stock_analysis.ipynb   thin interactive demo over the package
+  stock_analysis.ipynb     thin interactive demo over the package
+  thesis_tracking.ipynb    thesis lifecycle + postmortem demo
 ```
 
 ## Scoring model

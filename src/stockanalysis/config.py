@@ -23,6 +23,11 @@ PLOT_HEIGHT = 850
 # -----------------------------------------------------------------------------
 DEFAULT_WATCHLIST_CSV = Path(__file__).resolve().parents[2] / "data" / "watchlist.csv"
 
+# Thesis-memory state lives alongside the watchlist under data/ (persistent
+# state, not per-run output). One JSON file per thesis + an _index.json; the
+# thesis CLI / library default to this dir. See stockanalysis.thesis.
+DEFAULT_THESES_DIR = Path(__file__).resolve().parents[2] / "data" / "theses"
+
 
 @functools.lru_cache(maxsize=None)
 def _read_watchlist_csv(path: Path) -> tuple[tuple[str, str], ...]:

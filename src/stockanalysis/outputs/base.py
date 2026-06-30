@@ -5,6 +5,11 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 
+# Worksheet names shared by every exporter (and the thesis ingest path that reads
+# them back) — keep them here so a rename can't desync producer and consumer.
+SIGNAL_MATRIX_SHEET = "Signal Matrix"
+FUNDAMENTALS_SHEET = "Fundamentals"
+
 
 class Exporter(ABC):
     """Write the pipeline results to some destination.
