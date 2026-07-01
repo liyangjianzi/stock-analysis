@@ -75,3 +75,18 @@ def test_ingest_from_run_reads_signal_matrix(tmp_path, capsys):
     assert rc == 0
     tickers = {t["ticker"] for t in store.query(state)}
     assert tickers == {"AAPL"}                              # only the Buy row ingested
+
+
+def test_report_writes_html(tmp_path, capsys):
+    tid = _register(tmp_path, capsys)
+    sd = str(tmp_path)
+    capsys.readouterr()
+    rc = cli.main(["thesis", "report", "--state-dir", sd,
+                   "--out", str(tmp_path / "out")])
+    assert rc == 0
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("Report written:")
+    from pathlib import Path
+    path = Path(line.split("Report written:", 1)[1].strip())
+    assert path.exists() and path.name == "report.html"
+    assert "AAPL" in path.read_text()
