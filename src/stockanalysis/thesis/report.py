@@ -131,5 +131,5 @@ def write_report(state_dir, *, out_base: str = "output/theses") -> str:
     run_dir = Path(out_base) / now.strftime(RUN_DIR_FMT)
     run_dir.mkdir(parents=True, exist_ok=True)
     out_path = run_dir / "report.html"
-    out_path.write_text(doc)
+    out_path.write_text(doc, encoding="utf-8")
     return str(out_path)

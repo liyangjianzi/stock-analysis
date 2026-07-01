@@ -77,3 +77,24 @@ def test_write_report_empty_store_still_writes(tmp_path):
     path = report.write_report(tmp_path / "state2", out_base=str(tmp_path / "out2"))
     assert Path(path).exists()
     assert "No theses yet" in Path(path).read_text()
+
+
+def test_build_html_report_renders_populated_mae_mfe(tmp_path):
+    _closed(tmp_path, "MSFT", entry=100.0, exit_=130.0)
+    theses = store.query(tmp_path)
+    # Simulate a postmortem having persisted MAE/MFE onto the outcome.
+    theses[0]["outcome"]["mae_pct"] = -8.5
+    theses[0]["outcome"]["mfe_pct"] = 42.0
+    out = report.build_html_report(theses, review.summary_stats(tmp_path),
+                                   generated_at="t")
+    assert "-8.5%" in out and "42.0%" in out
+
+
+def test_build_html_report_unknown_status_uses_default_badge(tmp_path):
+    _idea(tmp_path, "AAPL")
+    theses = store.query(tmp_path)
+    theses[0]["status"] = "WEIRD"          # not in _STATUS_COLORS
+    out = report.build_html_report(theses, review.summary_stats(tmp_path),
+                                   generated_at="t")
+    assert "#9e9e9e" in out                 # default-gray fallback
+    assert "WEIRD" in out
