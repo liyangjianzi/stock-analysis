@@ -27,6 +27,12 @@ def _add_run_parser(sub) -> None:
                    help="Google Sheet id or name (gsheets target).")
     p.add_argument("--no-charts", action="store_true",
                    help="Skip writing per-ticker HTML dashboards.")
+    p.add_argument("--profiles", action="store_true",
+                   help="Also write a deep fundamental report per ticker "
+                        "(<TICKER>_profile.txt); one extra fetch per ticker.")
+    p.add_argument("--top", type=int, default=None, metavar="N",
+                   help="Limit charts/profiles to the N strongest names of the "
+                        "ranked signal matrix (default: every screened ticker).")
 
 
 def _add_backtest_parser(sub) -> None:
@@ -82,6 +88,8 @@ def main(argv=None) -> int:
                 export_target=export_target,
                 export_opts=export_opts,
                 save_charts=not args.no_charts,
+                save_profiles=args.profiles,
+                top_n=args.top,
                 out_dir=args.out,
             )
         except Exception as e:
@@ -94,6 +102,8 @@ def main(argv=None) -> int:
             print(f"Exported to: {results.export_destination}")
         if results.chart_paths:
             print(f"Charts: {len(results.chart_paths)} HTML file(s) in '{results.run_dir}/'.")
+        if results.profile_paths:
+            print(f"Profiles: {len(results.profile_paths)} report(s) in '{results.run_dir}/'.")
         if n:
             buys = results.signal_matrix[
                 results.signal_matrix["Final Action Signal"] == "Buy"

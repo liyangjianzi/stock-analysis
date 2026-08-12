@@ -41,8 +41,10 @@ stock-analysis run --target excel --out output/
 Outputs land in `output/`:
 - `output/signal_matrix.xlsx` — *Signal Matrix* + *Fundamentals* sheets
 - `output/<TICKER>.html` — one interactive technical dashboard per screened ticker
+- `output/<TICKER>_profile.txt` — deep fundamental report (with `--profiles`)
 
-Useful flags: `--period 5y`, `--no-charts`, `-v` (verbose), `--target none`
+Useful flags: `--period 5y`, `--no-charts`, `--profiles`, `--top 5` (charts and
+profiles for the 5 strongest names only), `-v` (verbose), `--target none`
 (compute only, no export).
 
 ## Backtest / signal validation
@@ -109,10 +111,15 @@ Without credentials the exporter fails with a clear message; Excel still works.
 from stockanalysis import run
 
 results = run(export_target="excel", save_charts=True)   # Results dataclass
-results.signal_matrix     # tidy Buy/Hold/Watch DataFrame
+results.signal_matrix     # tidy Buy/Hold/Watch DataFrame (pre-ranked: best first)
 results.screened_df       # fundamental scores (0–6)
 results.tech              # ticker -> indicator-enriched OHLCV DataFrame
 results.chart_paths       # saved HTML dashboards
+results.profile_paths     # saved profile reports (save_profiles=True)
+results.run_dir           # this run's timestamped output folder
+
+# Dashboards + profiles for the 5 strongest names only:
+run(save_charts=True, save_profiles=True, top_n=5)
 
 # Or call the building blocks directly (what the future server will do):
 import stockanalysis as sa

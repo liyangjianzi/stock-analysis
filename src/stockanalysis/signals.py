@@ -201,3 +201,18 @@ def generate_signals(screened: pd.DataFrame, tech_data: dict,
     result = (result.sort_values(["_rank", "Composite"], ascending=[True, False])
                     .drop(columns="_rank").reset_index(drop=True))
     return result
+
+
+def top_tickers(signal_matrix: pd.DataFrame, n: int | None = None) -> list[str]:
+    """The strongest ``n`` tickers of a ranked signal matrix (all when ``n`` is None).
+
+    :func:`generate_signals` returns its rows pre-ranked (Buy > Hold > Watch,
+    then Composite descending), so the head of that frame *is* the top-pick
+    list — this helper makes that contract explicit for callers who only want a
+    subset (charts, profiles, a dashboard's "top 5"). Returns ``[]`` for an
+    empty matrix, which carries no columns to index.
+    """
+    if signal_matrix is None or signal_matrix.empty:
+        return []
+    rows = signal_matrix if n is None else signal_matrix.head(n)
+    return rows["Ticker"].tolist()

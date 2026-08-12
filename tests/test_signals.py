@@ -5,7 +5,8 @@ import pandas as pd
 
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import (compute_technical_posture, generate_signals,
-                                    TECHNICAL_COMPONENTS, _ema50_up, _near_lower_env)
+                                    top_tickers, TECHNICAL_COMPONENTS, _ema50_up,
+                                    _near_lower_env)
 
 DETAIL_KEYS = {name for name, _ in TECHNICAL_COMPONENTS} | {"nearest_level"}
 MAX_TECH = len(TECHNICAL_COMPONENTS)
@@ -105,3 +106,26 @@ def test_near_lower_env_component_directly():
     # Degenerate / missing band -> False, never raises.
     assert _near_lower_env(row(10.0, down=12.0, up=12.0)) is False  # zero-width band
     assert _near_lower_env(pd.DataFrame({"Close": [10.0]})) is False  # no ENV columns
+
+
+# --- top_tickers ---------------------------------------------------------------
+
+def test_top_tickers_takes_the_head_of_the_ranked_matrix(uptrend_ohlcv, downtrend_ohlcv,
+                                                         make_screened):
+    """The matrix is pre-ranked, so head(n) is the top-pick list."""
+    screened = make_screened({"UP": 6, "MID": 3, "DOWN": 0})
+    tech = {"UP": add_indicators(uptrend_ohlcv),
+            "MID": add_indicators(uptrend_ohlcv),
+            "DOWN": add_indicators(downtrend_ohlcv)}
+    matrix = generate_signals(screened, tech)
+
+    assert top_tickers(matrix, 2) == matrix["Ticker"].tolist()[:2]
+    assert top_tickers(matrix) == matrix["Ticker"].tolist()      # None -> all
+    assert top_tickers(matrix, 99) == matrix["Ticker"].tolist()  # n > len -> all
+
+
+def test_top_tickers_on_empty_matrix_returns_empty_list():
+    """generate_signals returns a column-less frame when nothing is screened,
+    so top_tickers must not index into it."""
+    assert top_tickers(pd.DataFrame(), 5) == []
+    assert top_tickers(None, 5) == []

@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import charts, config
+from . import charts, config, profile
 from .indicators import add_indicators
 from .ingest import load_watchlist
 from .outputs import get_exporter
 from .screener import screen_fundamentals
-from .signals import generate_signals
+from .signals import generate_signals, top_tickers
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ class Results:
     signal_matrix: pd.DataFrame = field(default_factory=pd.DataFrame)
     export_destination: str | None = None
     chart_paths: list[str] = field(default_factory=list)
+    profile_paths: list[str] = field(default_factory=list)
     run_dir: str | None = None
 
 
@@ -64,6 +65,8 @@ def run(watchlist: dict | None = None,
         export_target: str | None = None,
         export_opts: dict | None = None,
         save_charts: bool = False,
+        save_profiles: bool = False,
+        top_n: int | None = None,
         out_dir: str = "output") -> Results:
     """Run the full pipeline and return a :class:`Results`.
 
@@ -75,7 +78,12 @@ def run(watchlist: dict | None = None,
                     screener detail are written via that exporter.
     export_opts   : kwargs forwarded to the exporter (e.g. path, spreadsheet).
                     An explicit ``path`` bypasses the timestamped run dir.
-    save_charts   : if True, write one HTML dashboard per screened ticker.
+    save_charts   : if True, write ``<TICKER>.html`` dashboards for the selection.
+    save_profiles : if True, write ``<TICKER>_profile.txt`` deep fundamental
+                    reports for the selection. Costs one extra yfinance fetch
+                    per ticker, so it is opt-in.
+    top_n         : restrict charts/profiles to the strongest ``n`` names of the
+                    ranked signal matrix (None = every screened ticker).
     out_dir       : base output directory; this run's artifacts land in a fresh
                     timestamped subdir ``out_dir/<YYYY-MM-DD_HHMMSS>/``.
     """
@@ -102,13 +110,26 @@ def run(watchlist: dict | None = None,
             signal_matrix, screened_df
         )
 
-    if save_charts:
-        for ticker in (screened_df.index if not screened_df.empty else tech.keys()):
-            fig = charts.build_technical_dashboard(ticker, tech)
-            if fig is not None:
-                results.chart_paths.append(
-                    charts.save_html(fig, run_dir / f"{ticker}.html")
-                )
-        log.info("Saved %d dashboard chart(s) to '%s'.", len(results.chart_paths), run_dir)
+    if save_charts or save_profiles:
+        # The matrix is pre-ranked, so its head is the top-pick list. An empty
+        # matrix (nothing screened / offline) falls back to whatever was fetched.
+        selected = top_tickers(signal_matrix, top_n) or list(tech)[:top_n]
+
+        if save_charts:
+            for ticker in selected:
+                fig = charts.build_technical_dashboard(ticker, tech)
+                if fig is not None:
+                    results.chart_paths.append(
+                        charts.save_html(fig, run_dir / f"{ticker}.html")
+                    )
+            log.info("Saved %d dashboard chart(s) to '%s'.", len(results.chart_paths), run_dir)
+
+        if save_profiles:
+            for ticker in selected:
+                results.profile_paths.append(profile.save_report(
+                    profile.build_profile(ticker, screened_df),
+                    run_dir / f"{ticker}_profile.txt",
+                ))
+            log.info("Saved %d profile report(s) to '%s'.", len(results.profile_paths), run_dir)
 
     return results

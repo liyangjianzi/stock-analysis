@@ -2,14 +2,30 @@
 
 ``build_profile`` returns a structured dict (scores + a pre-rendered ``report``
 string) with no printing/``display`` side effects, so a server or the CLI can
-use the data or print ``profile["report"]`` as it sees fit.
+use the data or print ``profile["report"]`` as it sees fit. :func:`save_report`
+is the thin I/O wrapper that persists that string (mirroring
+:func:`stockanalysis.charts.save_html`).
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from .ingest import fetch_profile
+
+
+def save_report(profile: dict, path) -> str:
+    """Write ``profile['report']`` to ``path`` as a text file. Returns the path.
+
+    Creates parent dirs, and writes UTF-8 explicitly — the report contains
+    box-drawing/em-dash/✓ characters that a non-UTF-8 default locale would choke on.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(profile["report"], encoding="utf-8")
+    return str(path)
 
 
 def _fmt_val(val, fmt="pct"):
