@@ -16,6 +16,18 @@ from . import config
 from .indicators import fit_regression_channel, find_support_resistance
 
 
+def _right_margin(labels, font_size: int, base: int = 30) -> int:
+    """Right margin wide enough for hline labels drawn outside the plot.
+
+    ``annotation_position="right"`` anchors the text at the axis edge and lets it
+    run into the figure margin, so a margin narrower than the text clips it
+    ("RES 950.12" renders as "RES 9"). Width is estimated at ~0.62em per
+    character — generous for the digits/uppercase these labels use.
+    """
+    widest = max((len(str(s)) for s in labels), default=0)
+    return max(base, int(widest * font_size * 0.62) + 12)
+
+
 def save_html(fig: go.Figure, path) -> str:
     """Write ``fig`` to a standalone HTML file, creating parent dirs. Returns the path."""
     path = Path(path)
@@ -96,13 +108,17 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
             ), row=1, col=1)
 
     # ---------- Panel 1 overlay: clustered support / resistance levels ----------
+    sr_font = 9
+    sr_labels = []
     for L in find_support_resistance(d):
         lcolor = "#26a69a" if L["kind"] == "support" else "#ef5350"
+        label = f"{L['kind'][:3].upper()} {L['level']:.2f}"
+        sr_labels.append(label)
         fig.add_hline(
             y=L["level"], line=dict(color=lcolor, width=1, dash="dash"),
-            annotation_text=f"{L['kind'][:3].upper()} {L['level']:.2f}",
+            annotation_text=label,
             annotation_position="right",
-            annotation_font=dict(size=9, color=lcolor),
+            annotation_font=dict(size=sr_font, color=lcolor),
             row=1, col=1,
         )
 
@@ -154,7 +170,8 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
         title=dict(text=f"📊 Technical Dashboard — {ticker}", x=0.5, xanchor="center"),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=60, r=30, t=90, b=40),
+        # Right margin holds the S/R labels — size it to the widest one.
+        margin=dict(l=60, r=_right_margin(sr_labels, sr_font), t=90, b=40),
         xaxis_rangeslider_visible=False,  # hide default candlestick rangeslider
         template="plotly_white",
     )
@@ -199,6 +216,7 @@ def build_index_overview(index_data: dict) -> go.Figure:
                        line=dict(color=_colors.get(name), width=2)),
             row=1, col=1,
         )
+    vix_labels = []
     vix_entry = index_data.get("VIX", {})
     vix_df = vix_entry.get("chart") if isinstance(vix_entry, dict) else vix_entry
     if vix_df is not None and not vix_df.empty:
@@ -210,12 +228,15 @@ def build_index_overview(index_data: dict) -> go.Figure:
             row=2, col=1,
         )
         for level, label in [(15, "Low/Moderate"), (25, "Moderate/Elevated")]:
+            vix_labels.append(label)
             fig.add_hline(y=level, row=2, col=1,
                           line=dict(color="gray", dash="dash", width=1),
                           annotation_text=label, annotation_position="right")
     fig.update_layout(
         height=config.PLOT_HEIGHT, hovermode="x unified", template="plotly_white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        # Same as the dashboard: the VIX threshold labels live in the right margin.
+        margin=dict(r=_right_margin(vix_labels, 12)),
     )
     fig.update_xaxes(showspikes=True, spikemode="across")
     fig.update_yaxes(showspikes=True)

@@ -1,12 +1,15 @@
 """Tests for signals: compute_technical_posture + generate_signals."""
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import (compute_technical_posture, generate_signals,
-                                    top_tickers, TECHNICAL_COMPONENTS, _ema50_up,
-                                    _near_lower_env)
+                                    top_tickers, DEFAULT_BEAR_FRAC, DEFAULT_BULL_FRAC,
+                                    TECHNICAL_COMPONENTS, _ema50_up,
+                                    _near_lower_env, _posture)
 
 DETAIL_KEYS = {name for name, _ in TECHNICAL_COMPONENTS} | {"nearest_level"}
 MAX_TECH = len(TECHNICAL_COMPONENTS)
@@ -129,3 +132,46 @@ def test_top_tickers_on_empty_matrix_returns_empty_list():
     so top_tickers must not index into it."""
     assert top_tickers(pd.DataFrame(), 5) == []
     assert top_tickers(None, 5) == []
+
+
+# --- posture cutoff ------------------------------------------------------------
+
+def test_default_bullish_cutoff_is_five_of_seven():
+    """The documented contract (CLAUDE.md, notebook §3): Bullish at >=5 of 7.
+
+    Guards against re-tightening to 6/7: near_lower_env and above_ema50 coincide
+    on ~0.5% of ticker-days, so requiring 6 caps a healthy trender at 5 and the
+    posture column collapses to a constant "Neutral".
+    """
+    assert math.ceil(DEFAULT_BULL_FRAC * len(TECHNICAL_COMPONENTS)) == 5
+
+
+def test_default_bearish_cutoff_is_two_of_seven():
+    """Mirror of the Bullish contract: Bearish at <=2 of 7.
+
+    Guards against reverting to the old hardcoded `score <= 0`, which no live
+    ticker ever hit — near_lower_env and rsi_ok both fire during a decline, so
+    even a straight-line crash scores 1.
+    """
+    assert math.floor(DEFAULT_BEAR_FRAC * len(TECHNICAL_COMPONENTS)) == 2
+
+
+def test_posture_boundaries_for_the_default_registry():
+    assert _posture(7, 7) == "Bullish"
+    assert _posture(5, 7) == "Bullish"      # bull cutoff, inclusive
+    assert _posture(4, 7) == "Neutral"
+    assert _posture(3, 7) == "Neutral"      # bands do not overlap
+    assert _posture(2, 7) == "Bearish"      # bear cutoff, inclusive
+    assert _posture(0, 7) == "Bearish"
+
+
+def test_posture_bands_rescale_with_the_component_count():
+    """Both cutoffs derive from max_score, so a resized registry rescales them."""
+    assert [_posture(s, 3) for s in range(4)] == ["Bearish", "Bearish", "Bullish", "Bullish"]
+    assert [_posture(s, 9) for s in (0, 3, 4, 5, 6, 9)] == [
+        "Bearish", "Bearish", "Neutral", "Neutral", "Bullish", "Bullish"]
+
+
+def test_posture_of_an_empty_registry_is_bearish():
+    """No components -> nothing can confirm; must not divide by zero."""
+    assert _posture(0, 0) == "Bearish"

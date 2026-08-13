@@ -106,25 +106,55 @@ TECHNICAL_COMPONENTS: list[TechnicalComponent] = [
     ("near_lower_env", _near_lower_env),
 ]
 
-#: Default posture cutoff: Bullish once at least 6 of the 7 default components fire
-#: (score >= ceil(bull_frac * N); 6/7 -> ceil(6.0)=6 for N=7). Tightened from the
-#: original 2/3 (which gave >=5 of 7) to demand stronger confirmation before Bullish.
-DEFAULT_BULL_FRAC = 6 / 7
+#: Default posture cutoff: Bullish once at least 5 of the 7 default components fire
+#: (score >= ceil(bull_frac * N); 2/3 -> ceil(4.67)=5 for N=7).
+#:
+#: Do not tighten this to 6/7 without also reworking the registry: two components
+#: are rare *and* mutually exclusive with the trend ones in practice —
+#: ``near_lower_env`` fires on ~16% of ticker-days and ``macd_cross_up`` on ~21%,
+#: but ``near_lower_env`` and ``above_ema50`` coincide only ~0.5% of the time (a
+#: stock in a clean uptrend is not hugging its lower band). Demanding 6 of 7
+#: therefore caps a healthy trender at 5 and makes Bullish near-unreachable
+#: (~6% of ticker-days), which also starves the technical backtest of entries.
+DEFAULT_BULL_FRAC = 2 / 3
+
+#: Default Bearish cutoff, the mirror of :data:`DEFAULT_BULL_FRAC`: Bearish at no
+#: more than 2 of the 7 default components (score <= floor(bear_frac * N);
+#: 1/3 -> floor(2.33)=2 for N=7), ~19% of ticker-days.
+#:
+#: This used to be a hardcoded ``score <= 0``, which no live ticker ever hit: every
+#: component is a *bullish confirmation*, so failing them all means "no bullish
+#: evidence", and two of them fire precisely during a decline — ``near_lower_env``
+#: (price pinned to the lower band) and ``rsi_ok`` (true through any ordinary
+#: pullback, 35 < RSI < 70). A straight-line -60% crash scores 1, not 0. Bearish
+#: was therefore reachable only via the empty-data guard below, i.e. a failed
+#: fetch rather than a weak chart.
+DEFAULT_BEAR_FRAC = 1 / 3
 
 
-def _posture(score: int, max_score: int, bull_frac: float = DEFAULT_BULL_FRAC) -> str:
+def _posture(score: int, max_score: int, bull_frac: float = DEFAULT_BULL_FRAC,
+             bear_frac: float = DEFAULT_BEAR_FRAC) -> str:
     """Map a score to Bullish/Neutral/Bearish, scaling with the component count:
-    Bearish at 0, Bullish at ``score >= ceil(bull_frac * max_score)``, else Neutral."""
-    if score <= 0:
+    Bearish at ``score <= floor(bear_frac * max_score)``, Bullish at
+    ``score >= ceil(bull_frac * max_score)``, else Neutral.
+
+    Both cutoffs derive from the registry size, so adding or removing a component
+    rescales them together. Bearish is checked first, so on a degenerate registry
+    where the bands would overlap the weaker label wins.
+    """
+    if max_score <= 0:
         return "Bearish"
-    if max_score > 0 and score >= math.ceil(bull_frac * max_score):
+    if score <= math.floor(bear_frac * max_score):
+        return "Bearish"
+    if score >= math.ceil(bull_frac * max_score):
         return "Bullish"
     return "Neutral"
 
 
 def compute_technical_posture(df: pd.DataFrame,
                               components: list[TechnicalComponent] | None = None,
-                              bull_frac: float = DEFAULT_BULL_FRAC):
+                              bull_frac: float = DEFAULT_BULL_FRAC,
+                              bear_frac: float = DEFAULT_BEAR_FRAC):
     """Assess technical posture from an indicator-enriched df.
 
     Runs each predicate in ``components`` (default :data:`TECHNICAL_COMPONENTS`),
@@ -153,7 +183,7 @@ def compute_technical_posture(df: pd.DataFrame,
         detail["nearest_level"] = min(sr, key=lambda L: abs(L["level"] - close))
 
     score = sum(detail[name] for name, _ in components)
-    posture = _posture(score, len(components), bull_frac)
+    posture = _posture(score, len(components), bull_frac, bear_frac)
     return posture, score, detail
 
 
