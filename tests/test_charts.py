@@ -6,27 +6,12 @@ them ("RES 950.12" renders as "RES 9").
 """
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
+from conftest import wandering_ohlcv as _wandering_ohlcv
 
 from stockanalysis.charts import _right_margin, build_technical_dashboard
 from stockanalysis.indicators import add_indicators
 
 SR_FONT = 9   # annotation_font size used for the S/R labels
-
-
-def _wandering_ohlcv(scale: float, n: int = 300) -> pd.DataFrame:
-    """A seeded random walk around ``scale`` — wanders enough to leave the swing
-    pivots that find_support_resistance clusters into levels (a clean monotonic
-    trend leaves none)."""
-    rng = np.random.default_rng(7)
-    idx = pd.bdate_range("2024-01-01", periods=n)
-    close = pd.Series(scale + np.cumsum(rng.normal(0, scale * 0.01, n)), index=idx)
-    return pd.DataFrame(
-        {"Open": close, "High": close * 1.02, "Low": close * 0.98, "Close": close,
-         "Volume": pd.Series(2_000_000, index=idx)},
-        index=idx,
-    )
 
 
 def _dashboard(scale: float):

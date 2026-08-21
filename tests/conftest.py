@@ -65,6 +65,22 @@ def make_screened():
     return _make
 
 
+def wandering_ohlcv(scale: float, n: int = 300) -> pd.DataFrame:
+    """A seeded random walk around ``scale`` — wanders enough to leave the swing
+    pivots that find_support_resistance clusters into levels (a clean monotonic
+    trend leaves none). Shared by chart/report tests that need a
+    support/resistance-bearing OHLCV series (a plain helper, not a fixture,
+    since callers need varying ``scale``/``n``)."""
+    rng = np.random.default_rng(7)
+    idx = pd.bdate_range("2024-01-01", periods=n)
+    close = pd.Series(scale + np.cumsum(rng.normal(0, scale * 0.01, n)), index=idx)
+    return pd.DataFrame(
+        {"Open": close, "High": close * 1.02, "Low": close * 0.98, "Close": close,
+         "Volume": pd.Series(2_000_000, index=idx)},
+        index=idx,
+    )
+
+
 @pytest.fixture
 def fundamentals_df() -> pd.DataFrame:
     """Fundamentals frame indexed by ticker covering the screener's columns.

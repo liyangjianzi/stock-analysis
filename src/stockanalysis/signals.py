@@ -187,6 +187,14 @@ def compute_technical_posture(df: pd.DataFrame,
     return posture, score, detail
 
 
+#: Shared bare-hex palette (no leading ``#``) for the ``Final Action Signal``/
+#: ``Technical Posture`` labels this module produces. Single source of truth
+#: for every renderer of those labels: ``outputs/excel.py`` wraps these in
+#: ``openpyxl.PatternFill``, ``report.py`` prefixes ``#`` for inline CSS.
+ACTION_COLORS = {"Buy": "B7E1CD", "Hold": "FCE8B2", "Watch": "D9D9D9"}
+POSTURE_COLORS = {"Bullish": "B7E1CD", "Neutral": "FCE8B2", "Bearish": "F4C7C3"}
+
+
 def generate_signals(screened: pd.DataFrame, tech_data: dict,
                      buy_thr: float = 0.60, hold_thr: float = 0.40) -> pd.DataFrame:
     """Fuse fundamentals (weight 0.70) and technicals (weight 0.30) into a

@@ -16,24 +16,25 @@ pip install -e .                 # core; pip install -e ".[gsheets]" adds Google
 stock-analysis run --target excel --out output/    # or: python -m stockanalysis run ...
 ```
 
-Requires **live network access** (Yahoo Finance via `yfinance`); offline runs fetch nothing and tables/charts come out empty (by design — every fetch degrades gracefully rather than crashing). Each run writes into a fresh timestamped subfolder `output/<YYYY-MM-DD_HHMMSS>/` (so runs don't overwrite each other): `output/<timestamp>/signal_matrix.xlsx` + per-ticker `output/<timestamp>/<TICKER>.html` dashboards, plus `<TICKER>_profile.txt` deep-fundamental reports with `--profiles`. `--top N` restricts charts/profiles to the N strongest names of the ranked matrix. The subdir is resolved once per run by `pipeline.run_output_dir()` and echoed back as `Results.run_dir` — **callers should read it from there rather than resolving a second one**.
+Requires **live network access** (Yahoo Finance via `yfinance`); offline runs fetch nothing and tables/charts come out empty (by design — every fetch degrades gracefully rather than crashing). Each run writes into a fresh timestamped subfolder `output/<YYYY-MM-DD_HHMMSS>/` (so runs don't overwrite each other): `output/<timestamp>/signal_matrix.xlsx` + `output/<timestamp>/report.html` — one combined report bundling the Fundamental Screener and Combined Signal Matrix (both in full) with top-N Technical Dashboards, top-N Fundamental Profiles, and the Daily Market Overview chart. `--top N` (default 5) restricts the report's dashboards/profiles to the N strongest names of the ranked matrix; the screener/signal-matrix tables always show every screened ticker. The subdir is resolved once per run by `pipeline.run_output_dir()` and echoed back as `Results.run_dir` — **callers should read it from there rather than resolving a second one**.
 
 Library entry point:
 ```python
 from stockanalysis import run
-results = run(export_target="excel", save_charts=True)              # -> Results dataclass
-results = run(save_charts=True, save_profiles=True, top_n=5)        # top-5 dashboards + profiles
+results = run(export_target="excel")              # -> Results dataclass; report.html on by default (top_n=5)
+results = run(save_report=False)                   # skip the combined report entirely
+results = run(top_n=10)                            # widen the dashboards/profiles selection
 ```
 
 ### Sanity-checking edits without network
 - **Test suite (fully offline):** `pip install -e ".[test]"` then `pytest`. The
   `tests/` dir covers the pure-logic surface (screener, indicators, signals,
   `fetch_fundamentals` normalization, `load_watchlist_csv`, the Excel exporter,
-  `profile.save_report`, `pipeline.run`'s artifact selection (`top_n` / charts /
-  profiles, via monkeypatched fetch+chart layers), the `run` CLI flags, and the
-  whole `thesis/` subpackage — model/store/sources/review/CLI, with an injected
-  fake price adapter for MAE/MFE) with synthetic OHLCV fixtures — no network /
-  yfinance calls.
+  `profile.save_report`, `report.build_full_report`/`save_report` (the combined
+  HTML report), `pipeline.run`'s artifact selection (`top_n`, via monkeypatched
+  fetch+report layers), the `run` CLI flags, and the whole `thesis/` subpackage
+  — model/store/sources/review/CLI, with an injected fake price adapter for
+  MAE/MFE) with synthetic OHLCV fixtures — no network / yfinance calls.
 - Import check: `PYTHONPATH=src python3 -c "import stockanalysis"`
 - Pure-logic functions (`screen_fundamentals`, `add_indicators`, `fit_regression_channel`, `find_support_resistance`, `compute_technical_posture`, `generate_signals`) depend only on pandas/numpy/ta and can be exercised against synthetic OHLCV DataFrames. The Excel exporter and chart builders also run fully offline.
 
@@ -51,16 +52,17 @@ Module map (one responsibility each; core modules never import IPython/`display`
 | `overview.py` | Stage-0 daily market overview — **data only**, returns dicts |
 | `profile.py` | `build_profile` — deep fundamental report (returns a dict incl. a `report` string); `save_report` writes that string as UTF-8 text (mirrors `charts.save_html`) |
 | `charts.py` | `build_technical_dashboard`/`build_index_overview` → Plotly `Figure`; `save_html` |
+| `report.py` | `build_full_report` (pure) — combined per-run HTML: screener + signal matrix (full) + top-N dashboards/profiles + overview; `save_report` (I/O, mirrors `charts.save_html`) |
 | `pipeline.py` | `Results` dataclass + `run()` orchestrator — **the server-callable API** |
 | `cli.py` | `stock-analysis` console script |
 | `outputs/` | `Exporter` ABC + `ExcelExporter` + `GSheetsExporter`; `get_exporter(target)` factory |
 | `thesis/` | **Thesis memory** — track an idea idea→entry→exit→postmortem. `model` (shape/ids/validation), `store` (JSON-per-thesis persistence + lifecycle), `sources` (`from_signal_matrix`/`from_manual`), `review` (MAE/MFE, postmortem, summary), `report` (aggregated HTML journal → `output/theses/<ts>/report.html`), `cli` (the `thesis` subcommand). Separate persistent feature, **not** part of `pipeline.run`. |
 
-Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df` → `screen_fundamentals` → `screened_df` → `add_indicators` (per ticker) → `tech` → `generate_signals` → `signal_matrix` → exporter / chart HTML / profile reports. Charts and profiles share one selection — `top_tickers(signal_matrix, top_n)`, falling back to whatever was fetched when nothing screened.
+Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df` → `screen_fundamentals` → `screened_df` → `add_indicators` (per ticker) → `tech` → `generate_signals` → `signal_matrix` → exporter / combined HTML report (`report.build_full_report`, embedding dashboards + profiles + `overview.daily_overview`). The report's dashboards/profiles selection is `top_tickers(signal_matrix, top_n)`, falling back to whatever was fetched when nothing screened; the screener/signal-matrix sections it embeds are never capped by that selection.
 
 Thesis flow (separate, on demand): `signal_matrix` (or manual input) → `thesis.sources` → `IDEA` thesis → lifecycle transitions in `thesis.store` (JSON under `data/theses/`, `DEFAULT_THESES_DIR`) → `thesis.review` postmortem/summary → `thesis.report` aggregated HTML journal (`stock-analysis thesis report` → `output/theses/<ts>/report.html`). Driven by `stock-analysis thesis …` or the `stockanalysis.thesis` library API; demo in `notebooks/thesis_tracking.ipynb`. The `stock-analysis thesis` command surface and workflow are documented as a project skill: `.claude/skills/thesis-tracking/SKILL.md`.
 
-Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives **only** in the notebook/CLI, never in the package core.
+Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives **only** in the notebook/CLI, never in the package core — the rule is about *interactive* display, not a pure function that returns a string. `report.py` and `thesis/report.py` are the two deliberate, precedented exceptions: both build a self-contained HTML string from already-fetched data with no `Styler`/`fig.show()`/print side effects, so they're safe to call from a headless job.
 
 ## Conventions that are easy to get wrong
 

@@ -56,9 +56,14 @@ def build_profile(ticker: str, screened_df: pd.DataFrame | None = None) -> dict:
     """Build a 5-section deep fundamental profile for ``ticker``.
 
     Returns a dict with the raw profile, derived sub-scores (management, moat,
-    long-term potential), and a ready-to-print ``report`` string. Optionally
-    reuse a screened DataFrame (Step 2) for EPS/Rev growth, FCF, Debt/Equity,
-    P/E, and the 0–6 Fundamental Score instead of re-fetching.
+    long-term potential), the resolved ``fundamentals`` (PE/growth/FCF/debt —
+    see below), and a ready-to-print ``report`` string. Optionally reuse a
+    screened DataFrame (Step 2) for EPS/Rev growth, FCF, Debt/Equity, P/E, and
+    the 0–6 Fundamental Score instead of re-fetching; ``fundamentals`` is
+    those already-resolved values (``screened_df`` preferred, falling back to
+    the raw yfinance fields), so other renderers (e.g. ``report.py``'s HTML
+    profile card) can reuse this module's preference logic instead of
+    re-deriving it from ``screened_df`` themselves.
     """
     p = fetch_profile(ticker)
     W = 70
@@ -244,6 +249,8 @@ def build_profile(ticker: str, screened_df: pd.DataFrame | None = None) -> dict:
         "country": country,
         "fundamental_score": fund_score,
         "scores": {"management": mgmt_score, "moat": moat_score, "long_term": lt_score},
+        "fundamentals": {"pe": pe_val, "eps_growth": eps_growth, "rev_growth": rev_growth,
+                         "fcf": fcf_val, "debt_equity": debt_eq},
         "raw": p,
         "report": "\n".join(out),
     }

@@ -25,14 +25,14 @@ def _add_run_parser(sub) -> None:
                         "Defaults to data/watchlist.csv.")
     p.add_argument("--spreadsheet", default=None,
                    help="Google Sheet id or name (gsheets target).")
-    p.add_argument("--no-charts", action="store_true",
-                   help="Skip writing per-ticker HTML dashboards.")
-    p.add_argument("--profiles", action="store_true",
-                   help="Also write a deep fundamental report per ticker "
-                        "(<TICKER>_profile.txt); one extra fetch per ticker.")
-    p.add_argument("--top", type=int, default=None, metavar="N",
-                   help="Limit charts/profiles to the N strongest names of the "
-                        "ranked signal matrix (default: every screened ticker).")
+    p.add_argument("--no-report", action="store_true",
+                   help="Skip writing the combined HTML report (screener + "
+                        "signal matrix + top-N dashboards/profiles + market overview).")
+    p.add_argument("--top", type=int, default=5, metavar="N",
+                   help="Limit the report's technical-dashboard and fundamental-"
+                        "profile sections to the N strongest names (the screener/"
+                        "signal-matrix tables always show every screened ticker) "
+                        "(default: %(default)s).")
 
 
 def _add_backtest_parser(sub) -> None:
@@ -87,8 +87,7 @@ def main(argv=None) -> int:
                 period=args.period,
                 export_target=export_target,
                 export_opts=export_opts,
-                save_charts=not args.no_charts,
-                save_profiles=args.profiles,
+                save_report=not args.no_report,
                 top_n=args.top,
                 out_dir=args.out,
             )
@@ -100,10 +99,8 @@ def main(argv=None) -> int:
         print(f"\nDone. Signal matrix: {n} stocks.")
         if results.export_destination:
             print(f"Exported to: {results.export_destination}")
-        if results.chart_paths:
-            print(f"Charts: {len(results.chart_paths)} HTML file(s) in '{results.run_dir}/'.")
-        if results.profile_paths:
-            print(f"Profiles: {len(results.profile_paths)} report(s) in '{results.run_dir}/'.")
+        if results.report_path:
+            print(f"Report: {results.report_path}")
         if n:
             buys = results.signal_matrix[
                 results.signal_matrix["Final Action Signal"] == "Buy"

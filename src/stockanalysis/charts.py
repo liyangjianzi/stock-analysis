@@ -28,6 +28,19 @@ def _right_margin(labels, font_size: int, base: int = 30) -> int:
     return max(base, int(widest * font_size * 0.62) + 12)
 
 
+def _top_margin(n_legend_items: int, base: int = 90) -> int:
+    """Top margin wide enough for the title + a horizontal legend that may
+    wrap onto a second row once there isn't room for every entry on one line.
+
+    The exact wrap point isn't knowable at layout-build time (it depends on
+    the container the figure renders into — a full-width page vs. an
+    embedded, narrower report section), so this reserves extra headroom past
+    a practical one-row threshold rather than hardcoding a size for the
+    worst case regardless of trace count.
+    """
+    return base + 40 if n_legend_items > 8 else base
+
+
 def save_html(fig: go.Figure, path) -> str:
     """Write ``fig`` to a standalone HTML file, creating parent dirs. Returns the path."""
     path = Path(path)
@@ -165,13 +178,20 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
     ), row=4, col=1)
 
     # ---------- Layout: crosshairs, unified hover, clean styling ----------
+    # A legend with many entries can wrap onto a second row in a narrower
+    # container (e.g. embedded in report.py rather than a standalone
+    # full-width page); a smaller font cuts the wrap-width needed, and
+    # _top_margin gives a wrapped legend room without colliding with the
+    # title/subplot title stacked above the plot.
+    n_legend_items = sum(1 for tr in fig.data if tr.name and tr.showlegend is not False)
     fig.update_layout(
         height=config.PLOT_HEIGHT,
         title=dict(text=f"📊 Technical Dashboard — {ticker}", x=0.5, xanchor="center"),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(size=10)),
         # Right margin holds the S/R labels — size it to the widest one.
-        margin=dict(l=60, r=_right_margin(sr_labels, sr_font), t=90, b=40),
+        margin=dict(l=60, r=_right_margin(sr_labels, sr_font), t=_top_margin(n_legend_items), b=40),
         xaxis_rangeslider_visible=False,  # hide default candlestick rangeslider
         template="plotly_white",
     )

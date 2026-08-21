@@ -15,6 +15,9 @@ dist/
 output/
 *.xlsx
 
+# Job run logs
+logs/
+
 # Thesis-tracking runtime state (JSON journal + postmortems; not source)
 data/theses/
 

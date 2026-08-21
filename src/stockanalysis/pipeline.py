@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import charts, config, profile
+from . import config, overview, profile, report
 from .indicators import add_indicators
 from .ingest import load_watchlist
 from .outputs import get_exporter
@@ -44,8 +44,7 @@ class Results:
     tech: dict = field(default_factory=dict)
     signal_matrix: pd.DataFrame = field(default_factory=pd.DataFrame)
     export_destination: str | None = None
-    chart_paths: list[str] = field(default_factory=list)
-    profile_paths: list[str] = field(default_factory=list)
+    report_path: str | None = None
     run_dir: str | None = None
 
 
@@ -64,9 +63,8 @@ def run(watchlist: dict | None = None,
         period: str = config.HISTORY_PERIOD,
         export_target: str | None = None,
         export_opts: dict | None = None,
-        save_charts: bool = False,
-        save_profiles: bool = False,
-        top_n: int | None = None,
+        save_report: bool = True,
+        top_n: int | None = 5,
         out_dir: str = "output") -> Results:
     """Run the full pipeline and return a :class:`Results`.
 
@@ -78,12 +76,17 @@ def run(watchlist: dict | None = None,
                     screener detail are written via that exporter.
     export_opts   : kwargs forwarded to the exporter (e.g. path, spreadsheet).
                     An explicit ``path`` bypasses the timestamped run dir.
-    save_charts   : if True, write ``<TICKER>.html`` dashboards for the selection.
-    save_profiles : if True, write ``<TICKER>_profile.txt`` deep fundamental
-                    reports for the selection. Costs one extra yfinance fetch
-                    per ticker, so it is opt-in.
-    top_n         : restrict charts/profiles to the strongest ``n`` names of the
-                    ranked signal matrix (None = every screened ticker).
+    save_report   : if True (default), write one combined ``report.html`` —
+                    screener + signal matrix (full) + top-``n`` technical
+                    dashboards + top-``n`` fundamental profiles + the daily
+                    market overview. Profile fetches (one extra yfinance call
+                    per selected ticker) and the overview's candidate scan
+                    (~29 more calls, regardless of ``top_n``) are no longer
+                    independently opt-in — both ride along with this flag.
+    top_n         : restrict the report's dashboards/profiles to the
+                    strongest ``n`` names of the ranked signal matrix
+                    (default 5; the screener/signal-matrix tables always show
+                    every screened ticker regardless of ``top_n``).
     out_dir       : base output directory; this run's artifacts land in a fresh
                     timestamped subdir ``out_dir/<YYYY-MM-DD_HHMMSS>/``.
     """
@@ -110,26 +113,19 @@ def run(watchlist: dict | None = None,
             signal_matrix, screened_df
         )
 
-    if save_charts or save_profiles:
+    if save_report:
         # The matrix is pre-ranked, so its head is the top-pick list. An empty
         # matrix (nothing screened / offline) falls back to whatever was fetched.
         selected = top_tickers(signal_matrix, top_n) or list(tech)[:top_n]
+        profiles = [profile.build_profile(t, screened_df) for t in selected]
+        overview_data = overview.daily_overview(watchlist, signal_matrix, tech)
 
-        if save_charts:
-            for ticker in selected:
-                fig = charts.build_technical_dashboard(ticker, tech)
-                if fig is not None:
-                    results.chart_paths.append(
-                        charts.save_html(fig, run_dir / f"{ticker}.html")
-                    )
-            log.info("Saved %d dashboard chart(s) to '%s'.", len(results.chart_paths), run_dir)
-
-        if save_profiles:
-            for ticker in selected:
-                results.profile_paths.append(profile.save_report(
-                    profile.build_profile(ticker, screened_df),
-                    run_dir / f"{ticker}_profile.txt",
-                ))
-            log.info("Saved %d profile report(s) to '%s'.", len(results.profile_paths), run_dir)
+        html_doc = report.build_full_report(
+            screened_df, signal_matrix, tech, profiles, overview_data,
+            selected=selected,
+            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        results.report_path = report.save_report(html_doc, run_dir / "report.html")
+        log.info("Saved combined report to '%s'.", results.report_path)
 
     return results

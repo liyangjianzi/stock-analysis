@@ -14,6 +14,7 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from ..signals import ACTION_COLORS, POSTURE_COLORS
 from .base import FUNDAMENTALS_SHEET, SIGNAL_MATRIX_SHEET, Exporter
 
 log = logging.getLogger(__name__)
@@ -23,16 +24,10 @@ HEADER_FILL = PatternFill("solid", fgColor="1F3864")          # dark slate
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 BAND_FILL = PatternFill("solid", fgColor="F3F3F3")            # even-row shading
 
-ACTION_FILLS = {
-    "Buy":   PatternFill("solid", fgColor="B7E1CD"),          # green
-    "Hold":  PatternFill("solid", fgColor="FCE8B2"),          # amber
-    "Watch": PatternFill("solid", fgColor="D9D9D9"),          # gray
-}
-POSTURE_FILLS = {
-    "Bullish": PatternFill("solid", fgColor="B7E1CD"),
-    "Neutral": PatternFill("solid", fgColor="FCE8B2"),
-    "Bearish": PatternFill("solid", fgColor="F4C7C3"),        # red
-}
+# Built from signals.ACTION_COLORS/POSTURE_COLORS (the single source of truth
+# for these labels' colors) rather than hardcoded here.
+ACTION_FILLS = {k: PatternFill("solid", fgColor=v) for k, v in ACTION_COLORS.items()}
+POSTURE_FILLS = {k: PatternFill("solid", fgColor=v) for k, v in POSTURE_COLORS.items()}
 # Classic 3-color heatmap: low=red, mid=yellow, high=green.
 _SCORE_SCALE = dict(
     start_type="min", start_color="F8696B",

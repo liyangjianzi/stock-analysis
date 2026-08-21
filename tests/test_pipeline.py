@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -34,7 +35,7 @@ def test_run_output_dir_does_not_create_the_directory():
     assert not out.exists()
 
 
-# --- run(): selection, charts and profiles ------------------------------------
+# --- run(): selection + the combined report ------------------------------------
 
 def _stub_run(monkeypatch, tickers, screens=True):
     """Point run() at synthetic data so nothing touches the network.
@@ -54,46 +55,61 @@ def _stub_run(monkeypatch, tickers, screens=True):
                         lambda df: df if screens else pd.DataFrame())
     monkeypatch.setattr(pipeline, "compute_indicators",
                         lambda prices: {t: pd.DataFrame() for t in tickers})
-    monkeypatch.setattr(pipeline.charts, "build_technical_dashboard",
-                        lambda ticker, tech: object())
-    def fake_save_html(fig, path):                      # mirrors charts.save_html
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("<html>")
-        return str(path)
-
-    monkeypatch.setattr(pipeline.charts, "save_html", fake_save_html)
     monkeypatch.setattr(pipeline.profile, "build_profile",
                         lambda ticker, screened_df=None: {"report": f"report for {ticker}"})
+    monkeypatch.setattr(pipeline.overview, "daily_overview",
+                        lambda watchlist, signal_matrix, tech: {
+                            "index_data": {}, "indices": [], "vix": None,
+                            "headlines": [], "candidates": pd.DataFrame(), "action_plan": {},
+                        })
+
+    def fake_build_full_report(screened_df, signal_matrix, tech, profiles,
+                               overview_data, *, selected, generated_at):
+        return f"<html>{selected}</html>"
+
+    monkeypatch.setattr(pipeline.report, "build_full_report", fake_build_full_report)
+
+    def fake_save_report(html_doc, path):                # mirrors report.save_report
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html_doc)
+        return str(path)
+
+    monkeypatch.setattr(pipeline.report, "save_report", fake_save_report)
 
 
-def test_run_top_n_limits_charts_and_profiles(monkeypatch, tmp_path):
+def _run_capturing_selected(tickers, **run_kwargs):
+    """Run the (already-stubbed) pipeline and return (results, selected) —
+    ``selected`` is the ticker list report.build_full_report was actually
+    called with, letting tests assert the top_n/fallback selection logic
+    without depending on chart/profile file side effects."""
+    with mock.patch("stockanalysis.pipeline.report.build_full_report",
+                    wraps=pipeline.report.build_full_report) as m:
+        results = pipeline.run(watchlist={t: "Technology" for t in tickers}, **run_kwargs)
+    return results, m.call_args.kwargs["selected"]
+
+
+def test_run_top_n_limits_the_report_selection(monkeypatch, tmp_path):
     tickers = ["AAA", "BBB", "CCC", "DDD"]
     _stub_run(monkeypatch, tickers)
 
-    results = pipeline.run(watchlist={t: "Technology" for t in tickers},
-                           save_charts=True, save_profiles=True, top_n=2,
-                           out_dir=str(tmp_path))
+    results, selected = _run_capturing_selected(tickers, top_n=2, out_dir=str(tmp_path))
 
-    expected = results.signal_matrix["Ticker"].tolist()[:2]
-    assert [Path(p).stem for p in results.chart_paths] == expected
-    assert [Path(p).stem for p in results.profile_paths] == [f"{t}_profile" for t in expected]
-    for path in results.profile_paths:
-        assert Path(path).read_text(encoding="utf-8").startswith("report for ")
+    assert selected == results.signal_matrix["Ticker"].tolist()[:2]
+    assert Path(results.report_path).exists()
 
 
-def test_run_writes_every_artifact_into_the_reported_run_dir(monkeypatch, tmp_path):
+def test_run_writes_the_report_into_the_reported_run_dir(monkeypatch, tmp_path):
     """Results.run_dir is the folder callers should reuse — everything lands there."""
     tickers = ["AAA", "BBB"]
     _stub_run(monkeypatch, tickers)
 
     results = pipeline.run(watchlist={t: "Technology" for t in tickers},
-                           save_charts=True, save_profiles=True, out_dir=str(tmp_path))
+                           out_dir=str(tmp_path))
 
     run_dir = Path(results.run_dir)
     assert run_dir.parent == tmp_path
-    for path in results.chart_paths + results.profile_paths:
-        assert Path(path).parent == run_dir
+    assert Path(results.report_path).parent == run_dir
 
 
 def test_run_falls_back_to_fetched_tickers_when_nothing_screens(monkeypatch, tmp_path):
@@ -102,31 +118,31 @@ def test_run_falls_back_to_fetched_tickers_when_nothing_screens(monkeypatch, tmp
     tickers = ["AAA", "BBB", "CCC"]
     _stub_run(monkeypatch, tickers, screens=False)
 
-    results = pipeline.run(watchlist={t: "Technology" for t in tickers},
-                           save_charts=True, save_profiles=True, top_n=2,
-                           out_dir=str(tmp_path))
+    results, selected = _run_capturing_selected(tickers, top_n=2, out_dir=str(tmp_path))
 
     assert results.signal_matrix.empty
-    assert [Path(p).stem for p in results.chart_paths] == tickers[:2]
-    assert [Path(p).stem for p in results.profile_paths] == [f"{t}_profile" for t in tickers[:2]]
+    assert selected == tickers[:2]
 
 
-def test_run_without_top_n_covers_every_screened_ticker(monkeypatch, tmp_path):
-    tickers = ["AAA", "BBB", "CCC"]
+def test_run_default_top_n_is_five(monkeypatch, tmp_path):
+    tickers = [f"T{i}" for i in range(8)]
     _stub_run(monkeypatch, tickers)
 
-    results = pipeline.run(watchlist={t: "Technology" for t in tickers},
-                           save_charts=True, save_profiles=True, out_dir=str(tmp_path))
+    results, selected = _run_capturing_selected(tickers, out_dir=str(tmp_path))
 
-    assert sorted(Path(p).stem for p in results.chart_paths) == sorted(tickers)
-    assert len(results.profile_paths) == len(tickers)
+    assert len(selected) == 5
+    assert Path(results.report_path).exists()
 
 
-def test_run_skips_profiles_unless_requested(monkeypatch, tmp_path):
+def test_run_skips_the_report_unless_requested(monkeypatch, tmp_path):
     tickers = ["AAA", "BBB"]
     _stub_run(monkeypatch, tickers)
 
-    results = pipeline.run(watchlist={t: "Technology" for t in tickers},
-                           save_charts=True, out_dir=str(tmp_path))
+    with mock.patch("stockanalysis.pipeline.report.build_full_report") as build, \
+         mock.patch("stockanalysis.pipeline.report.save_report") as save:
+        results = pipeline.run(watchlist={t: "Technology" for t in tickers},
+                               save_report=False, out_dir=str(tmp_path))
 
-    assert results.chart_paths and results.profile_paths == []
+    assert results.report_path is None
+    build.assert_not_called()
+    save.assert_not_called()

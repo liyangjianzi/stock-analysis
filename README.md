@@ -38,14 +38,15 @@ stock-analysis run --target excel --out output/
 # or:  python -m stockanalysis run --target excel --out output/
 ```
 
-Outputs land in `output/`:
-- `output/signal_matrix.xlsx` — *Signal Matrix* + *Fundamentals* sheets
-- `output/<TICKER>.html` — one interactive technical dashboard per screened ticker
-- `output/<TICKER>_profile.txt` — deep fundamental report (with `--profiles`)
+Outputs land in `output/<timestamp>/`:
+- `signal_matrix.xlsx` — *Signal Matrix* + *Fundamentals* sheets
+- `report.html` — one combined report: Fundamental Screener + Combined Signal
+  Matrix (full) + top-N Technical Dashboards + top-N Fundamental Profiles +
+  the Daily Market Overview chart
 
-Useful flags: `--period 5y`, `--no-charts`, `--profiles`, `--top 5` (charts and
-profiles for the 5 strongest names only), `-v` (verbose), `--target none`
-(compute only, no export).
+Useful flags: `--period 5y`, `--no-report` (skip the combined report),
+`--top 5` (dashboards/profiles for the 5 strongest names only — this is the
+default), `-v` (verbose), `--target none` (compute only, no export).
 
 ## Backtest / signal validation
 
@@ -110,21 +111,21 @@ Without credentials the exporter fails with a clear message; Excel still works.
 ```python
 from stockanalysis import run
 
-results = run(export_target="excel", save_charts=True)   # Results dataclass
+results = run(export_target="excel")   # Results dataclass; report.html on by default
 results.signal_matrix     # tidy Buy/Hold/Watch DataFrame (pre-ranked: best first)
 results.screened_df       # fundamental scores (0–6)
 results.tech              # ticker -> indicator-enriched OHLCV DataFrame
-results.chart_paths       # saved HTML dashboards
-results.profile_paths     # saved profile reports (save_profiles=True)
+results.report_path       # saved combined report.html
 results.run_dir           # this run's timestamped output folder
 
-# Dashboards + profiles for the 5 strongest names only:
-run(save_charts=True, save_profiles=True, top_n=5)
+# Skip the combined report, or change how many names its dashboards/profiles cover:
+run(save_report=False)
+run(top_n=10)              # default is 5
 
 # Or call the building blocks directly (what the future server will do):
 import stockanalysis as sa
 fig = sa.charts.build_technical_dashboard("MSFT", results.tech)   # plotly Figure
-report = sa.profile.build_profile("AAPL", results.screened_df)["report"]
+profile = sa.profile.build_profile("AAPL", results.screened_df)["report"]
 ```
 
 ## Project layout
@@ -141,6 +142,7 @@ src/stockanalysis/
   overview.py     Stage-0 daily market overview (data only)
   profile.py      build_profile (deep fundamental report)
   charts.py       build_* Plotly figures + save_html
+  report.py       combined report.html (screener + signals + dashboards + profiles + overview)
   pipeline.py     Results + run() orchestrator  ← server-callable API
   cli.py          `stock-analysis` entry point
   outputs/        Exporter interface + Excel + Google Sheets
