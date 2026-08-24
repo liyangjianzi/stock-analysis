@@ -127,9 +127,10 @@ def test_build_full_report_badge_colors_present():
         {}, [], _overview_data(), selected=[], generated_at="now",
     )
 
-    assert "#B7E1CD" in out  # Buy / Bullish
-    assert "#D9D9D9" in out  # Watch
-    assert "#F4C7C3" in out  # Bearish
+    assert "#1b7837" in out  # Buy
+    assert "#6e7681" in out  # Watch
+    assert "#3fb950" in out  # Bullish
+    assert "#f85149" in out  # Bearish
 
 
 def test_build_full_report_empty_screened_df_and_signal_matrix():

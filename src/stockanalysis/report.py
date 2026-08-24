@@ -30,18 +30,28 @@ from . import charts
 from .profile import _fmt_val  # cross-module private helper: same number
 # formatting the ASCII profile report already uses, kept consistent rather
 # than re-implemented.
-from .signals import ACTION_COLORS, POSTURE_COLORS
+from .signals import TECHNICAL_COMPONENTS
 
-# CSS wants a leading '#'; signals.py's palette is bare hex (openpyxl's
-# PatternFill wants it bare too, so that's the shared, format-agnostic form).
-_ACTION_COLORS = {k: f"#{v}" for k, v in ACTION_COLORS.items()}
-_POSTURE_COLORS = {k: f"#{v}" for k, v in POSTURE_COLORS.items()}
+# Solid dark-theme palette for the signal matrix, mirroring the notebook's
+# local style_signals() ac/pc dicts (notebooks/stock_analysis.ipynb) rather
+# than signals.py's ACTION_COLORS/POSTURE_COLORS — those are pastel fills
+# tuned for Excel's white sheet background, a different rendering surface.
+_ACTION_COLORS = {"Buy": "#1b7837", "Hold": "#b8860b", "Watch": "#6e7681"}
+_POSTURE_TEXT_COLORS = {"Bullish": "#3fb950", "Neutral": "#d4a72c", "Bearish": "#f85149"}
+
+# ColorBrewer sequential/diverging stops (low -> high), linearly interpolated
+# by _colormap — same "Greens"/"RdYlGn" families the notebook's
+# .background_gradient(cmap=...) calls use, hand-rolled here since report.py
+# may not use pandas Styler (see module docstring).
+_GREENS = ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476",
+           "#41ab5d", "#238b45", "#006d2c", "#00441b"]
+_RDYLGN = ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b",
+           "#ffffbf", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"]
 
 # Number formats mirroring the notebook's style_screen / excel.py conventions.
 _NUMBER_FORMATS = {
     "PE": "{:.1f}", "EPS_Growth": "{:.1%}", "Rev_Growth": "{:.1%}",
     "Debt_Equity": "{:.2f}", "Div_Yield": "{:.2%}", "FCF": "{:,.0f}",
-    "Composite": "{:.3f}",
 }
 
 _SCREENER_COLUMNS = ["Ticker", "Sector", "PE", "EPS_Growth", "Rev_Growth",
@@ -71,27 +81,88 @@ def _fmt_cell(col: str, value):
         return _esc(value)
 
 
-def _badge(value, colors: dict) -> str:
-    color = colors.get(value, "#D9D9D9")
-    return (f'<span class="badge" style="background:{color}">'
-            f'{_esc(value)}</span>')
+def _hex_to_rgb(color: str) -> tuple[int, int, int]:
+    color = color.lstrip("#")
+    return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+
+
+def _rgb_to_hex(rgb) -> str:
+    return "#" + "".join(f"{max(0, min(255, round(c))):02x}" for c in rgb)
+
+
+def _colormap(stops: list[str], frac: float) -> str:
+    """Linearly interpolate a ColorBrewer-style stop list at ``frac`` (0-1,
+    NaN/out-of-range clamped) — a hand-rolled stand-in for matplotlib's
+    ``Greens``/``RdYlGn`` colormaps (see ``_GREENS``/``_RDYLGN``)."""
+    frac = 0.0 if frac != frac else min(max(frac, 0.0), 1.0)
+    n = len(stops) - 1
+    pos = frac * n
+    i = min(int(pos), n - 1)
+    t = pos - i
+    c0, c1 = _hex_to_rgb(stops[i]), _hex_to_rgb(stops[i + 1])
+    return _rgb_to_hex(c0[k] + (c1[k] - c0[k]) * t for k in range(3))
+
+
+def _contrast_text(bg_hex: str) -> str:
+    """Light or dark text for readability atop ``bg_hex``, by perceptual luminance."""
+    r, g, b = _hex_to_rgb(bg_hex)
+    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return "#0d1117" if luminance > 0.55 else "#f0f6fc"
 
 
 def _score_color(score, max_score: int) -> str:
-    """Green/amber/red by fraction of max_score — reuses the badge palette."""
-    if score is None or max_score <= 0:
-        return "#D9D9D9"
-    frac = score / max_score
-    if frac >= 2 / 3:
-        return "#B7E1CD"
-    if frac >= 1 / 3:
-        return "#FCE8B2"
-    return "#F4C7C3"
+    """Greens-gradient background by fraction of max_score."""
+    if score is None or max_score <= 0 or _is_missing(score):
+        return "#30363d"
+    return _colormap(_GREENS, score / max_score)
+
+
+def _score_badge(label: str, score, maxv: int) -> str:
+    bg = _score_color(score, maxv)
+    shown = "—" if _is_missing(score) else score
+    return (f'<span class="badge" style="background:{bg};color:{_contrast_text(bg)}">'
+            f'{_esc(label)} {_esc(shown)}/{maxv}</span>')
+
+
+def _heatmap_cell(value, vmax: float, stops: list[str], fmt: str | None = None) -> str:
+    """A ``<td>`` whose background is ``stops`` interpolated at value/vmax,
+    with auto contrast text — the signal matrix's per-column heatmap cells."""
+    if _is_missing(value):
+        return '<td class="empty-cell">—</td>'
+    text = fmt.format(value) if fmt else str(value)
+    if vmax <= 0:
+        return f'<td style="text-align:center">{_esc(text)}</td>'
+    bg = _colormap(stops, value / vmax)
+    return (f'<td style="background:{bg};color:{_contrast_text(bg)};'
+            f'text-align:center">{_esc(text)}</td>')
+
+
+def _action_cell(value) -> str:
+    if _is_missing(value):
+        return '<td class="empty-cell">—</td>'
+    bg = _ACTION_COLORS.get(value, "#6e7681")
+    return (f'<td style="background:{bg};color:#ffffff;font-weight:700;'
+            f'text-align:center">{_esc(value)}</td>')
+
+
+def _posture_cell(value) -> str:
+    if _is_missing(value):
+        return '<td class="empty-cell">—</td>'
+    color = _POSTURE_TEXT_COLORS.get(value, "#c9d1d9")
+    return f'<td style="color:{color};font-weight:600;text-align:center">{_esc(value)}</td>'
 
 
 def _table(headers: list[str], rows: list[list[str]]) -> str:
     head = "".join(f"<th>{h}</th>" for h in headers)
     body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _table_raw(headers: list[str], rows: list[list[str]]) -> str:
+    """Like :func:`_table` but each row cell is already a complete ``<td>...</td>``
+    string (used where cells need per-cell inline styling, e.g. heatmap fills)."""
+    head = "".join(f"<th>{h}</th>" for h in headers)
+    body = "".join("<tr>" + "".join(r) + "</tr>" for r in rows)
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
@@ -109,18 +180,26 @@ def _render_signal_matrix_section(signal_matrix: pd.DataFrame) -> str:
         return '<p class="empty">No signals generated.</p>'
     df = signal_matrix
     cols = [c for c in _SIGNAL_COLUMNS if c in df.columns]
+    tech_max = len(TECHNICAL_COMPONENTS)
     rows = []
     for _, row in df[cols].iterrows():
         cells = []
         for c in cols:
+            value = row[c]
             if c == "Final Action Signal":
-                cells.append(_badge(row[c], _ACTION_COLORS))
+                cells.append(_action_cell(value))
             elif c == "Technical Posture":
-                cells.append(_badge(row[c], _POSTURE_COLORS))
+                cells.append(_posture_cell(value))
+            elif c == "Fundamental Score":
+                cells.append(_heatmap_cell(value, 6, _GREENS))
+            elif c == "Tech Score":
+                cells.append(_heatmap_cell(value, tech_max, _GREENS))
+            elif c == "Composite":
+                cells.append(_heatmap_cell(value, 1, _RDYLGN, fmt="{:.2f}"))
             else:
-                cells.append(_fmt_cell(c, row[c]))
+                cells.append(f"<td>{_fmt_cell(c, value)}</td>")
         rows.append(cells)
-    return _table(cols, rows)
+    return _table_raw(cols, rows)
 
 
 def _render_fig(fig, div_id: str) -> str:
@@ -166,13 +245,11 @@ def _render_profile_card(profile_dict: dict) -> str:
     )
     fund_score = profile_dict.get("fundamental_score")
     if fund_score is not None:
-        header += (f'<span class="badge" style="background:{_score_color(fund_score, 6)}">'
-                   f'Fundamental {fund_score}/6</span>')
+        header += _score_badge("Fundamental", fund_score, 6)
     header += "</div>"
 
     score_badges = "".join(
-        f'<span class="badge" style="background:{_score_color(scores.get(key), maxv)}">'
-        f'{label} {scores.get(key, "—")}/{maxv}</span>'
+        _score_badge(label, scores.get(key), maxv)
         for key, label, maxv in (("management", "Management", 3),
                                  ("moat", "Moat", 3), ("long_term", "Long-Term", 4))
     )
@@ -265,28 +342,29 @@ def _render_overview_section(overview_data: dict) -> str:
 
 
 _STYLE = """
-body{font-family:system-ui,Arial,sans-serif;margin:0;color:#222;background:#fafafa}
+body{font-family:system-ui,Arial,sans-serif;margin:0;color:#c9d1d9;background:#0d1117}
 header{padding:1.5rem 2rem 1rem}
-header h1{margin-bottom:0}
-.generated{color:#888;font-size:0.9em}
-nav{position:sticky;top:0;background:#1F3864;padding:0.75rem 2rem;z-index:10}
-nav a{color:#fff;text-decoration:none;margin-right:1.5rem;font-size:0.95em}
-nav a:hover{text-decoration:underline}
+header h1{margin-bottom:0;color:#f0f6fc}
+.generated{color:#8b949e;font-size:0.9em}
+nav{position:sticky;top:0;background:#161b22;padding:0.75rem 2rem;z-index:10;border-bottom:1px solid #30363d}
+nav a{color:#c9d1d9;text-decoration:none;margin-right:1.5rem;font-size:0.95em}
+nav a:hover{color:#58a6ff;text-decoration:underline}
 section{padding:1.5rem 2rem;max-width:1400px}
 section:has(.dashboard){max-width:1900px}
-section h2{border-bottom:2px solid #1F3864;padding-bottom:0.3rem}
+section h2{border-bottom:2px solid #30363d;padding-bottom:0.3rem;color:#f0f6fc}
 table{border-collapse:collapse;width:100%;font-size:0.9em;margin-top:0.5rem}
-th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}
-th{background:#1F3864;color:#fff}
-tr:nth-child(even){background:#f3f3f3}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.85em;margin:2px}
-.empty{color:#888;font-style:italic}
-.dashboard{margin:1rem 0}
-.profile-card{border:1px solid #ddd;border-radius:8px;padding:1rem;margin:1rem 0;background:#fff}
-.profile-header h3{margin-bottom:0.2rem}
-.profile-header p{color:#666;margin-top:0}
+th,td{border:1px solid #30363d;padding:6px 8px;text-align:left}
+th{background:#161b22;color:#f0f6fc}
+tr:nth-child(even) td:not([style]){background:#11151c}
+td.empty-cell{color:#8b949e;text-align:center}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.85em;margin:2px;font-weight:600}
+.empty{color:#8b949e;font-style:italic}
+.dashboard{margin:1rem 0;background:#f6f8fa;border-radius:8px;padding:0.5rem}
+.profile-card{border:1px solid #30363d;border-radius:8px;padding:1rem;margin:1rem 0;background:#161b22}
+.profile-header h3{margin-bottom:0.2rem;color:#f0f6fc}
+.profile-header p{color:#8b949e;margin-top:0}
 .profile-groups{display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.5rem}
-.profile-group h4{margin-bottom:0.3rem}
+.profile-group h4{margin-bottom:0.3rem;color:#f0f6fc}
 .profile-group ul{margin:0;padding-left:1.2rem}
 """
 
