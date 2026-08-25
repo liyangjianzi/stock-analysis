@@ -20,6 +20,7 @@ pure function that returns a string.
 from __future__ import annotations
 
 import html
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,7 @@ from . import charts
 from .profile import _fmt_val  # cross-module private helper: same number
 # formatting the ASCII profile report already uses, kept consistent rather
 # than re-implemented.
+from .screener import screen_fundamentals
 from .signals import TECHNICAL_COMPONENTS
 
 # Solid dark-theme palette for the signal matrix, mirroring the notebook's
@@ -58,6 +60,24 @@ _SCREENER_COLUMNS = ["Ticker", "Sector", "PE", "EPS_Growth", "Rev_Growth",
                      "Debt_Equity", "Div_Yield", "FCF", "Fundamental_Score"]
 _SIGNAL_COLUMNS = ["Ticker", "Sector", "Fundamental Score", "Technical Posture",
                    "Tech Score", "Composite", "Final Action Signal"]
+
+# Which boolean pass-flag column (from screen_fundamentals) backs each metric
+# column, and the threshold shown in its header — read off screen_fundamentals'
+# own defaults so this can't drift from the actual scoring logic.
+_SCREEN_PARAMS = inspect.signature(screen_fundamentals).parameters
+_SCREENER_PASS_COLS = {
+    "PE": "Pass_PE", "EPS_Growth": "Pass_EPS", "Rev_Growth": "Pass_Rev",
+    "Debt_Equity": "Pass_DE", "Div_Yield": "Pass_Div", "FCF": "Pass_FCF",
+}
+_SCREENER_HEADERS = {
+    "PE": f"PE (< {_SCREEN_PARAMS['pe_max'].default:g})",
+    "EPS_Growth": f"EPS Growth (> {_SCREEN_PARAMS['eps_growth_min'].default:.0%})",
+    "Rev_Growth": f"Rev Growth (> {_SCREEN_PARAMS['rev_growth_min'].default:.0%})",
+    "Debt_Equity": f"Debt/Equity (< {_SCREEN_PARAMS['de_max'].default:g})",
+    "Div_Yield": f"Div Yield (> {_SCREEN_PARAMS['div_yield_min'].default:.1%})",
+    "FCF": f"FCF (> {_SCREEN_PARAMS['fcf_min'].default:g})",
+}
+_SCREENER_PASS_BG = "#1b7837"  # same green as the signal matrix's "Buy" cell
 
 
 def _is_missing(value) -> bool:
@@ -171,8 +191,20 @@ def _render_screener_section(screened_df: pd.DataFrame) -> str:
         return '<p class="empty">No fundamentals passed the screener.</p>'
     df = screened_df.reset_index()
     cols = [c for c in _SCREENER_COLUMNS if c in df.columns]
-    rows = [[_fmt_cell(c, row[c]) for c in cols] for _, row in df[cols].iterrows()]
-    return _table(cols, rows)
+    headers = [html.escape(_SCREENER_HEADERS.get(c, c)) for c in cols]
+    rows = []
+    for _, row in df.iterrows():
+        cells = []
+        for c in cols:
+            text = _fmt_cell(c, row[c])
+            pass_col = _SCREENER_PASS_COLS.get(c)
+            if pass_col in df.columns and bool(row[pass_col]):
+                cells.append(f'<td style="background:{_SCREENER_PASS_BG};'
+                             f'color:{_contrast_text(_SCREENER_PASS_BG)}">{text}</td>')
+            else:
+                cells.append(f"<td>{text}</td>")
+        rows.append(cells)
+    return _table_raw(headers, rows)
 
 
 def _render_signal_matrix_section(signal_matrix: pd.DataFrame) -> str:
