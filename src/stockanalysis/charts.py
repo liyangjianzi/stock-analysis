@@ -15,6 +15,17 @@ from plotly.subplots import make_subplots
 from . import config
 from .indicators import fit_regression_channel, find_support_resistance
 
+# Dark chrome shared by build_technical_dashboard/build_index_overview — mirrors
+# report.py's _STYLE palette so embedded charts blend into the report's cards.
+_PAPER_BG = "#161b22"   # matches report.py .profile-card / th background
+_PLOT_BG = "#0d1117"    # matches report.py body background
+_GRID = "#30363d"       # matches report.py border color
+_FONT = "#c9d1d9"       # matches report.py body text
+_TITLE = "#f0f6fc"      # matches report.py headings
+_MUTED = "#8b949e"      # matches report.py .generated / muted text
+_DARK_AXIS_KWARGS = dict(gridcolor=_GRID, zerolinecolor=_GRID, linecolor=_GRID,
+                         title_font=dict(color=_MUTED), tickfont=dict(color=_MUTED))
+
 
 def _right_margin(labels, font_size: int, base: int = 30) -> int:
     """Right margin wide enough for hline labels drawn outside the plot.
@@ -108,7 +119,7 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
     # ---------- Panel 1 overlay: regression trend channel ----------
     channel = fit_regression_channel(d["Close"])
     if channel:
-        ctrend = "#2e7d32" if channel["slope"] > 0 else "#c62828"  # green up / red down
+        ctrend = "#3fb950" if channel["slope"] > 0 else "#f85149"  # green up / red down
         fig.add_trace(go.Scatter(
             x=channel["index"], y=channel["mid"], name="Trend (regression)",
             mode="lines", line=dict(color=ctrend, width=1.6),
@@ -186,20 +197,21 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
     n_legend_items = sum(1 for tr in fig.data if tr.name and tr.showlegend is not False)
     fig.update_layout(
         height=config.PLOT_HEIGHT,
-        title=dict(text=f"📊 Technical Dashboard — {ticker}", x=0.5, xanchor="center"),
+        title=dict(text=f"📊 Technical Dashboard — {ticker}", x=0.5, xanchor="center",
+                   font=dict(color=_TITLE)),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
                     font=dict(size=10)),
         # Right margin holds the S/R labels — size it to the widest one.
         margin=dict(l=60, r=_right_margin(sr_labels, sr_font), t=_top_margin(n_legend_items), b=40),
         xaxis_rangeslider_visible=False,  # hide default candlestick rangeslider
-        template="plotly_white",
+        paper_bgcolor=_PAPER_BG, plot_bgcolor=_PLOT_BG, font=dict(color=_FONT),
     )
     # Crosshair spikes across all shared x-axes for precise tracking.
     fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1,
-                     spikedash="dot", spikecolor="#999999")
+                     spikedash="dot", spikecolor=_MUTED, **_DARK_AXIS_KWARGS)
     fig.update_yaxes(showspikes=True, spikethickness=1, spikedash="dot",
-                     spikecolor="#999999")
+                     spikecolor=_MUTED, **_DARK_AXIS_KWARGS)
     fig.update_yaxes(title_text="Price", row=1, col=1)
     fig.update_yaxes(title_text="MACD", row=2, col=1)
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1)
@@ -243,23 +255,24 @@ def build_index_overview(index_data: dict) -> go.Figure:
         vix_close = vix_df["Close"].dropna()
         fig.add_trace(
             go.Scatter(x=vix_close.index, y=vix_close.values, name="VIX",
-                       line=dict(color="#d62728", width=2),
-                       fill="tozeroy", fillcolor="rgba(214,39,40,0.1)"),
+                       line=dict(color="#f85149", width=2),
+                       fill="tozeroy", fillcolor="rgba(248,81,73,0.12)"),
             row=2, col=1,
         )
         for level, label in [(15, "Low/Moderate"), (25, "Moderate/Elevated")]:
             vix_labels.append(label)
             fig.add_hline(y=level, row=2, col=1,
-                          line=dict(color="gray", dash="dash", width=1),
+                          line=dict(color=_MUTED, dash="dash", width=1),
                           annotation_text=label, annotation_position="right")
     fig.update_layout(
-        height=config.PLOT_HEIGHT, hovermode="x unified", template="plotly_white",
+        height=config.PLOT_HEIGHT, hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         # Same as the dashboard: the VIX threshold labels live in the right margin.
         margin=dict(r=_right_margin(vix_labels, 12)),
+        paper_bgcolor=_PAPER_BG, plot_bgcolor=_PLOT_BG, font=dict(color=_FONT),
     )
-    fig.update_xaxes(showspikes=True, spikemode="across")
-    fig.update_yaxes(showspikes=True)
+    fig.update_xaxes(showspikes=True, spikemode="across", **_DARK_AXIS_KWARGS)
+    fig.update_yaxes(showspikes=True, **_DARK_AXIS_KWARGS)
     return fig
 
 

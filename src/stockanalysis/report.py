@@ -359,7 +359,7 @@ tr:nth-child(even) td:not([style]){background:#11151c}
 td.empty-cell{color:#8b949e;text-align:center}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.85em;margin:2px;font-weight:600}
 .empty{color:#8b949e;font-style:italic}
-.dashboard{margin:1rem 0;background:#f6f8fa;border-radius:8px;padding:0.5rem}
+.dashboard{margin:1rem 0;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:0.5rem}
 .profile-card{border:1px solid #30363d;border-radius:8px;padding:1rem;margin:1rem 0;background:#161b22}
 .profile-header h3{margin-bottom:0.2rem;color:#f0f6fc}
 .profile-header p{color:#8b949e;margin-top:0}
