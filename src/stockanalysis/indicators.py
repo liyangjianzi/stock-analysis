@@ -3,8 +3,9 @@
 ``add_indicators`` writes a fixed set of per-bar columns that the dashboard and
 signal engine read by exact name (the column contract):
 ``EMA20/EMA50/EMA200``, ``ENV_UP/ENV_DOWN``, ``MACD/MACD_SIG/MACD_HIST``,
-``RSI``, ``VOL_SMA20``, ``OBV``. The envelope is a *data-driven* asymmetric band
-around EMA20 sized so ~``envelope_coverage`` of closes fall inside it.
+``RSI``, ``RSI3``, ``ATR14``, ``VOL_SMA5``, ``VOL_SMA20``, ``OBV``. The envelope
+is a *data-driven* asymmetric band around EMA20 sized so ~``envelope_coverage``
+of closes fall inside it.
 
 Trend channels and support/resistance are *window-dependent overlays* (not
 per-bar columns), so they are computed on demand by ``fit_regression_channel``
@@ -16,6 +17,7 @@ import numpy as np
 import pandas as pd
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
+from ta.volatility import AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 
@@ -62,16 +64,22 @@ def add_indicators(df: pd.DataFrame, envelope_coverage: float = 0.95,
     out["MACD_SIG"]  = macd.macd_signal() # 9-EMA of the MACD line
     out["MACD_HIST"] = macd.macd_diff()   # MACD - signal (histogram)
 
-    # --- RSI (14): bounded 0–100 momentum oscillator ---
+    # --- RSI (14 and 3): bounded 0–100 momentum oscillators ---
     out["RSI"] = RSIIndicator(close, window=14).rsi()
+    out["RSI3"] = RSIIndicator(close, window=3).rsi()
 
-    # --- Volume analysis: 20-day average volume + On-Balance Volume (OBV) ---
+    # --- ATR (14): average true range, a volatility unit for distance checks ---
+    out["ATR14"] = AverageTrueRange(out["High"], out["Low"], close, window=14).average_true_range()
+
+    # --- Volume analysis: 5/20-day average volume + On-Balance Volume (OBV) ---
     # Degrades gracefully: if Volume is missing the columns are all-NaN, which
     # downstream code treats as "no signal" rather than crashing.
     if "Volume" in out:
+        out["VOL_SMA5"] = out["Volume"].rolling(5).mean()
         out["VOL_SMA20"] = out["Volume"].rolling(20).mean()
         out["OBV"] = OnBalanceVolumeIndicator(close, out["Volume"]).on_balance_volume()
     else:
+        out["VOL_SMA5"] = np.nan
         out["VOL_SMA20"] = np.nan
         out["OBV"] = np.nan
 

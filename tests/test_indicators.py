@@ -14,6 +14,7 @@ from stockanalysis.indicators import (
 CONTRACT_COLS = [
     "EMA20", "EMA50", "EMA200", "ENV_UP", "ENV_DOWN",
     "MACD", "MACD_SIG", "MACD_HIST", "RSI", "VOL_SMA20", "OBV",
+    "ATR14", "RSI3", "VOL_SMA5",
 ]
 
 
@@ -59,6 +60,22 @@ def test_rsi_bounded_0_100(uptrend_ohlcv):
     assert ((rsi >= 0) & (rsi <= 100)).all()
 
 
+def test_rsi3_bounded_0_100(uptrend_ohlcv):
+    rsi3 = add_indicators(uptrend_ohlcv)["RSI3"].dropna()
+    assert ((rsi3 >= 0) & (rsi3 <= 100)).all()
+
+
+def test_atr14_is_nonnegative(uptrend_ohlcv):
+    atr = add_indicators(uptrend_ohlcv)["ATR14"].dropna()
+    assert (atr >= 0).all()
+
+
+def test_vol_sma5_matches_rolling_mean(uptrend_ohlcv):
+    out = add_indicators(uptrend_ohlcv)
+    expected = uptrend_ohlcv["Volume"].rolling(5).mean()
+    pd.testing.assert_series_equal(out["VOL_SMA5"], expected, check_names=False)
+
+
 def test_add_indicators_does_not_mutate_input(uptrend_ohlcv):
     before = uptrend_ohlcv.copy()
     add_indicators(uptrend_ohlcv)
@@ -70,6 +87,7 @@ def test_volume_columns_degrade_when_volume_missing(uptrend_ohlcv):
     out = add_indicators(no_vol)  # must not raise
     assert out["VOL_SMA20"].isna().all()
     assert out["OBV"].isna().all()
+    assert out["VOL_SMA5"].isna().all()
 
 
 def test_regression_slope_sign_matches_trend(uptrend_ohlcv, downtrend_ohlcv):

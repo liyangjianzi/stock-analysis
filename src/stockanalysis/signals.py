@@ -5,9 +5,13 @@ The technical score is **registry-driven**: each component in
 max score, composite divisor, posture cutoffs and ``detail`` keys all derive from
 the registry, so adding/removing a component is a one-line edit there.
 
+The default registry is a pullback/reversal pattern (uptrend, deep oversold dip,
+shallow pullback, a confirming green bar, and a volume pickup) rather than a set
+of independent bullish confirmations.
+
 Score contract:
   - fundamental score: 0-6 (from :mod:`stockanalysis.screener`)
-  - technical score:   0-len(TECHNICAL_COMPONENTS) (default 7)
+  - technical score:   0-len(TECHNICAL_COMPONENTS) (default 5)
   - composite = 0.70*(fund/6) + 0.30*(tech/len) -> Buy >=0.60, Hold >=0.40, else Watch
 """
 from __future__ import annotations
@@ -18,77 +22,63 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from .indicators import fit_regression_channel, find_support_resistance
+from .indicators import find_support_resistance
 
 
 # --- Individual scoring components --------------------------------------------
 # Each predicate is pure and NaN/short-data robust. They assume a non-empty df
 # (compute_technical_posture guards emptiness before calling them).
 
-def _above_ema50(df: pd.DataFrame) -> bool:
-    """Price above the 50-day EMA (trend)."""
-    last = df.iloc[-1]
-    close, ema50 = last.get("Close", np.nan), last.get("EMA50", np.nan)
-    return bool(np.isfinite(close) and np.isfinite(ema50) and close > ema50)
-
-
-def _rsi_ok(df: pd.DataFrame) -> bool:
-    """RSI healthy: not overbought (<70), not deeply oversold (>35)."""
-    rsi = df.iloc[-1].get("RSI", np.nan)
-    return bool(np.isfinite(rsi) and 35 < rsi < 70)
-
-
-def _macd_cross_up(df: pd.DataFrame, lookback: int = 5) -> bool:
-    """Bullish MACD crossover (line crossed above signal) within ``lookback`` bars."""
-    macd, sig = df.get("MACD"), df.get("MACD_SIG")
-    if macd is None or sig is None or len(df) <= lookback:
-        return False
-    diff = (macd - sig).dropna()
-    if len(diff) <= lookback:
-        return False
-    recent = diff.iloc[-lookback:]
-    prev = diff.iloc[-lookback - 1:-1]
-    return bool(((prev.values <= 0) & (recent.values > 0)).any())
+def _at(df: pd.DataFrame, col: str, bars_ago: int = 0) -> float:
+    """Value of ``col`` at ``bars_ago`` bars before the latest bar (0 = latest,
+    i.e. ``df[col].iloc[-1-bars_ago]``); ``np.nan`` if the column is missing or
+    there isn't enough history. The single place that implements the bracket
+    notation (``[n]``) used in the predicate docstrings below."""
+    if col not in df or len(df) <= bars_ago:
+        return np.nan
+    return df[col].iloc[-1 - bars_ago]
 
 
 def _trend_up(df: pd.DataFrame) -> bool:
-    """Prevailing up-trend: positive close regression-channel slope."""
-    channel = fit_regression_channel(df.get("Close"))
-    return bool(channel is not None and channel["slope"] > 0)
-
-
-def _ema50_up(df: pd.DataFrame) -> bool:
-    """Rising 50-day EMA: positive regression slope on the EMA50 series."""
-    channel = fit_regression_channel(df.get("EMA50"))
-    return bool(channel is not None and channel["slope"] > 0)
-
-
-def _vol_confirm(df: pd.DataFrame, obv_lookback: int = 20) -> bool:
-    """Volume confirmation: OBV rising over the window, OR latest volume above its
-    20-day average on an up day (close >= open)."""
-    obv = df.get("OBV")
-    if obv is not None:
-        obv_s = obv.dropna()
-        if len(obv_s) > obv_lookback and obv_s.iloc[-1] > obv_s.iloc[-obv_lookback]:
-            return True
-    last = df.iloc[-1]
-    vol, vol_sma = last.get("Volume", np.nan), last.get("VOL_SMA20", np.nan)
-    close, op = last.get("Close", np.nan), last.get("Open", np.nan)
-    if all(np.isfinite(v) for v in (vol, vol_sma, close, op)):
-        return bool(vol > vol_sma and close >= op)
-    return False
-
-
-def _near_lower_env(df: pd.DataFrame, frac: float = 0.25) -> bool:
-    """Price hugging the lower EMA envelope (potential mean-reversion entry):
-    normalized band position in the bottom ``frac`` of ``[ENV_DOWN, ENV_UP]``."""
-    last = df.iloc[-1]
-    close = last.get("Close", np.nan)
-    up, down = last.get("ENV_UP", np.nan), last.get("ENV_DOWN", np.nan)
-    rng = up - down
-    if not all(np.isfinite(v) for v in (close, up, down)) or rng <= 0:
+    """Uptrend intact and accelerating: Close > EMA50, and EMA50 has risen at
+    least 2% over the last 20 bars: (EMA50 - EMA50[20]) / EMA50[20] >= 2%."""
+    close, ema50 = _at(df, "Close"), _at(df, "EMA50")
+    ema50_20ago = _at(df, "EMA50", 20)
+    if not all(np.isfinite(v) for v in (close, ema50, ema50_20ago)) or ema50_20ago == 0:
         return False
-    return bool((close - down) / rng <= frac)
+    return bool(close > ema50 and (ema50 - ema50_20ago) / ema50_20ago >= 0.02)
+
+
+def _dip_deep(df: pd.DataFrame) -> bool:
+    """Yesterday's 3-day RSI showed a deep oversold dip: RSI(3)[1] < 25."""
+    rsi3_prev = _at(df, "RSI3", 1)
+    return bool(np.isfinite(rsi3_prev) and rsi3_prev < 25)
+
+
+def _pullback_zone(df: pd.DataFrame) -> bool:
+    """Price sits within one ATR of EMA50: (Close - EMA50) / ATR14 <= 1.0."""
+    close, ema50, atr14 = _at(df, "Close"), _at(df, "EMA50"), _at(df, "ATR14")
+    if not all(np.isfinite(v) for v in (close, ema50, atr14)) or atr14 == 0:
+        return False
+    return bool((close - ema50) / atr14 <= 1.0)
+
+
+def _turn_confirm(df: pd.DataFrame) -> bool:
+    """Today confirms a turn: Close > High[1] AND Close > Open."""
+    close, high_prev, open_ = _at(df, "Close"), _at(df, "High", 1), _at(df, "Open")
+    if not all(np.isfinite(v) for v in (close, high_prev, open_)):
+        return False
+    return bool(close > high_prev and close > open_)
+
+
+def _vol_pattern(df: pd.DataFrame) -> bool:
+    """A quiet spell followed by a pickup: SMA(Volume,5)[1] < VOL_SMA20 AND
+    Volume >= 1.2 * VOL_SMA20."""
+    vol_sma5_prev = _at(df, "VOL_SMA5", 1)
+    vol_sma20, volume = _at(df, "VOL_SMA20"), _at(df, "Volume")
+    if not all(np.isfinite(v) for v in (vol_sma5_prev, vol_sma20, volume)):
+        return False
+    return bool(vol_sma5_prev < vol_sma20 and volume >= 1.2 * vol_sma20)
 
 
 TechnicalComponent = tuple[str, Callable[[pd.DataFrame], bool]]
@@ -97,38 +87,20 @@ TechnicalComponent = tuple[str, Callable[[pd.DataFrame], bool]]
 #: tuple and the max score, composite divisor, posture cutoffs and detail keys all
 #: follow automatically.
 TECHNICAL_COMPONENTS: list[TechnicalComponent] = [
-    ("above_ema50", _above_ema50),
-    ("rsi_ok", _rsi_ok),
-    ("macd_cross_up", _macd_cross_up),
     ("trend_up", _trend_up),
-    ("ema50_up", _ema50_up),
-    ("vol_confirm", _vol_confirm),
-    ("near_lower_env", _near_lower_env),
+    ("dip_deep", _dip_deep),
+    ("pullback_zone", _pullback_zone),
+    ("turn_confirm", _turn_confirm),
+    ("vol_pattern", _vol_pattern),
 ]
 
-#: Default posture cutoff: Bullish once at least 5 of the 7 default components fire
-#: (score >= ceil(bull_frac * N); 2/3 -> ceil(4.67)=5 for N=7).
-#:
-#: Do not tighten this to 6/7 without also reworking the registry: two components
-#: are rare *and* mutually exclusive with the trend ones in practice —
-#: ``near_lower_env`` fires on ~16% of ticker-days and ``macd_cross_up`` on ~21%,
-#: but ``near_lower_env`` and ``above_ema50`` coincide only ~0.5% of the time (a
-#: stock in a clean uptrend is not hugging its lower band). Demanding 6 of 7
-#: therefore caps a healthy trender at 5 and makes Bullish near-unreachable
-#: (~6% of ticker-days), which also starves the technical backtest of entries.
+#: Default posture cutoff: Bullish once at least 4 of the 5 default components fire
+#: (score >= ceil(bull_frac * N); 2/3 -> ceil(3.33)=4 for N=5).
 DEFAULT_BULL_FRAC = 2 / 3
 
 #: Default Bearish cutoff, the mirror of :data:`DEFAULT_BULL_FRAC`: Bearish at no
-#: more than 2 of the 7 default components (score <= floor(bear_frac * N);
-#: 1/3 -> floor(2.33)=2 for N=7), ~19% of ticker-days.
-#:
-#: This used to be a hardcoded ``score <= 0``, which no live ticker ever hit: every
-#: component is a *bullish confirmation*, so failing them all means "no bullish
-#: evidence", and two of them fire precisely during a decline — ``near_lower_env``
-#: (price pinned to the lower band) and ``rsi_ok`` (true through any ordinary
-#: pullback, 35 < RSI < 70). A straight-line -60% crash scores 1, not 0. Bearish
-#: was therefore reachable only via the empty-data guard below, i.e. a failed
-#: fetch rather than a weak chart.
+#: more than 1 of the 5 default components (score <= floor(bear_frac * N);
+#: 1/3 -> floor(1.67)=1 for N=5).
 DEFAULT_BEAR_FRAC = 1 / 3
 
 
