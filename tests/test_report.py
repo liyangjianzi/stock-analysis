@@ -85,7 +85,7 @@ def test_build_full_report_includes_all_five_sections():
     )
 
     assert "<html" in out and "</html>" in out
-    for anchor in ("screener", "signals", "dashboards", "profiles", "overview"):
+    for anchor in ("screener", "tech_screener", "signals", "dashboards", "profiles", "overview"):
         assert f'id="{anchor}"' in out
     assert "AAA" in out and "BBB" in out
 
@@ -140,9 +140,22 @@ def test_build_full_report_empty_screened_df_and_signal_matrix():
     )
 
     assert "No fundamentals passed the screener." in out
+    assert "No technical data available." in out
     assert "No signals generated." in out
     assert "No tickers selected." in out
     assert "No profiles selected." in out
+
+
+def test_build_full_report_technical_screener_marks_pass_fail(uptrend_ohlcv, downtrend_ohlcv):
+    tickers = ["AAA", "BBB"]
+    tech = {"AAA": add_indicators(uptrend_ohlcv), "BBB": add_indicators(downtrend_ohlcv)}
+    out = report.build_full_report(
+        _screened_df(tickers), _signal_matrix(tickers), tech, [], _overview_data(),
+        selected=[], generated_at="now",
+    )
+
+    assert "&#10003;" in out  # at least one passing component checkmark
+    assert "Dip Deep (RSI(3)[1] &lt; 25)" in out  # header derived from the predicate's own docstring
 
 
 def test_build_full_report_no_tech_data_for_selected_ticker():

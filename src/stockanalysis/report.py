@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import html
 import inspect
+import re
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +33,7 @@ from .profile import _fmt_val  # cross-module private helper: same number
 # formatting the ASCII profile report already uses, kept consistent rather
 # than re-implemented.
 from .screener import screen_fundamentals
-from .signals import TECHNICAL_COMPONENTS
+from .signals import TECHNICAL_COMPONENTS, compute_technical_posture
 
 # Solid dark-theme palette for the signal matrix, mirroring the notebook's
 # local style_signals() ac/pc dicts (notebooks/stock_analysis.ipynb) rather
@@ -78,6 +79,22 @@ _SCREENER_HEADERS = {
     "FCF": f"FCF (> {_SCREEN_PARAMS['fcf_min'].default:g})",
 }
 _SCREENER_PASS_BG = "#1b7837"  # same green as the signal matrix's "Buy" cell
+
+_TECH_FORMULA_RE = re.compile(r":\s*(?P<formula>[^:]+)$")
+
+
+def _tech_header(name: str, fn) -> str:
+    """Short label + the predicate's own formula, read live from its
+    docstring (mirrors _SCREENER_HEADERS reading screen_fundamentals's
+    defaults) so a header can't drift from the actual predicate logic.
+    Falls back to the bare label when the docstring doesn't end in the
+    expected "...: formula." shape, rather than risking a garbled header."""
+    label = name.replace("_", " ").title()
+    doc = " ".join((fn.__doc__ or "").split())
+    match = _TECH_FORMULA_RE.search(doc)
+    if not match:
+        return label
+    return f"{label} ({match['formula'].rstrip('.')})"
 
 
 def _is_missing(value) -> bool:
@@ -203,6 +220,35 @@ def _render_screener_section(screened_df: pd.DataFrame) -> str:
                              f'color:{_contrast_text(_SCREENER_PASS_BG)}">{text}</td>')
             else:
                 cells.append(f"<td>{text}</td>")
+        rows.append(cells)
+    return _table_raw(headers, rows)
+
+
+def _render_technical_screener_section(tech: dict) -> str:
+    if not tech:
+        return '<p class="empty">No technical data available.</p>'
+    tech_max = len(TECHNICAL_COMPONENTS)
+    entries = sorted(
+        ((ticker, *compute_technical_posture(df)) for ticker, df in tech.items()),
+        key=lambda e: (-e[2], e[0]),
+    )
+
+    headers = (["Ticker"]
+               + [html.escape(_tech_header(name, fn)) for name, fn in TECHNICAL_COMPONENTS]
+               + ["Tech Score", "Technical Posture"])
+
+    rows = []
+    for ticker, posture, score, detail in entries:
+        cells = [f"<td>{_esc(ticker)}</td>"]
+        for name, _ in TECHNICAL_COMPONENTS:
+            if detail.get(name, False):
+                cells.append(f'<td style="background:{_SCREENER_PASS_BG};'
+                             f'color:{_contrast_text(_SCREENER_PASS_BG)};'
+                             f'text-align:center">&#10003;</td>')
+            else:
+                cells.append('<td style="text-align:center">—</td>')
+        cells.append(_heatmap_cell(score, tech_max, _GREENS))
+        cells.append(_posture_cell(posture))
         rows.append(cells)
     return _table_raw(headers, rows)
 
@@ -402,6 +448,7 @@ td.empty-cell{color:#8b949e;text-align:center}
 
 _SECTIONS = [
     ("screener", "Fundamental Screener"),
+    ("tech_screener", "Technical Screener"),
     ("signals", "Combined Signal Matrix"),
     ("dashboards", "Top Technical Dashboards"),
     ("profiles", "Fundamental Profiles"),
@@ -431,6 +478,7 @@ def build_full_report(
     nav = "".join(f'<a href="#{anchor}">{title}</a>' for anchor, title in _SECTIONS)
     body_sections = [
         _render_screener_section(screened_df),
+        _render_technical_screener_section(tech),
         _render_signal_matrix_section(signal_matrix),
         _render_dashboards_section(tech, selected),
         _render_profiles_section(profiles),
