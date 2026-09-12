@@ -152,3 +152,67 @@ def _is_restated(cached: pd.DataFrame, fresh: pd.DataFrame, rtol: float = PRICE_
     old = cached.loc[shared, "Close"].astype(float).to_numpy()
     new = fresh.loc[shared, "Close"].astype(float).to_numpy()
     return not np.allclose(old, new, rtol=rtol, atol=0.0, equal_nan=True)
+
+
+def _call(fetcher, ticker: str, *, period=None, start=None):
+    """Invoke ``fetcher`` defensively — a fetch error is a miss, not a crash."""
+    try:
+        df = fetcher(ticker, period=period, start=start)
+    except Exception as e:
+        log.warning("%s: price fetch failed (%s).", ticker, e)
+        return None
+    return None if df is None or df.empty else df
+
+
+def _rebuild(ticker, period, fetcher, cache_dir, cached):
+    """Re-fetch complete history and replace the cache.
+
+    Falls back to the stale cached bars when the network gives us nothing, so a
+    fully offline run still produces real (slightly stale) output.
+    """
+    full = _call(fetcher, ticker, period="max")
+    if full is not None:
+        write_cache(ticker, full, cache_dir)
+        return _slice(full, period)
+    log.warning("%s: full refetch failed — serving %d cached bars.", ticker, len(cached))
+    return _slice(cached, period)
+
+
+def cached_history(ticker: str, period, fetcher, cache_dir=None):
+    """Return ``ticker``'s bars for ``period``, fetching only what's missing.
+
+    ``fetcher(ticker, period=None, start=None) -> DataFrame | None`` does the
+    actual network call; exactly one of ``period``/``start`` is ever passed.
+    Returns ``None`` only when there is no cache and every fetch failed —
+    matching the uncached behaviour callers already handle.
+    """
+    cached = read_cache(ticker, cache_dir)
+
+    if cached is None:
+        # Cold miss: always pull COMPLETE history so one file serves every
+        # caller ('3y', '5y', 'max') without per-file coverage metadata.
+        full = _call(fetcher, ticker, period="max")
+        if full is not None:
+            write_cache(ticker, full, cache_dir)
+            return _slice(full, period)
+        # Preserve the on-disk invariant: a partial fetch is returned, never stored.
+        log.warning("%s: full-history fetch failed — falling back to an uncached "
+                    "'%s' fetch.", ticker, period)
+        return _call(fetcher, ticker, period=period)
+
+    last = cached.index.max()
+    fresh = _call(fetcher, ticker, start=last - pd.Timedelta(days=OVERLAP_DAYS))
+
+    if fresh is None:
+        # A failed or truncated tail is never merged in; refetch everything.
+        log.warning("%s: tail fetch returned nothing — refetching full history.", ticker)
+        return _rebuild(ticker, period, fetcher, cache_dir, cached)
+
+    if _is_restated(cached, fresh):
+        log.info("%s: cached bars were restated (split/dividend) — rebuilding cache.",
+                 ticker)
+        return _rebuild(ticker, period, fetcher, cache_dir, cached)
+
+    merged = _merge(cached, fresh)
+    write_cache(ticker, merged, cache_dir)
+    return _slice(merged, period)

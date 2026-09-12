@@ -196,3 +196,155 @@ def test_is_restated_is_false_without_overlapping_dates():
     disjoint = bars(start="2024-02-01", n=3)
 
     assert cache._is_restated(cached, disjoint) is False
+
+
+# --- cached_history orchestration ----------------------------------------------
+
+class FakeFetcher:
+    """Records every call and returns queued responses.
+
+    Asserting on ``.calls`` is the point: the only proof a fetch was actually
+    incremental is the arguments it was made with, not the frame it returned.
+    Queue an Exception instance to make that call raise.
+    """
+
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def __call__(self, ticker, period=None, start=None):
+        self.calls.append({"ticker": ticker, "period": period, "start": start})
+        if not self.responses:
+            raise AssertionError(f"unexpected extra fetch: {ticker} {period} {start}")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def test_cold_miss_fetches_complete_history_and_writes_the_cache(tmp_path):
+    full = bars(start="2024-01-01", n=30)
+    fetcher = FakeFetcher(full)
+
+    cache.cached_history("AAPL", "5d", fetcher, cache_dir=tmp_path)
+
+    # 'max', NOT the caller's '5d' — that is the complete-history invariant.
+    assert fetcher.calls == [{"ticker": "AAPL", "period": "max", "start": None}]
+    assert cache.cache_path("AAPL", cache_dir=tmp_path).exists()
+
+
+def test_cold_miss_returns_only_the_requested_slice(tmp_path):
+    full = recent_bars(n=30)          # must end today — see recent_bars' docstring
+    fetcher = FakeFetcher(full)
+
+    out = cache.cached_history("AAPL", "5d", fetcher, cache_dir=tmp_path)
+
+    assert len(out) < len(full)
+    assert out.index.max() == full.index.max()
+
+
+def test_warm_hit_requests_only_the_tail(tmp_path):
+    cached = bars(start="2024-01-01", n=20)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    fetcher = FakeFetcher(cached.tail(2))
+
+    cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    call = fetcher.calls[0]
+    assert call["period"] is None
+    assert call["start"] == cached.index.max() - pd.Timedelta(days=cache.OVERLAP_DAYS)
+
+
+def test_warm_hit_merges_new_bars_into_the_stored_cache(tmp_path):
+    cached = bars(start="2024-01-01", n=10)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    tail = bars(start="2024-01-15", n=3, first_close=300.0)
+    fetcher = FakeFetcher(tail)
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    assert len(out) == 13
+    assert len(cache.read_cache("AAPL", cache_dir=tmp_path)) == 13
+
+
+def test_max_caller_is_served_from_a_cache_built_by_a_3y_caller(tmp_path):
+    """The regression the complete-history invariant exists to prevent:
+    thesis.review asks for 'max' on every run and must not refetch it."""
+    full = recent_bars(n=30)          # must end today — see recent_bars' docstring
+    cold = FakeFetcher(full)
+    cache.cached_history("AAPL", "3y", cold, cache_dir=tmp_path)
+
+    warm = FakeFetcher(full.tail(2))
+    out = cache.cached_history("AAPL", "max", warm, cache_dir=tmp_path)
+
+    assert len(warm.calls) == 1                  # the tail top-up only
+    assert warm.calls[0]["period"] is None       # never a second full download
+    assert len(out) == 30
+
+
+def test_restated_closes_trigger_a_full_rebuild(tmp_path):
+    cached = bars(start="2024-01-01", n=10)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    restated_tail = cached.tail(3) / 2.0          # a 2:1 split
+    rebuilt = bars(start="2024-01-01", n=12, first_close=50.0)
+    fetcher = FakeFetcher(restated_tail, rebuilt)
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    assert fetcher.calls[1]["period"] == "max"
+    assert len(out) == 12
+    # The stale pre-split bars are gone, not merged alongside the new ones.
+    pd.testing.assert_frame_equal(
+        cache.read_cache("AAPL", cache_dir=tmp_path), rebuilt, check_freq=False)
+
+
+def test_failed_top_up_refetches_complete_history(tmp_path):
+    cached = bars(start="2024-01-01", n=10)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    rebuilt = bars(start="2024-01-01", n=14)
+    fetcher = FakeFetcher(RuntimeError("connection reset"), rebuilt)
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    assert fetcher.calls[1]["period"] == "max"
+    assert len(out) == 14
+
+
+def test_empty_top_up_response_also_refetches_complete_history(tmp_path):
+    cached = bars(start="2024-01-01", n=10)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    rebuilt = bars(start="2024-01-01", n=14)
+    fetcher = FakeFetcher(bars(n=0), rebuilt)
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    assert len(out) == 14
+
+
+def test_failed_top_up_and_failed_rebuild_serve_the_cached_bars(tmp_path):
+    """Fully offline with a warm cache: real, slightly stale output beats none."""
+    cached = bars(start="2024-01-01", n=10)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    fetcher = FakeFetcher(RuntimeError("offline"), RuntimeError("offline"))
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    pd.testing.assert_frame_equal(out, cached, check_freq=False)
+
+
+def test_failed_cold_max_falls_back_to_the_requested_period_unwritten(tmp_path):
+    partial = bars(start="2024-01-01", n=5)
+    fetcher = FakeFetcher(RuntimeError("max unavailable"), partial)
+
+    out = cache.cached_history("AAPL", "3y", fetcher, cache_dir=tmp_path)
+
+    assert fetcher.calls[1]["period"] == "3y"
+    pd.testing.assert_frame_equal(out, partial, check_freq=False)
+    # Never store a partial fetch — that is what keeps coverage metadata-free.
+    assert not cache.cache_path("AAPL", cache_dir=tmp_path).exists()
+
+
+def test_returns_none_when_every_fetch_fails_with_no_cache(tmp_path):
+    fetcher = FakeFetcher(RuntimeError("offline"), RuntimeError("offline"))
+
+    assert cache.cached_history("AAPL", "3y", fetcher, cache_dir=tmp_path) is None
