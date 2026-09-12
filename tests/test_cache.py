@@ -144,3 +144,55 @@ def test_slice_returns_everything_for_max():
     df = bars(start="2024-01-01", n=60)
 
     pd.testing.assert_frame_equal(cache._slice(df, "max", today=df.index.max()), df)
+
+
+# --- merge / restatement detection ---------------------------------------------
+
+def test_merge_prefers_the_freshly_fetched_row_on_duplicate_dates():
+    cached = bars(start="2024-01-01", n=5)
+    fresh = cached.tail(2) * 2.0
+
+    merged = cache._merge(cached, fresh)
+
+    assert len(merged) == 5
+    assert merged["Close"].iloc[-1] == cached["Close"].iloc[-1] * 2.0
+
+
+def test_merge_appends_new_bars_and_keeps_the_index_sorted_and_unique():
+    cached = bars(start="2024-01-01", n=5)
+    fresh = bars(start="2024-01-08", n=3, first_close=200.0)
+
+    merged = cache._merge(cached, fresh)
+
+    assert len(merged) == 8
+    assert merged.index.is_monotonic_increasing
+    assert merged.index.is_unique
+
+
+def test_is_restated_is_false_when_overlapping_closes_match():
+    cached = bars(start="2024-01-01", n=5)
+
+    assert cache._is_restated(cached, cached.tail(3)) is False
+
+
+def test_is_restated_is_true_after_a_split_halves_history():
+    cached = bars(start="2024-01-01", n=5)
+    restated = cached.tail(3) / 2.0          # a 2:1 split restates older bars
+
+    assert cache._is_restated(cached, restated) is True
+
+
+def test_is_restated_ignores_floating_point_noise():
+    cached = bars(start="2024-01-01", n=5)
+    jittered = cached.tail(3).copy()
+    jittered["Close"] = jittered["Close"] * (1 + 1e-9)
+
+    assert cache._is_restated(cached, jittered) is False
+
+
+def test_is_restated_is_false_without_overlapping_dates():
+    # Nothing to compare means nothing to conclude — merge rather than rebuild.
+    cached = bars(start="2024-01-01", n=5)
+    disjoint = bars(start="2024-02-01", n=3)
+
+    assert cache._is_restated(cached, disjoint) is False

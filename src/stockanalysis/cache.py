@@ -19,6 +19,7 @@ import re
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import config
@@ -123,3 +124,31 @@ def _slice(df: pd.DataFrame, period, today=None) -> pd.DataFrame:
     """Trim a complete-history frame down to what ``period`` asked for."""
     start = _period_start(period, today)
     return df if start is None else df.loc[df.index >= start]
+
+
+def _merge(cached: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
+    """Combine cached and freshly fetched bars; fresh wins on duplicate dates."""
+    combined = pd.concat([cached, fresh])
+    combined = combined[~combined.index.duplicated(keep="last")]
+    return combined.sort_index()
+
+
+def _is_restated(cached: pd.DataFrame, fresh: pd.DataFrame, rtol: float = PRICE_RTOL) -> bool:
+    """True when yfinance has retroactively restated the overlapping bars.
+
+    ``fetch_stock_data`` fetches with ``auto_adjust=True``, so cached bars are
+    split/dividend-adjusted *as of fetch time*. After a 2:1 split every older
+    bar is restated at half its previous value; appending a fresh tail onto a
+    stale base would open a 50% phantom gap mid-series and silently corrupt
+    EMA20/50/200, RSI, ATR14, the regression channel and every technical score
+    downstream — with no error anywhere. Comparing the overlap costs no extra
+    request and catches exactly that.
+
+    No overlapping dates means nothing to compare, so this reports False.
+    """
+    shared = cached.index.intersection(fresh.index)
+    if len(shared) == 0 or "Close" not in cached.columns or "Close" not in fresh.columns:
+        return False
+    old = cached.loc[shared, "Close"].astype(float).to_numpy()
+    new = fresh.loc[shared, "Close"].astype(float).to_numpy()
+    return not np.allclose(old, new, rtol=rtol, atol=0.0, equal_nan=True)
