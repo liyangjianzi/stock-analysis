@@ -100,44 +100,54 @@ data/cache/prices/<TICKER>.csv
 
 ## Period handling
 
-The cache file holds a **superset** of bars for a ticker; it is *not* keyed by
-period string. A request for `period` resolves to the earliest date that period
-requires:
+A cache file holds the ticker's **complete** history. On a cold miss the cache
+fetches `period="max"` regardless of what the caller asked for, then returns
+the requested slice. Coverage is therefore universal **by construction** — `3y`,
+`5y` and `max` callers all hit the same file, and no per-file "what period does
+this cover?" metadata is needed.
 
-- If the cache's earliest bar is **later** than the required start (e.g. the
-  file holds 3y but `thesis.review` asks for `max`), the cache cannot satisfy
-  the request → do a **full fetch for `period`** and store the wider result.
-- Otherwise → serve a **slice** of the cached frame, after topping up the tail.
+**Why not just store what was asked for.** The naive rule — "re-fetch when the
+cached frame starts later than the request needs" — can never satisfy a `max`
+request: a max request's required start is unbounded, while any cached frame
+starts at the ticker's inception, so the cache always looks too short.
+`thesis.review`, which always asks for `max`, would re-download full history on
+every run: exactly the waste this feature exists to remove. Fetching `max` once
+up front removes both the re-fetch and the metadata needed to avoid it.
 
-So `3y`, `5y` and `max` callers share one file and progressively widen it,
-instead of fighting over it or maintaining duplicate per-period entries.
+**Cost:** the first fetch per ticker is a full-history download instead of `3y`
+— a one-time expense (~5k rows / ~300 KB CSV for a typical equity), after which
+every caller reads from disk.
 
-Period strings are parsed into an approximate calendar lookback (`"3y"`,
-`"6mo"`, `"5d"`, `"max"`, `"ytd"`). The comparison is deliberately tolerant:
-an *approximate* required-start that is a few days off only risks an
-unnecessary full re-fetch, never silently short history. A period string the
-parser does not recognize is treated as "cannot be satisfied from cache" → full
-fetch, so unknown inputs fail safe.
+**Invariant maintenance:** if the `max` fetch fails, the cache falls back to
+fetching the caller's requested `period` and **returns it without writing a
+cache file**. That keeps the invariant airtight — any file on disk is complete
+from inception — so coverage never has to be re-derived at read time. A ticker
+whose `max` fetch keeps failing simply stays uncached.
+
+Period strings are still parsed into an approximate calendar lookback (`"3y"`,
+`"6mo"`, `"5d"`, `"ytd"`; `"max"` and anything unrecognized mean "return
+everything"), but only to **slice** the cached frame down to what the caller
+asked for. An approximate start a few days off means the caller gets a handful
+of extra bars, never fewer than requested.
 
 ## Read path
 
-1. **No file / unreadable / empty** → full `period` fetch via `fetcher`, store,
-   return.
-2. **Cache does not cover the required start** (see above) → same as 1.
-3. **File present and covering** → fetch
+1. **No file / unreadable / empty** → full `max` fetch via `fetcher`, store,
+   return the requested slice. (If the `max` fetch fails → fetch the caller's
+   `period` and return it unwritten; see Period handling.)
+2. **File present** → fetch
    `start = last_cached_date − OVERLAP_DAYS` (5 calendar days).
-4. **Overlap check:** compare the re-fetched rows against the cached rows on
+3. **Overlap check:** compare the re-fetched rows against the cached rows on
    their shared dates. If any `Close` differs by more than a small relative
    tolerance (`1e-4`), Yahoo has retroactively restated history — a split or
-   dividend — so **discard the file, do a full `period` re-fetch, overwrite**,
+   dividend — so **discard the file, do a full `max` re-fetch, overwrite**,
    and log at INFO that the cache was rebuilt.
-5. **Top-up fetch failed or returned empty** → **retry as a full `period`
-   fetch** and overwrite the cache. A failed or truncated tail response is
+4. **Top-up fetch failed or returned empty** → **retry as a full `max` fetch** and overwrite the cache. A failed or truncated tail response is
    never merged into the store; the cheap incremental path is an optimization,
    and the moment it misbehaves the cache falls back to fetching everything the
    caller needs. Only if that full fetch *also* fails does the cached frame get
    served (see Error handling).
-6. **Otherwise merge:** concatenate, drop duplicate dates keeping the
+5. **Otherwise merge:** concatenate, drop duplicate dates keeping the
    **freshly fetched** row, sort by date, write back atomically, and return the
    slice the caller asked for.
 
@@ -160,9 +170,10 @@ Consistent with the module's existing "degrade, never crash" rule:
 |---|---|
 | Cache file missing | Treat as a miss → full fetch |
 | Cache file corrupt / unparseable | Log a warning, treat as a miss, overwrite on the next successful fetch. Never raises. |
-| Top-up fetch fails or returns empty, cache present | **Retry as a full `period` fetch** and overwrite the cache. A garbled or partial tail is never merged in. |
-| That fallback full fetch also fails, cache present | **Serve the cached bars** as a last resort, log a warning. This is what makes offline runs produce real (slightly stale) output instead of empty output. |
-| Full fetch fails, no cache | Return `None` — exactly today's behaviour |
+| Top-up fetch fails or returns empty, cache present | **Retry as a full `max` fetch** and overwrite the cache. A garbled or partial tail is never merged in. |
+| That fallback `max` fetch also fails, cache present | **Serve the cached bars** as a last resort, log a warning. This is what makes offline runs produce real (slightly stale) output instead of empty output. |
+| `max` fetch fails on a cold miss | Fall back to a `period` fetch and return it **without writing a cache file** (preserves the complete-history invariant) |
+| Both fetches fail, no cache | Return `None` — exactly today's behaviour |
 | Cache directory not writable | Log a warning once and proceed uncached; a read-only disk degrades performance, never correctness |
 
 ## Public surface
@@ -201,8 +212,13 @@ that records the arguments it was called with:
   attempted, and its result replaces the cache.
 - Failed top-up *and* failed full fetch with a warm cache → cached bars
   returned, no exception.
-- Period widening → a `3y` cache followed by a `max` request triggers a full
-  fetch and widens the stored file; a subsequent `3y` request is served from it.
+- Cold miss requests `max`, not the caller's `period`, and the caller still
+  receives only its requested slice.
+- A `max` caller is served from a cache built by a `3y` caller with **no**
+  network call beyond the tail top-up (the regression the complete-history
+  invariant exists to prevent).
+- Failed `max` fetch on a cold miss → falls back to a `period` fetch, returns
+  those bars, and writes **no** cache file.
 - Filename sanitization round-trip for a symbol containing `^` and `.`.
 
 Plus, in `tests/test_ingest.py`: `use_cache=False` bypasses disk entirely (no
