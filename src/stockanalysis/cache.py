@@ -69,6 +69,26 @@ def read_cache(ticker: str, cache_dir=None):
         return None
 
 
+def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce ``df``'s index to tz-naive ``Date`` before it ever touches disk.
+
+    ``read_cache`` already strips tz on the way out, but normalizing only on
+    read means a tz-aware frame that spans a DST boundary gets serialized with
+    mixed UTC offsets (e.g. ``-04:00`` before the fall-back, ``-05:00`` after).
+    ``pd.to_datetime`` then can't parse it back, ``read_cache`` treats the file
+    as corrupt, and the same broken shape gets rewritten on every run — a
+    silent permanent-miss loop. Every fetcher `cache.py` is documented to
+    support (not just ``ingest._raw_history``, which happens to already strip
+    tz) must get this for free, so normalize on ingress instead of trusting
+    callers.
+    """
+    idx = pd.to_datetime(df.index)
+    out = df.copy()
+    out.index = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
+    out.index.name = "Date"
+    return out
+
+
 def write_cache(ticker: str, df: pd.DataFrame, cache_dir=None) -> bool:
     """Atomically write ``df`` to ``ticker``'s cache file. Returns success.
 
@@ -78,6 +98,7 @@ def write_cache(ticker: str, df: pd.DataFrame, cache_dir=None) -> bool:
     """
     path = cache_path(ticker, cache_dir)
     try:
+        df = _normalize(df)
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         try:
@@ -147,6 +168,13 @@ def _is_restated(cached: pd.DataFrame, fresh: pd.DataFrame, rtol: float = PRICE_
     No overlapping dates means nothing to compare, so this reports False.
     """
     shared = cached.index.intersection(fresh.index)
+    # The newest cached bar may be an in-progress session bar whose close still
+    # moves intraday (yfinance returns a live row for today during market
+    # hours); comparing it would flag every same-day rerun as a restatement.
+    # A split/dividend restates every OLDER bar too, so excluding just the
+    # newest one from the comparison doesn't weaken detection.
+    if len(cached) > 0:
+        shared = shared[shared < cached.index.max()]
     if len(shared) == 0 or "Close" not in cached.columns or "Close" not in fresh.columns:
         return False
     old = cached.loc[shared, "Close"].astype(float).to_numpy()
@@ -183,8 +211,12 @@ def cached_history(ticker: str, period, fetcher, cache_dir=None):
 
     ``fetcher(ticker, period=None, start=None) -> DataFrame | None`` does the
     actual network call; exactly one of ``period``/``start`` is ever passed.
-    Returns ``None`` only when there is no cache and every fetch failed —
-    matching the uncached behaviour callers already handle.
+    Returns ``None`` only when there is no cache and every fetch failed.
+    A stale cache whose fallback fetches also fail is still served — sliced
+    to ``period`` — which can come back as an *empty* (not ``None``) frame if
+    the cache predates the requested window; callers already handle that via
+    ``.empty`` (see ``fetch_stock_data``), so this is not a behaviour change,
+    just an accurate docstring.
     """
     cached = read_cache(ticker, cache_dir)
 
@@ -205,6 +237,11 @@ def cached_history(ticker: str, period, fetcher, cache_dir=None):
 
     if fresh is None:
         # A failed or truncated tail is never merged in; refetch everything.
+        # Known limitation: a delisted or halted ticker whose tail fetch keeps
+        # returning empty will hit this branch — and therefore _rebuild — on
+        # every single run, never settling into the cheap warm path. That is
+        # no worse than pre-cache behaviour (every run re-fetched everything
+        # anyway) but is a foreseeable non-improvement, not a bug to rediscover.
         log.warning("%s: tail fetch returned nothing — refetching full history.", ticker)
         return _rebuild(ticker, period, fetcher, cache_dir, cached)
 
@@ -214,5 +251,6 @@ def cached_history(ticker: str, period, fetcher, cache_dir=None):
         return _rebuild(ticker, period, fetcher, cache_dir, cached)
 
     merged = _merge(cached, fresh)
-    write_cache(ticker, merged, cache_dir)
+    if not merged.equals(cached):
+        write_cache(ticker, merged, cache_dir)
     return _slice(merged, period)

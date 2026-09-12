@@ -348,3 +348,76 @@ def test_returns_none_when_every_fetch_fails_with_no_cache(tmp_path):
     fetcher = FakeFetcher(RuntimeError("offline"), RuntimeError("offline"))
 
     assert cache.cached_history("AAPL", "3y", fetcher, cache_dir=tmp_path) is None
+
+
+def test_intraday_move_on_todays_cached_bar_does_not_trigger_a_rebuild(tmp_path):
+    """A same-day bar's close can still move between two runs made minutes
+    apart during market hours — that is not a split/dividend restatement.
+    Comparing it against the freshly re-fetched value would flag every
+    same-day rerun as 'restated' and force a full 'max' re-download, which is
+    slower than the pre-cache code in exactly the scenario the cache exists
+    for. The newest cached bar must be excluded from the overlap comparison."""
+    cached = recent_bars(n=10)          # last bar is dated today
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    today = cached.index.max()
+    moved_today = cached.tail(1).copy()
+    moved_today["Close"] = moved_today["Close"] * 1.003   # ticked up intraday
+
+    fetcher = FakeFetcher(moved_today)
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    # Only the tail top-up — no 'max' rebuild triggered by the intraday move.
+    assert fetcher.calls == [
+        {"ticker": "AAPL", "period": None,
+         "start": today - pd.Timedelta(days=cache.OVERLAP_DAYS)}
+    ]
+    assert out.loc[today, "Close"] == moved_today["Close"].iloc[0]
+    assert len(cache.read_cache("AAPL", cache_dir=tmp_path)) == 10
+
+
+def test_write_cache_normalizes_a_tz_aware_dst_spanning_index(tmp_path):
+    """overview.fetch_index_data (yf.download) returns tz-aware bars, unlike
+    ingest._raw_history which already strips tz before the cache sees it. If a
+    tz-aware index spans a DST boundary, the serialized CSV carries mixed UTC
+    offsets ('-04:00' before the fall-back, '-05:00' after); pd.to_datetime
+    on read then raises, read_cache treats it as a miss, and the same broken
+    shape gets rewritten on every run — a silent permanent-miss loop that only
+    appears once the cached range crosses a DST change. write_cache must
+    normalize to tz-naive on ingress rather than relying on read-side
+    normalization alone."""
+    idx = pd.date_range("2024-10-30", "2024-11-05", freq="D", tz="America/New_York")
+    df = _frame(idx, 100.0)
+
+    cache.write_cache("AAPL", df, cache_dir=tmp_path)
+    loaded = cache.read_cache("AAPL", cache_dir=tmp_path)
+
+    assert loaded is not None
+    expected = df.copy()
+    expected.index = idx.tz_localize(None)
+    expected.index.name = "Date"
+    pd.testing.assert_frame_equal(loaded, expected, check_freq=False)
+
+
+def test_warm_hit_skips_the_write_when_the_merge_is_a_no_op(tmp_path, monkeypatch):
+    """After hours, a tail fetch that returns exactly what's already cached
+    produces a merge identical to the stored frame — rewriting ~490 KB of CSV
+    for nothing. The write should be skipped when nothing changed."""
+    cached = bars(start="2024-01-01", n=10)
+    cache.write_cache("AAPL", cached, cache_dir=tmp_path)
+    unchanged_tail = cached.tail(2)
+    fetcher = FakeFetcher(unchanged_tail)
+
+    write_calls = []
+    original_write_cache = cache.write_cache
+
+    def spy(*args, **kwargs):
+        write_calls.append(args)
+        return original_write_cache(*args, **kwargs)
+
+    monkeypatch.setattr(cache, "write_cache", spy)
+
+    out = cache.cached_history("AAPL", "max", fetcher, cache_dir=tmp_path)
+
+    assert write_calls == []
+    pd.testing.assert_frame_equal(out, cached, check_freq=False)
