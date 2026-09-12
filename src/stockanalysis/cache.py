@@ -91,3 +91,35 @@ def write_cache(ticker: str, df: pd.DataFrame, cache_dir=None) -> bool:
         log.warning("%s: could not write price cache (%s) — continuing uncached.",
                     ticker, e)
         return False
+
+
+_PERIOD_RE = re.compile(r"^(\d+)\s*(d|wk|mo|y)$")
+
+#: Calendar days per period unit. Deliberately generous (a month is 31 days, a
+#: year 366) — erring long hands a caller a few extra bars, never fewer than it
+#: asked for, which is the safe direction for indicator warm-up windows.
+_DAYS_PER_UNIT = {"d": 1, "wk": 7, "mo": 31, "y": 366}
+
+
+def _period_start(period, today=None):
+    """Approximate earliest date ``period`` covers, or ``None`` for "everything".
+
+    ``None`` is returned for ``"max"``, empty input, and anything unparseable —
+    all of which mean "don't trim". Unrecognized input therefore fails safe.
+    """
+    today = (pd.Timestamp.now().normalize() if today is None
+             else pd.Timestamp(today).normalize())
+    p = (period or "").strip().lower()
+    if p == "ytd":
+        return pd.Timestamp(year=today.year, month=1, day=1)
+    m = _PERIOD_RE.match(p)
+    if not m:
+        return None
+    days = int(m.group(1)) * _DAYS_PER_UNIT[m.group(2)]
+    return today - pd.Timedelta(days=days)
+
+
+def _slice(df: pd.DataFrame, period, today=None) -> pd.DataFrame:
+    """Trim a complete-history frame down to what ``period`` asked for."""
+    start = _period_start(period, today)
+    return df if start is None else df.loc[df.index >= start]

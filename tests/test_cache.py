@@ -100,3 +100,47 @@ def test_write_cache_returns_false_when_directory_is_unwritable(tmp_path):
         assert cache.write_cache("AAPL", bars(), cache_dir=ro / "prices") is False
     finally:
         ro.chmod(0o700)
+
+
+# --- period parsing / slicing --------------------------------------------------
+
+_TODAY = pd.Timestamp("2026-09-11")
+
+
+def test_period_start_parses_years_months_weeks_and_days():
+    # Deliberately generous units: a year counts as 366 days, a month as 31.
+    assert cache._period_start("3y", today=_TODAY) == _TODAY - pd.Timedelta(days=1098)
+    assert cache._period_start("6mo", today=_TODAY) == _TODAY - pd.Timedelta(days=186)
+    assert cache._period_start("2wk", today=_TODAY) == _TODAY - pd.Timedelta(days=14)
+    assert cache._period_start("5d", today=_TODAY) == _TODAY - pd.Timedelta(days=5)
+
+
+def test_period_start_is_none_for_max():
+    assert cache._period_start("max", today=_TODAY) is None
+
+
+def test_period_start_is_none_for_unrecognized_input():
+    # Unknown input must fail SAFE: no cutoff means the caller gets every bar
+    # we have, never fewer than it asked for.
+    assert cache._period_start("banana", today=_TODAY) is None
+    assert cache._period_start(None, today=_TODAY) is None
+
+
+def test_period_start_resolves_ytd_to_january_first():
+    assert cache._period_start("ytd", today=_TODAY) == pd.Timestamp("2026-01-01")
+
+
+def test_slice_trims_to_the_requested_period():
+    df = bars(start="2024-01-01", n=60)
+    today = df.index.max()
+
+    out = cache._slice(df, "5d", today=today)
+
+    assert out.index.min() >= today - pd.Timedelta(days=5)
+    assert out.index.max() == today
+
+
+def test_slice_returns_everything_for_max():
+    df = bars(start="2024-01-01", n=60)
+
+    pd.testing.assert_frame_equal(cache._slice(df, "max", today=df.index.max()), df)
