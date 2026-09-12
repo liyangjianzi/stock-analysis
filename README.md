@@ -55,7 +55,10 @@ automatically. Pass `--no-cache` to bypass it, or delete the folder to start
 clean — it is rebuilt on the next run.
 
 **Note:** `.info` fundamentals are *not* cached, so a warm run still makes one
-`.info` request per ticker.
+`.info` request per ticker. A cold miss pulls a ticker's *complete* history
+(`period="max"`), not just the requested window, so the first run after
+upgrading (or after clearing the cache) is slower than before — every run
+after that is faster.
 
 ## Backtest / signal validation
 

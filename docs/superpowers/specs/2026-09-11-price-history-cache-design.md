@@ -115,8 +115,11 @@ every run: exactly the waste this feature exists to remove. Fetching `max` once
 up front removes both the re-fetch and the metadata needed to avoid it.
 
 **Cost:** the first fetch per ticker is a full-history download instead of `3y`
-— a one-time expense (~5k rows / ~300 KB CSV for a typical equity), after which
-every caller reads from disk.
+— a one-time expense (~5k rows / ~489 KB CSV for a typical equity, measured via
+a real `write_cache` round-trip — roughly 10 MB for a 20-ticker watchlist),
+after which every caller reads from disk. The eviction/size-cap non-goal above
+was judged against this footprint: tens of MB across an entire watchlist is
+cheap enough that a cap or cleanup policy isn't worth the complexity yet.
 
 **Invariant maintenance:** if the `max` fetch fails, the cache falls back to
 fetching the caller's requested `period` and **returns it without writing a
@@ -174,7 +177,7 @@ Consistent with the module's existing "degrade, never crash" rule:
 | That fallback `max` fetch also fails, cache present | **Serve the cached bars** as a last resort, log a warning. This is what makes offline runs produce real (slightly stale) output instead of empty output. |
 | `max` fetch fails on a cold miss | Fall back to a `period` fetch and return it **without writing a cache file** (preserves the complete-history invariant) |
 | Both fetches fail, no cache | Return `None` — exactly today's behaviour |
-| Cache directory not writable | Log a warning once and proceed uncached; a read-only disk degrades performance, never correctness |
+| Cache directory not writable | Log a warning and proceed uncached; a read-only disk degrades performance, never correctness. (The warning is logged on every write attempt — once per ticker per run — not deduplicated globally, so a persistently read-only disk means one warning per ticker per run, not one warning total.) |
 
 ## Public surface
 
@@ -199,7 +202,8 @@ caching with no signature change on their side.
 All offline. New `tests/test_cache.py`, driven by an **injected fake fetcher**
 that records the arguments it was called with:
 
-- Cold miss → fetcher called with `period`, file written, bars returned.
+- Cold miss → fetcher called with `period="max"` (never the caller's requested
+  `period`), file written, bars returned.
 - Warm hit → fetcher called with a `start` (not `period`), and the asserted
   `start` equals `last_cached_date − 5 days`. Asserting the *request* matters
   more than the result: it is the only proof the fetch was actually incremental.

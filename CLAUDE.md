@@ -83,3 +83,10 @@ Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives
   every older bar, so appending a fresh tail onto a stale base would open a
   phantom gap that silently corrupts every EMA/RSI/ATR downstream with no error.
   A mismatch rebuilds the file from scratch. Don't "optimize away" the overlap.
+  The newest cached bar is excluded from that comparison — during market hours
+  it may be an in-progress session bar whose close still moves intraday, which
+  is not a restatement. Known limitations: a delisted/halted ticker whose tail
+  fetch returns empty on every run will trigger a full rebuild every run (no
+  worse than pre-cache behaviour, just no better); a tz-aware fetcher (e.g. a
+  future `overview.fetch_index_data` adopter) is normalized to tz-naive on
+  write, not just on read, so a DST-spanning frame never gets stuck unreadable.
