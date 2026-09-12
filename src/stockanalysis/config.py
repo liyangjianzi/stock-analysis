@@ -28,6 +28,11 @@ DEFAULT_WATCHLIST_CSV = Path(__file__).resolve().parents[2] / "data" / "watchlis
 # thesis CLI / library default to this dir. See stockanalysis.thesis.
 DEFAULT_THESES_DIR = Path(__file__).resolve().parents[2] / "data" / "theses"
 
+# Cached price bars live under data/cache/ — runtime state like data/theses/,
+# not source. One CSV per ticker holding its COMPLETE history; see
+# stockanalysis.cache.
+DEFAULT_PRICE_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "cache" / "prices"
+
 
 @functools.lru_cache(maxsize=None)
 def _read_watchlist_csv(path: Path) -> tuple[tuple[str, str], ...]:

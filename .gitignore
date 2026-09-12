@@ -21,6 +21,9 @@ logs/
 # Thesis-tracking runtime state (JSON journal + postmortems; not source)
 data/theses/
 
+# Cached price history (rebuildable from Yahoo Finance; not source)
+data/cache/
+
 # Notebook checkpoints
 .ipynb_checkpoints/
 
