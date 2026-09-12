@@ -12,29 +12,51 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from . import config
+from . import cache, config
 
 log = logging.getLogger(__name__)
 
 
-def fetch_stock_data(ticker: str, period: str = config.HISTORY_PERIOD):
+def _raw_history(ticker: str, period=None, start=None):
+    """Raw yfinance price fetch — the fetcher :mod:`cache` wraps.
+
+    Exactly one of ``period``/``start`` is used. Returns ``None`` on empty
+    data so the cache layer can treat it as a miss.
+    """
+    kwargs = {"start": start} if start is not None else {"period": period}
+    # auto_adjust=True gives split/dividend-adjusted OHLC (cleaner for TA) —
+    # and is why cache._is_restated has to watch for retroactive restatements.
+    hist = yf.Ticker(ticker).history(interval="1d", auto_adjust=True, **kwargs)
+    if hist is None or hist.empty:
+        return None
+    # Normalise index to tz-naive dates for consistent plotting/joins
+    hist.index = pd.to_datetime(hist.index).tz_localize(None)
+    return hist
+
+
+def fetch_stock_data(ticker: str, period: str = config.HISTORY_PERIOD,
+                     use_cache: bool = True, cache_dir=None):
     """Fetch daily OHLCV history + the fundamentals ``.info`` dict for one ticker.
 
     Returns ``(history_df, info_dict)``. On any failure or empty data, returns
     ``(None, None)`` and logs a warning so the caller can skip gracefully.
+
+    With ``use_cache`` (the default) price bars come from the local cache in
+    ``data/cache/prices/``, which fetches only the bars it is missing. Pass
+    ``use_cache=False`` to force a full network fetch. ``.info`` is never
+    cached, so it is still fetched on every call.
     """
     try:
-        tk = yf.Ticker(ticker)
-        # auto_adjust=True gives split/dividend-adjusted OHLC (cleaner for TA)
-        hist = tk.history(period=period, interval="1d", auto_adjust=True)
+        if use_cache:
+            hist = cache.cached_history(ticker, period, _raw_history, cache_dir=cache_dir)
+        else:
+            hist = _raw_history(ticker, period=period)
         if hist is None or hist.empty:
             log.warning("%s: no price history returned — skipping.", ticker)
             return None, None
-        # Normalise index to tz-naive dates for consistent plotting/joins
-        hist.index = pd.to_datetime(hist.index).tz_localize(None)
         # .info can be flaky; tolerate failure and fall back to empty dict
         try:
-            info = tk.info or {}
+            info = yf.Ticker(ticker).info or {}
         except Exception as e:
             log.warning("%s: .info unavailable (%s). Proceeding with prices only.", ticker, e)
             info = {}
@@ -141,21 +163,26 @@ def fetch_profile(ticker: str) -> dict:
         return dict(_EMPTY)
 
 
-def load_watchlist(watchlist: dict | None = None, period: str = config.HISTORY_PERIOD):
+def load_watchlist(watchlist: dict | None = None, period: str = config.HISTORY_PERIOD,
+                   use_cache: bool = True, cache_dir=None):
     """Fetch prices + fundamentals for every ticker in ``watchlist``.
 
     Returns ``(prices, fundamentals_df)`` where:
       - ``prices`` : dict ticker -> OHLCV DataFrame (only successful fetches)
       - ``fundamentals_df`` : DataFrame of normalised metrics, indexed by ticker
+
+    ``use_cache``/``cache_dir`` are forwarded to :func:`fetch_stock_data`.
     """
     watchlist = config.load_watchlist_csv() if watchlist is None else watchlist
 
     prices: dict[str, pd.DataFrame] = {}
     records: list[dict] = []
 
-    log.info("Fetching data for %d tickers (hits Yahoo Finance once per ticker)...", len(watchlist))
+    log.info("Fetching data for %d tickers (cache %s)...",
+             len(watchlist), "on" if use_cache else "off")
     for tk in watchlist:
-        hist, info = fetch_stock_data(tk, period=period)
+        hist, info = fetch_stock_data(tk, period=period,
+                                      use_cache=use_cache, cache_dir=cache_dir)
         if hist is None:
             continue  # already logged inside fetch_stock_data
         prices[tk] = hist
