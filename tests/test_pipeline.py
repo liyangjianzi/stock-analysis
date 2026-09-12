@@ -49,8 +49,10 @@ def _stub_run(monkeypatch, tickers, screens=True):
         index=list(tickers),
     )
     screened.index.name = "Ticker"
-    monkeypatch.setattr(pipeline, "load_watchlist",
-                        lambda wl, period=None: ({t: pd.DataFrame() for t in tickers}, screened))
+    monkeypatch.setattr(
+        pipeline, "load_watchlist",
+        lambda wl, period=None, use_cache=True, cache_dir=None:
+            ({t: pd.DataFrame() for t in tickers}, screened))
     monkeypatch.setattr(pipeline, "screen_fundamentals",
                         lambda df: df if screens else pd.DataFrame())
     monkeypatch.setattr(pipeline, "compute_indicators",
@@ -146,3 +148,20 @@ def test_run_skips_the_report_unless_requested(monkeypatch, tmp_path):
     assert results.report_path is None
     build.assert_not_called()
     save.assert_not_called()
+
+
+def test_run_forwards_cache_flags_to_the_ingest_layer(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_load_watchlist(wl, period=None, use_cache=True, cache_dir=None):
+        seen.update(use_cache=use_cache, cache_dir=cache_dir)
+        return {}, pd.DataFrame()
+
+    _stub_run(monkeypatch, ["AAPL"])
+    monkeypatch.setattr(pipeline, "load_watchlist", fake_load_watchlist)
+
+    pipeline.run(watchlist={"AAPL": "Technology"}, export_target=None,
+                 save_report=False, use_cache=False, cache_dir=tmp_path,
+                 out_dir=str(tmp_path))
+
+    assert seen == {"use_cache": False, "cache_dir": tmp_path}

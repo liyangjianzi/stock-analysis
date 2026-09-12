@@ -33,6 +33,9 @@ def _add_run_parser(sub) -> None:
                         "profile sections to the N strongest names (the screener/"
                         "signal-matrix tables always show every screened ticker) "
                         "(default: %(default)s).")
+    p.add_argument("--no-cache", action="store_true",
+                   help="Bypass the local price cache (data/cache/prices/) and "
+                        "refetch full history from Yahoo Finance.")
 
 
 def _add_backtest_parser(sub) -> None:
@@ -89,6 +92,7 @@ def main(argv=None) -> int:
                 export_opts=export_opts,
                 save_report=not args.no_report,
                 top_n=args.top,
+                use_cache=not args.no_cache,
                 out_dir=args.out,
             )
         except Exception as e:

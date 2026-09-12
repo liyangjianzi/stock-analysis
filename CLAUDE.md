@@ -45,6 +45,7 @@ Module map (one responsibility each; core modules never import IPython/`display`
 | Module | Responsibility |
 |---|---|
 | `config.py` | `load_watchlist_csv()` reads the ticker→sector watchlist from `data/watchlist.csv` (TSX uses `.TO`; default path `DEFAULT_WATCHLIST_CSV`); `HISTORY_PERIOD`, Stage-0 universe/indices |
+| `cache.py` | Local price-bar cache — `cached_history(ticker, period, fetcher)` serves one complete-history CSV per ticker from `data/cache/prices/` (`DEFAULT_PRICE_CACHE_DIR`), fetching only the missing tail. Never imports yfinance (takes a fetcher callable) |
 | `ingest.py` | `fetch_stock_data`, `fetch_fundamentals`, `fetch_profile`, `load_watchlist()` driver |
 | `screener.py` | `screen_fundamentals` (0–6) |
 | `indicators.py` | `add_indicators` + `fit_regression_channel` + `find_support_resistance` |
@@ -72,3 +73,13 @@ Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives
 - **Indicator column names are a contract.** `add_indicators` writes `EMA20/EMA50/EMA200`, `ENV_UP/ENV_DOWN` (a **data-driven asymmetric** band around EMA20: lower/upper edges at the 2.5th/97.5th percentile of `Close/EMA20−1` so ~`envelope_coverage`=95% of closes fall inside; symmetric ±`envelope_fallback_pct` on <20-bar series), `MACD/MACD_SIG/MACD_HIST`, `RSI` (14) + `RSI3` (3-period, used by `dip_deep`), `ATR14` (average true range, used by `pullback_zone`), and the volume columns `VOL_SMA5`/`VOL_SMA20` (5/20-day avg volume) + `OBV` (On-Balance Volume). `charts.build_technical_dashboard` and `compute_technical_posture` read these exact names. Trend channels and support/resistance are **not** stored columns — they are window-dependent overlays computed on demand by `fit_regression_channel(close)` (regression mid ±2σ, returns `slope`) and `find_support_resistance(df)` (swing-pivot clustering → horizontal levels), reused by both the dashboard and (for `nearest_level` context) the posture engine.
 - **Exporters are pluggable.** Add an output destination by subclassing `outputs.base.Exporter` and registering it in `outputs.get_exporter`. Keep `gspread`/`google-auth` lazily imported (optional `gsheets` extra) so Excel works without them.
 - **Thesis lifecycle is forward-only and ledger-based.** `thesis.store` mutates status only through its lifecycle functions (`transition`/`open_position`/`trim`/`close`/`terminate`/`mark_reviewed`); each enforces `model.STATUS_ORDER` (IDEA→ENTRY_READY→ACTIVE→PARTIALLY_CLOSED→CLOSED, plus INVALIDATED), appends to `status_history`, re-validates, and writes atomically. Realized P&L is **summed from immutable ledger entries** (each trim/close carries `realized_pnl`) — never recompute by mutating the entry price. All exits go through one `store._record_sale` helper (compute realized → decrement `shares_remaining` → append the ledger row), so `trim` / `close` / a priced `terminate` always write an identically-shaped row — add new exit paths via that helper, don't hand-roll another. Registration is **idempotent on `origin.fingerprint`**, so re-ingesting the same `signal_matrix` won't duplicate. Storage is **JSON-per-thesis + `_index.json`** (stdlib only — don't add `pyyaml`/`jsonschema`; validation is plain Python in `model.validate_thesis`). MAE/MFE uses `ingest.fetch_stock_data` via `review.YFinancePriceAdapter` (injectable — tests pass a fake; **no FMP key**, unlike the upstream skill).
+- **The price cache stores COMPLETE history, and the overlap check is not
+  optional.** A cold miss fetches `period="max"` regardless of what the caller
+  asked for, so one CSV serves `3y`/`5y`/`max` callers as slices and coverage
+  needs no metadata — which is why a partial-period fetch is **never written to
+  disk** (`cache.cached_history` returns it unstored). On a warm run the cache
+  re-requests the last `OVERLAP_DAYS` (5) of cached bars alongside the new tail
+  and compares closes: `auto_adjust=True` means a split retroactively restates
+  every older bar, so appending a fresh tail onto a stale base would open a
+  phantom gap that silently corrupts every EMA/RSI/ATR downstream with no error.
+  A mismatch rebuilds the file from scratch. Don't "optimize away" the overlap.

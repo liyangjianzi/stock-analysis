@@ -65,6 +65,8 @@ def run(watchlist: dict | None = None,
         export_opts: dict | None = None,
         save_report: bool = True,
         top_n: int | None = 5,
+        use_cache: bool = True,
+        cache_dir=None,
         out_dir: str = "output") -> Results:
     """Run the full pipeline and return a :class:`Results`.
 
@@ -87,6 +89,11 @@ def run(watchlist: dict | None = None,
                     strongest ``n`` names of the ranked signal matrix
                     (default 5; the screener/signal-matrix tables always show
                     every screened ticker regardless of ``top_n``).
+    use_cache     : serve price bars from the local cache in
+                    data/cache/prices/, fetching only the missing tail
+                    (default True). False forces a full network fetch.
+    cache_dir     : override the cache location (defaults to
+                    config.DEFAULT_PRICE_CACHE_DIR).
     out_dir       : base output directory; this run's artifacts land in a fresh
                     timestamped subdir ``out_dir/<YYYY-MM-DD_HHMMSS>/``.
     """
@@ -94,7 +101,8 @@ def run(watchlist: dict | None = None,
     export_opts = dict(export_opts or {})
     run_dir = run_output_dir(out_dir)
 
-    prices, fundamentals_df = load_watchlist(watchlist, period=period)
+    prices, fundamentals_df = load_watchlist(watchlist, period=period,
+                                             use_cache=use_cache, cache_dir=cache_dir)
     screened_df = screen_fundamentals(fundamentals_df)
     tech = compute_indicators(prices)
     signal_matrix = generate_signals(screened_df, tech)

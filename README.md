@@ -48,6 +48,15 @@ Useful flags: `--period 5y`, `--no-report` (skip the combined report),
 `--top 5` (dashboards/profiles for the 5 strongest names only — this is the
 default), `-v` (verbose), `--target none` (compute only, no export).
 
+Price history is cached locally in `data/cache/prices/` (one CSV per ticker,
+complete history), so subsequent runs fetch only the bars they're missing.
+Splits and dividends are detected and the affected ticker is rebuilt
+automatically. Pass `--no-cache` to bypass it, or delete the folder to start
+clean — it is rebuilt on the next run.
+
+**Note:** `.info` fundamentals are *not* cached, so a warm run still makes one
+`.info` request per ticker.
+
 ## Backtest / signal validation
 
 Validate the signals against history (does a Bullish/Buy signal precede

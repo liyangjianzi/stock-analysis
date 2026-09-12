@@ -42,3 +42,15 @@ def test_cli_run_reports_the_written_report_path(capsys):
 
     out = capsys.readouterr().out
     assert "Report: out/report.html" in out
+
+
+def test_cli_run_defaults_to_caching_enabled():
+    _, kwargs = _run_cli(["run", "--target", "none"])
+
+    assert kwargs["use_cache"] is True
+
+
+def test_cli_run_no_cache_disables_the_price_cache():
+    _, kwargs = _run_cli(["run", "--target", "none", "--no-cache"])
+
+    assert kwargs["use_cache"] is False
