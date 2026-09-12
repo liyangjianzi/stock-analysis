@@ -131,7 +131,13 @@ fetch, so unknown inputs fail safe.
    tolerance (`1e-4`), Yahoo has retroactively restated history — a split or
    dividend — so **discard the file, do a full `period` re-fetch, overwrite**,
    and log at INFO that the cache was rebuilt.
-5. **Otherwise merge:** concatenate, drop duplicate dates keeping the
+5. **Top-up fetch failed or returned empty** → **retry as a full `period`
+   fetch** and overwrite the cache. A failed or truncated tail response is
+   never merged into the store; the cheap incremental path is an optimization,
+   and the moment it misbehaves the cache falls back to fetching everything the
+   caller needs. Only if that full fetch *also* fails does the cached frame get
+   served (see Error handling).
+6. **Otherwise merge:** concatenate, drop duplicate dates keeping the
    **freshly fetched** row, sort by date, write back atomically, and return the
    slice the caller asked for.
 
@@ -154,7 +160,8 @@ Consistent with the module's existing "degrade, never crash" rule:
 |---|---|
 | Cache file missing | Treat as a miss → full fetch |
 | Cache file corrupt / unparseable | Log a warning, treat as a miss, overwrite on the next successful fetch. Never raises. |
-| Top-up fetch fails or returns empty, cache present | **Serve the cached bars**, log a warning. This is what makes offline runs produce real (slightly stale) output instead of empty output. |
+| Top-up fetch fails or returns empty, cache present | **Retry as a full `period` fetch** and overwrite the cache. A garbled or partial tail is never merged in. |
+| That fallback full fetch also fails, cache present | **Serve the cached bars** as a last resort, log a warning. This is what makes offline runs produce real (slightly stale) output instead of empty output. |
 | Full fetch fails, no cache | Return `None` — exactly today's behaviour |
 | Cache directory not writable | Log a warning once and proceed uncached; a read-only disk degrades performance, never correctness |
 
@@ -190,7 +197,10 @@ that records the arguments it was called with:
 - Split restatement → a fetcher returning restated overlap closes triggers
   exactly one full re-fetch and the stored file contains only restated bars.
 - Corrupt CSV → treated as a miss, no exception.
-- Failed top-up with a warm cache → cached bars returned, no exception.
+- Failed top-up with a warm cache → exactly one full `period` re-fetch is
+  attempted, and its result replaces the cache.
+- Failed top-up *and* failed full fetch with a warm cache → cached bars
+  returned, no exception.
 - Period widening → a `3y` cache followed by a `max` request triggers a full
   fetch and widens the stored file; a subsequent `3y` request is served from it.
 - Filename sanitization round-trip for a symbol containing `^` and `.`.
