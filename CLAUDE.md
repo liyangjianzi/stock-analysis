@@ -30,9 +30,16 @@ results = run(top_n=10)                            # widen the dashboards/profil
 ```bash
 stock-analysis universe --out data/universe_sp500.csv   # 503 tickers, committed
 stock-analysis cache --universe data/universe_sp500.csv --period 10y   # ~55s, 1.23M bars
+stock-analysis cache --universe data/universe_sp500.csv   # incremental top-up (~15s)
 stock-analysis cache --status                            # coverage report
 stock-analysis backtest --exits plan --universe data/universe_sp500.csv  # no network
 ```
+`cache` is **incremental by default**: only tickers with no cached bars fetch full
+`--period` history; the rest get a short `--refresh-period` (default `1mo`) window,
+which the `(ticker, date)` upsert folds in without duplicating. A nightly refresh
+is ~10k bars, not 1.23M. `--full` forces a complete refetch after a data
+correction. `scripts/run_daily.sh` runs this after the pipeline, non-fatally.
+
 The cache (`data/cache/prices.db`) is gitignored — a rebuildable artifact. Its bars
 **must** come from the same `auto_adjust=True`, tz-naive path as `fetch_stock_data`
 (`ingest.fetch_bulk_prices` pins this); a different adjustment convention would

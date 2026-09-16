@@ -122,3 +122,49 @@ def test_cached_frames_feed_add_indicators_unchanged(conn):
     enriched = add_indicators(cache.load_bars(conn, "AAA"))
     assert {"EMA50", "ATR14", "RSI3"}.issubset(enriched.columns)
     assert np.isfinite(enriched["ATR14"].iloc[-1])
+
+
+# --- incremental refresh (the CLI path) ----------------------------------------
+
+def test_cache_cli_only_fetches_full_history_for_new_tickers(tmp_path, monkeypatch):
+    """A nightly refresh must top up, not re-download the universe."""
+    from stockanalysis import cli
+
+    db = tmp_path / "prices.db"
+    uni = tmp_path / "u.csv"
+    uni.write_text("ticker,company,exchange,sector\nAAA,A,X,Tech\nBBB,B,X,Tech\n")
+
+    # AAA is already cached; BBB is new.
+    with cache.connect(db) as c:
+        cache.upsert_bars(c, "AAA", _frame())
+
+    calls = []
+    def fake_bulk(tickers, period="10y", chunk=50):
+        calls.append((sorted(tickers), period))
+        return {t: _frame() for t in tickers}
+
+    monkeypatch.setattr("stockanalysis.ingest.fetch_bulk_prices", fake_bulk)
+    rc = cli.main(["cache", "--universe", str(uni), "--db", str(db),
+                   "--period", "10y", "--refresh-period", "1mo"])
+
+    assert rc == 0
+    assert (["BBB"], "10y") in calls          # new ticker: full history
+    assert (["AAA"], "1mo") in calls          # cached ticker: short top-up
+
+
+def test_cache_cli_full_flag_refetches_everything(tmp_path, monkeypatch):
+    from stockanalysis import cli
+    db = tmp_path / "prices.db"
+    uni = tmp_path / "u.csv"
+    uni.write_text("ticker,company,exchange,sector\nAAA,A,X,Tech\n")
+    with cache.connect(db) as c:
+        cache.upsert_bars(c, "AAA", _frame())
+
+    calls = []
+    def fake_bulk(tickers, period="10y", chunk=50):
+        calls.append((sorted(tickers), period))
+        return {}
+
+    monkeypatch.setattr("stockanalysis.ingest.fetch_bulk_prices", fake_bulk)
+    cli.main(["cache", "--universe", str(uni), "--db", str(db), "--full"])
+    assert calls == [(["AAA"], "10y")]

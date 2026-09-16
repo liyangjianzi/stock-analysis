@@ -94,7 +94,15 @@ def _add_cache_parser(sub) -> None:
     p.add_argument("--universe", default="data/universe_sp500.csv",
                    help="Ticker CSV to cache (default: %(default)s).")
     p.add_argument("--period", default="10y",
-                   help="History to fetch per ticker (default: %(default)s).")
+                   help="History to fetch for tickers not yet cached "
+                        "(default: %(default)s).")
+    p.add_argument("--refresh-period", default="1mo", metavar="PERIOD",
+                   help="Shorter window refetched for already-cached tickers; the "
+                        "upsert is idempotent on (ticker, date), so the overlap "
+                        "just restates bars (default: %(default)s).")
+    p.add_argument("--full", action="store_true",
+                   help="Refetch --period for every ticker, ignoring what is "
+                        "already cached (use after a data correction).")
     p.add_argument("--db", default=None,
                    help="Cache database path (default: data/cache/prices.db).")
     p.add_argument("--chunk", type=int, default=50,
@@ -195,9 +203,28 @@ def main(argv=None) -> int:
             print(f"{e}\nRun: stock-analysis universe --out {args.universe}",
                   file=sys.stderr)
             return 1
-        bars = ingest.fetch_bulk_prices(list(wl), period=args.period, chunk=args.chunk)
+        # Incremental by default: only names with no cached bars need full
+        # history. Everything else gets a short top-up window, which the
+        # (ticker, date) upsert folds in without duplicating. A nightly refresh
+        # is therefore seconds, not a re-download of the whole universe.
+        known = set(price_cache.cached_tickers(conn))
+        wanted = list(wl)
+        fresh = [t for t in wanted if t not in known] if not args.full else wanted
+        topup = [t for t in wanted if t in known] if not args.full else []
+
+        bars: dict = {}
+        if fresh:
+            print(f"Fetching {len(fresh)} new ticker(s) over {args.period}...")
+            bars.update(ingest.fetch_bulk_prices(fresh, period=args.period,
+                                                 chunk=args.chunk))
+        if topup:
+            print(f"Topping up {len(topup)} cached ticker(s) over "
+                  f"{args.refresh_period}...")
+            bars.update(ingest.fetch_bulk_prices(topup, period=args.refresh_period,
+                                                 chunk=args.chunk))
+
         written = sum(price_cache.upsert_bars(conn, tk, df) for tk, df in bars.items())
-        print(f"Cached {len(bars)}/{len(wl)} tickers, {written:,} bars -> "
+        print(f"Cached {len(bars)}/{len(wanted)} tickers, {written:,} bars -> "
               f"{args.db or config.DEFAULT_CACHE_DB}")
         return 0
 
