@@ -27,7 +27,8 @@ HORIZONS_BARS: dict[str, int] = {"1m": 21, "3m": 63, "6m": 126}
 
 
 def posture_timeline(hist, *, mode="technical", fundamental_score=None,
-                     components=None, min_bars: int = 60) -> pd.DataFrame:
+                     components=None, min_bars: int = 60,
+                     fast: bool = False) -> pd.DataFrame:
     """Replay posture bar-by-bar, point-in-time.
 
     Returns a DataFrame indexed by date (from ``min_bars`` onward) with columns
@@ -36,6 +37,18 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
     is :func:`~stockanalysis.signals.decide_action`'s Buy/Hold/Watch, combining
     ``fundamental_score`` with the technical entry gate; in ``gate`` mode it is
     ``Entry``/``Flat`` from the technical gate **alone**.
+
+    ``fast=True`` computes ``add_indicators`` **once** on the full series instead
+    of re-running it on each trailing slice. That is exact, not an approximation,
+    for every column the scoring predicates read (``Close``, ``EMA50``, ``RSI``,
+    ``RSI3``, ``ATR14``, ``MACD*``, ``VOL_SMA5/20``, ``OBV``, ``High``, ``Open``):
+    each is *causal*, so its value at bar i depends only on bars <= i and a single
+    pass reproduces the slice-by-slice result bit for bit. The exception is the
+    envelope (``ENV_UP``/``ENV_DOWN``), whose percentiles are fitted over the whole
+    window handed in — no scoring predicate reads it, but ``detail['nearest_level']``
+    and any future non-causal component would be wrong, so the flag is opt-in and
+    pinned by an equivalence test. Turns an O(N^2) replay into O(N): a 500-name,
+    10-year universe drops from ~90 minutes to under a minute.
 
     The ``gate`` column is recorded in **every** mode, so a caller that wants
     plan-based exits can reuse one replay rather than paying the O(N^2) walk
@@ -52,10 +65,16 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
     comps = TECHNICAL_COMPONENTS if components is None else components
     f = 0 if fundamental_score is None else int(fundamental_score)
 
+    # fast: one causal pass, then slice the *enriched* frame (see the docstring).
+    full = add_indicators(hist) if fast else None
+
     out: dict = {}
     for i in range(min_bars, len(hist)):
-        enriched = add_indicators(hist.iloc[: i + 1])           # trailing-only
-        posture, tscore, detail = compute_technical_posture(enriched, components=comps)
+        enriched = full.iloc[: i + 1] if fast else add_indicators(hist.iloc[: i + 1])
+        # with_levels=False: the S/R context is unscored and unread here, and it
+        # dominates per-bar cost (~1.1ms vs ~0.1ms for the predicates).
+        posture, tscore, detail = compute_technical_posture(
+            enriched, components=comps, with_levels=False)
         gate = all(detail.get(c.name) for c in _components(comps) if c.gating)
         if mode == "composite":
             # Share the live decision rule rather than re-implementing it here —
@@ -377,7 +396,8 @@ class BacktestResults:
 def build_results_from_prices(prices, *, mode="technical", fundamental_scores=None,
                               horizons=("1m", "3m", "6m"), max_hold="3m",
                               max_positions=10, cost_bps=10.0,
-                              slippage_mult=1.0, exits="horizon") -> BacktestResults:
+                              slippage_mult=1.0, exits="horizon",
+                              fast=True) -> BacktestResults:
     """Assemble a BacktestResults from an in-memory price dict (no network).
 
     This is the offline-testable core of :func:`run_backtest`.
@@ -395,7 +415,8 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
 
     timeline_map, ev_returns, base_returns, per_ticker = {}, [], [], {}
     for tk, hist in prices.items():
-        tl = posture_timeline(hist, mode=mode, fundamental_score=fundamental_scores.get(tk))
+        tl = posture_timeline(hist, mode=mode, fast=fast,
+                              fundamental_score=fundamental_scores.get(tk))
         if tl.empty:
             continue
         timeline_map[tk] = tl
@@ -454,13 +475,21 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
                  horizons=("1m", "3m", "6m"), max_hold="3m", max_positions=10,
                  cost_bps=10.0, slippage_mult=1.0, benchmark="SPY",
                  out_dir="output/backtest", export_excel=True,
-                 save_report=True, exits="horizon") -> BacktestResults:
-    """Network-driven entry point: fetch history, build results, write outputs."""
+                 save_report=True, exits="horizon", prices=None) -> BacktestResults:
+    """Network-driven entry point: fetch history, build results, write outputs.
+
+    ``prices`` short-circuits the fetch with an already-loaded ``{ticker: frame}``
+    (e.g. :func:`stockanalysis.cache.load_universe`), which is how broad-universe
+    research runs fully offline.
+    """
     from .ingest import load_watchlist
     from .screener import screen_fundamentals
 
-    watchlist = config.load_watchlist_csv() if watchlist is None else watchlist
-    prices, fundamentals_df = load_watchlist(watchlist, period=period)
+    if prices is None:
+        watchlist = config.load_watchlist_csv() if watchlist is None else watchlist
+        prices, fundamentals_df = load_watchlist(watchlist, period=period)
+    else:
+        fundamentals_df = pd.DataFrame()      # cache holds bars only, by design
 
     f_scores = {}
     if mode == "composite":

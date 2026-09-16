@@ -185,7 +185,8 @@ def _posture(score: int, max_score: int, bull_frac: float = DEFAULT_BULL_FRAC,
 def compute_technical_posture(df: pd.DataFrame,
                               components: list[TechnicalComponent] | None = None,
                               bull_frac: float = DEFAULT_BULL_FRAC,
-                              bear_frac: float = DEFAULT_BEAR_FRAC):
+                              bear_frac: float = DEFAULT_BEAR_FRAC,
+                              with_levels: bool = True):
     """Assess technical posture from an indicator-enriched df.
 
     Runs each predicate in ``components`` (default :data:`TECHNICAL_COMPONENTS`),
@@ -194,6 +195,12 @@ def compute_technical_posture(df: pd.DataFrame,
     name to its bool plus an unscored ``nearest_level`` support/resistance context.
     Posture scales with the component count (see :func:`_posture`). Robust to
     NaN/short data; a predicate that raises is treated as False.
+
+    ``with_levels=False`` skips the support/resistance fit that populates
+    ``nearest_level``. That fit is pure *context* — no component is scored from
+    it — but it dominates the cost of this function, so a caller replaying
+    hundreds of thousands of bars (the backtest) turns it off. ``nearest_level``
+    is then left as ``None``, which is also what it is on degenerate input.
     """
     components = _components(components)
     detail = {c.name: False for c in components}
@@ -208,10 +215,11 @@ def compute_technical_posture(df: pd.DataFrame,
             detail[c.name] = False
 
     # Context (not scored): nearest support/resistance level to the last close.
-    close = df.iloc[-1].get("Close", np.nan)
-    sr = find_support_resistance(df)
-    if sr and np.isfinite(close):
-        detail["nearest_level"] = min(sr, key=lambda L: abs(L["level"] - close))
+    if with_levels:
+        close = df.iloc[-1].get("Close", np.nan)
+        sr = find_support_resistance(df)
+        if sr and np.isfinite(close):
+            detail["nearest_level"] = min(sr, key=lambda L: abs(L["level"] - close))
 
     score = sum(detail[c.name] for c in components)
     posture = _posture(score, len(components), bull_frac, bear_frac)

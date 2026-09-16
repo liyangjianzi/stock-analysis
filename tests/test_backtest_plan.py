@@ -233,3 +233,32 @@ def test_horizon_exits_stay_the_default_and_record_no_trades(prelude):
     r = build_results_from_prices({"T": prelude})
     assert r.config["exits"] == "horizon"
     assert r.trades == [] and r.trade_stats == {}
+
+
+# --- the fast replay path ------------------------------------------------------
+
+def test_fast_replay_is_identical_to_the_slice_by_slice_replay():
+    """The whole justification for `fast=True`: every column the predicates read
+    is causal, so one pass must reproduce the per-slice result exactly. If a
+    non-causal component is ever added to the registry, this test fails first."""
+    from conftest import pullback_ohlcv
+    hist = pullback_ohlcv(n=300)
+
+    slow = posture_timeline(hist, min_bars=60)
+    fast = posture_timeline(hist, min_bars=60, fast=True)
+
+    pd.testing.assert_frame_equal(slow, fast)
+
+
+def test_fast_replay_matches_in_gate_mode_too(uptrend_ohlcv):
+    slow = posture_timeline(uptrend_ohlcv, mode="gate", min_bars=60)
+    fast = posture_timeline(uptrend_ohlcv, mode="gate", min_bars=60, fast=True)
+    pd.testing.assert_frame_equal(slow, fast)
+
+
+def test_fast_replay_is_much_cheaper(prelude):
+    import time
+    hist = _append(prelude, [(100, 101, 99, 100)] * 200)
+    t0 = time.perf_counter(); posture_timeline(hist, min_bars=60); slow = time.perf_counter() - t0
+    t1 = time.perf_counter(); posture_timeline(hist, min_bars=60, fast=True); quick = time.perf_counter() - t1
+    assert quick < slow / 2, f"fast={quick:.3f}s vs slow={slow:.3f}s"

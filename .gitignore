@@ -40,3 +40,6 @@ service-account*.json
 
 # Local job overrides (may contain a real account size)
 scripts/run_daily.env
+
+# Rebuildable research price cache
+data/cache/

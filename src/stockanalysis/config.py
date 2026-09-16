@@ -55,6 +55,11 @@ def load_watchlist_csv(path=None) -> dict[str, str]:
         raise FileNotFoundError(f"Watchlist CSV not found: {p}")
     return dict(_read_watchlist_csv(p.resolve()))
 
+# Broad-universe research cache (SQLite, stdlib). Bars only — no .info, which is
+# today's data and therefore useless for history. Gitignored: it is a rebuildable
+# artifact, not source. See stockanalysis.cache.
+DEFAULT_CACHE_DB = Path(__file__).resolve().parents[2] / "data" / "cache" / "prices.db"
+
 # 3 years of daily data is enough for a 200-day EMA plus context.
 HISTORY_PERIOD = "3y"
 

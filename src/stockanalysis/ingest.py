@@ -169,3 +169,94 @@ def load_watchlist(watchlist: dict | None = None, period: str = config.HISTORY_P
 
     log.info("Ingestion complete: %d/%d tickers with price history.", len(prices), len(watchlist))
     return prices, fundamentals_df
+
+
+# -----------------------------------------------------------------------------
+# Broad-universe research fetching. Bars only, in bulk — deliberately separate
+# from load_watchlist(), which also pulls .info per ticker (78% of a pipeline
+# run's wall clock, and always *today's* values, so useless for history).
+# -----------------------------------------------------------------------------
+
+#: Wikipedia's S&P 500 constituent table. Current members only — a backtest over
+#: this list still carries survivorship bias, just far less sector concentration
+#: than a hand-picked watchlist. Documented rather than hidden.
+SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+
+def fetch_sp500_universe() -> list[dict]:
+    """Scrape current S&P 500 constituents as ``[{ticker, company, exchange, sector}]``.
+
+    Tickers are normalised to Yahoo's convention (``BRK.B`` -> ``BRK-B``). Returns
+    ``[]`` on any failure, logged — callers fall back to an existing CSV.
+    """
+    try:
+        # Fetch via requests with an explicit UA: Wikipedia 403s pandas'/urllib's
+        # default agent, so pd.read_html(url) cannot be used directly here.
+        import io
+        import requests
+        resp = requests.get(SP500_URL, timeout=30, headers={
+            "User-Agent": "stockanalysis/0.1 (research; contact via repo)"})
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text))
+    except Exception as e:
+        log.error("S&P 500 universe fetch failed (%s).", e)
+        return []
+    for t in tables:
+        cols = {str(c).strip() for c in t.columns}
+        if {"Symbol", "Security"} <= cols:
+            sector = "GICS Sector" if "GICS Sector" in cols else "GICS  Sector"
+            return [{
+                "ticker": str(r["Symbol"]).strip().replace(".", "-"),
+                "company": str(r["Security"]).strip(),
+                "exchange": "SP500",
+                "sector": str(r.get(sector, "Unknown")).strip(),
+            } for _, r in t.iterrows() if str(r["Symbol"]).strip()]
+    log.error("S&P 500 page had no recognisable constituent table.")
+    return []
+
+
+def _normalise_bars(df):
+    """Coerce a yfinance frame to the OHLCV contract with a tz-naive index."""
+    if df is None or df.empty or "Close" not in df:
+        return None
+    out = df[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in df]].copy()
+    out.index = pd.to_datetime(out.index)
+    if getattr(out.index, "tz", None) is not None:
+        out.index = out.index.tz_localize(None)
+    return out.dropna(how="all")
+
+
+def fetch_bulk_prices(tickers, period: str = "10y", chunk: int = 50) -> dict:
+    """Download daily bars for many tickers at once: ``{ticker: OHLCV frame}``.
+
+    Uses ``auto_adjust=True`` and a tz-naive index to match
+    :func:`fetch_stock_data` exactly — a cache built on a different adjustment
+    convention would silently feed the backtest prices the live pipeline never
+    sees. A chunk that fails is logged and skipped, so one bad ticker cannot
+    abort a 500-name refresh.
+    """
+    tickers = [t for t in dict.fromkeys(tickers) if t]
+    out: dict = {}
+    for i in range(0, len(tickers), chunk):
+        batch = tickers[i:i + chunk]
+        try:
+            raw = yf.download(tickers=batch, period=period, interval="1d",
+                              auto_adjust=True, group_by="ticker", threads=True,
+                              progress=False)
+        except Exception as e:
+            log.warning("Bulk fetch failed for %d tickers (%s) — skipping chunk.",
+                        len(batch), e)
+            continue
+        if raw is None or raw.empty:
+            log.warning("Bulk fetch returned nothing for %d tickers.", len(batch))
+            continue
+        for tk in batch:
+            try:
+                df = raw[tk] if isinstance(raw.columns, pd.MultiIndex) else raw
+            except KeyError:
+                continue
+            bars = _normalise_bars(df)
+            if bars is not None and not bars.empty:
+                out[tk] = bars
+        log.info("Bulk fetch: %d/%d tickers cached so far.", len(out), len(tickers))
+    return out

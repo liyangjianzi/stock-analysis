@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from . import config, pipeline, signals
 
@@ -56,6 +57,9 @@ def _add_backtest_parser(sub) -> None:
     p.add_argument("--scope", choices=["technical", "composite"], default="technical",
                    help="technical = price-only (no lookahead); composite = full "
                         "Buy/Hold/Watch with TODAY's fundamentals (lookahead-biased).")
+    p.add_argument("--universe", default=None, metavar="CSV",
+                   help="Run over a cached universe CSV instead of the watchlist "
+                        "(reads data/cache/prices.db, no network).")
     p.add_argument("--exits", choices=["horizon", "plan"], default="horizon",
                    help="horizon = fixed-horizon forward returns (what the signal "
                         "led to); plan = walk each entry to its trade-plan stop or "
@@ -77,12 +81,36 @@ def _add_backtest_parser(sub) -> None:
     p.add_argument("--no-report", action="store_true", help="Skip the HTML report.")
 
 
+def _add_universe_parser(sub) -> None:
+    p = sub.add_parser("universe", help="Write an index constituent list to CSV.")
+    p.add_argument("--index", choices=["sp500"], default="sp500",
+                   help="Which index to pull (default: %(default)s).")
+    p.add_argument("--out", default="data/universe_sp500.csv",
+                   help="Destination CSV (default: %(default)s).")
+
+
+def _add_cache_parser(sub) -> None:
+    p = sub.add_parser("cache", help="Fetch/refresh the research price cache.")
+    p.add_argument("--universe", default="data/universe_sp500.csv",
+                   help="Ticker CSV to cache (default: %(default)s).")
+    p.add_argument("--period", default="10y",
+                   help="History to fetch per ticker (default: %(default)s).")
+    p.add_argument("--db", default=None,
+                   help="Cache database path (default: data/cache/prices.db).")
+    p.add_argument("--chunk", type=int, default=50,
+                   help="Tickers per bulk request (default: %(default)s).")
+    p.add_argument("--status", action="store_true",
+                   help="Print cache coverage and exit without fetching.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stock-analysis", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose (DEBUG) logging.")
     sub = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(sub)
     _add_backtest_parser(sub)
+    _add_universe_parser(sub)
+    _add_cache_parser(sub)
     from .thesis import cli as thesis_cli
     thesis_cli.add_parser(sub)
     return parser
@@ -133,6 +161,46 @@ def main(argv=None) -> int:
             print(f"Buys: {buys or 'none'}")
         return 0
 
+    if args.command == "universe":
+        from . import ingest
+        rows = ingest.fetch_sp500_universe()
+        if not rows:
+            print("Universe fetch failed; leaving any existing CSV alone.",
+                  file=sys.stderr)
+            return 1
+        import csv as _csv
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=["ticker", "company", "exchange", "sector"])
+            w.writeheader()
+            w.writerows(rows)
+        print(f"Wrote {len(rows)} tickers to {out}")
+        print("NOTE: current constituents only — delisted names are absent, so a "
+              "backtest over this list still carries survivorship bias.")
+        return 0
+
+    if args.command == "cache":
+        from . import cache as price_cache, ingest
+        conn = price_cache.connect(args.db)
+        if args.status:
+            cov = price_cache.coverage(conn)
+            print(cov.to_string(index=False) if not cov.empty else "Cache is empty.")
+            if not cov.empty:
+                print(f"\n{len(cov)} tickers, {int(cov['Bars'].sum()):,} bars.")
+            return 0
+        try:
+            wl = config.load_watchlist_csv(args.universe)
+        except FileNotFoundError as e:
+            print(f"{e}\nRun: stock-analysis universe --out {args.universe}",
+                  file=sys.stderr)
+            return 1
+        bars = ingest.fetch_bulk_prices(list(wl), period=args.period, chunk=args.chunk)
+        written = sum(price_cache.upsert_bars(conn, tk, df) for tk, df in bars.items())
+        print(f"Cached {len(bars)}/{len(wl)} tickers, {written:,} bars -> "
+              f"{args.db or config.DEFAULT_CACHE_DB}")
+        return 0
+
     if args.command == "backtest":
         from . import backtest as bt
 
@@ -141,9 +209,20 @@ def main(argv=None) -> int:
             print("⚠ COMPOSITE SCOPE: fundamentals are frozen at TODAY's values, so "
                   "past composites are LOOKAHEAD-BIASED. Treat results as a sanity "
                   "check, not proof of edge.")
+        prices = None
+        if args.universe:
+            from . import cache as price_cache
+            wl = config.load_watchlist_csv(args.universe)
+            with price_cache.connect() as conn:
+                prices = price_cache.load_universe(conn, list(wl))
+            if not prices:
+                print(f"No cached bars for {args.universe}. Run: "
+                      f"stock-analysis cache --universe {args.universe}", file=sys.stderr)
+                return 1
+            print(f"Loaded {len(prices)} cached tickers (no network).")
         try:
             results = bt.run_backtest(
-                exits=args.exits,
+                exits=args.exits, prices=prices,
                 period=args.period, mode=args.scope, horizons=horizons,
                 max_hold=args.max_hold, max_positions=args.max_positions,
                 cost_bps=args.cost_bps, slippage_mult=args.slippage_mult,
