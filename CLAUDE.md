@@ -86,6 +86,8 @@ Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df`
 
 Thesis flow (separate, on demand): `signal_matrix` (or manual input) → `thesis.sources` → `IDEA` thesis → lifecycle transitions in `thesis.store` (JSON under `data/theses/`, `DEFAULT_THESES_DIR`) → `thesis.review` postmortem/summary → `thesis.report` aggregated HTML journal (`stock-analysis thesis report` → `output/theses/<ts>/report.html`). Driven by `stock-analysis thesis …` or the `stockanalysis.thesis` library API; demo in `notebooks/thesis_tracking.ipynb`. The `stock-analysis thesis` command surface and workflow are documented as a project skill: `.claude/skills/thesis-tracking/SKILL.md`.
 
+**Before changing any signal threshold** — the `TECHNICAL_COMPONENTS` predicates, which components are `gating`, `DEFAULT_FUND_MIN`, or the `config.py` placement knobs — read the project skill `.claude/skills/tuning-signals/SKILL.md`. It carries the measured baseline (7,253 trades, +0.030R, 95% CI [+0.000, +0.061]), the required hold-out/plateau workflow, and the variants already tested and found dead, so a tuning pass doesn't rediscover them.
+
 Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives **only** in the notebook/CLI, never in the package core — the rule is about *interactive* display, not a pure function that returns a string. `report.py` and `thesis/report.py` are the two deliberate, precedented exceptions: both build a self-contained HTML string from already-fetched data with no `Styler`/`fig.show()`/print side effects, so they're safe to call from a headless job.
 
 ## Conventions that are easy to get wrong
