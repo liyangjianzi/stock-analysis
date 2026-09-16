@@ -1,4 +1,4 @@
-"""Excel writer for backtest results — a Summary sheet + an Event Study sheet.
+"""Excel writer for backtest results — Summary, Event Study, Planned Trades.
 
 Reuses the base styling from :mod:`stockanalysis.outputs.excel` so the two
 workbooks look consistent. Not an :class:`Exporter` subclass: the Exporter
@@ -29,10 +29,23 @@ def write_backtest_workbook(results, path) -> str:
             rows.append({"Bucket": bucket, "Horizon": horizon, **d})
     event_df = pd.DataFrame(rows)
 
+    # exits="plan": one row per walked trade, plus its aggregate as a summary row.
+    trades_df = pd.DataFrame([{
+        "Ticker": t.ticker, "Entry Date": t.entry_date, "Entry": t.entry,
+        "Stop": t.stop, "Target": t.target, "Exit Date": t.exit_date,
+        "Exit": t.exit_price, "Exit Reason": t.exit_reason,
+        "R": t.r_multiple, "Bars Held": t.bars_held,
+    } for t in results.trades])
+    if results.trade_stats:
+        summary_df = pd.concat(
+            [summary_df, pd.DataFrame([results.trade_stats])], axis=1)
+
     with pd.ExcelWriter(path, engine="openpyxl") as xl:
         summary_df.to_excel(xl, sheet_name="Backtest Summary", index=False)
         if not event_df.empty:
             event_df.to_excel(xl, sheet_name="Event Study", index=False)
+        if not trades_df.empty:
+            trades_df.to_excel(xl, sheet_name="Planned Trades", index=False)
         for ws in xl.sheets.values():
             _style_base(ws)
 

@@ -18,8 +18,9 @@ import pandas as pd
 
 from . import config
 from .indicators import add_indicators
-from .signals import (TECHNICAL_COMPONENTS, compute_technical_posture,
-                      decide_action)
+from .tradeplan import build_trade_plan
+from .signals import (TECHNICAL_COMPONENTS, _components,
+                      compute_technical_posture, decide_action)
 
 #: Forward-return horizons in trading days.
 HORIZONS_BARS: dict[str, int] = {"1m": 21, "3m": 63, "6m": 126}
@@ -33,9 +34,16 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
     ``tech_score`` (0-len(components)) and ``label``. In ``technical`` mode
     ``label`` is the posture (Bearish/Neutral/Bullish); in ``composite`` mode it
     is :func:`~stockanalysis.signals.decide_action`'s Buy/Hold/Watch, combining
-    ``fundamental_score`` with the technical entry gate.
+    ``fundamental_score`` with the technical entry gate; in ``gate`` mode it is
+    ``Entry``/``Flat`` from the technical gate **alone**.
+
+    The ``gate`` column is recorded in **every** mode, so a caller that wants
+    plan-based exits can reuse one replay rather than paying the O(N^2) walk
+    twice. ``gate`` mode exists because it is the only lookahead-free entry rule: the
+    fundamentals available from yfinance are today's, so any mode that consults
+    them is scoring the past with the present's information.
     """
-    cols = ["tech_score", "label"]
+    cols = ["tech_score", "label", "gate"]
     # NOTE: strict inequality (<=) means exactly min_bars rows returns empty;
     # min_bars+1 rows produces one entry (the first bar after the warmup window).
     if hist is None or hist.empty or "Close" not in hist or len(hist) <= min_bars:
@@ -48,13 +56,16 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
     for i in range(min_bars, len(hist)):
         enriched = add_indicators(hist.iloc[: i + 1])           # trailing-only
         posture, tscore, detail = compute_technical_posture(enriched, components=comps)
+        gate = all(detail.get(c.name) for c in _components(comps) if c.gating)
         if mode == "composite":
             # Share the live decision rule rather than re-implementing it here —
             # a backtest of a different rule than the one that ships is worthless.
             label = decide_action(f, detail, components=comps)
+        elif mode == "gate":
+            label = "Entry" if gate else "Flat"
         else:
             label = posture
-        out[hist.index[i]] = {"tech_score": tscore, "label": label}
+        out[hist.index[i]] = {"tech_score": tscore, "label": label, "gate": gate}
 
     return pd.DataFrame.from_dict(out, orient="index", columns=cols)
 
@@ -98,6 +109,117 @@ def forward_returns(hist, entry_dates, horizons=("1m", "3m", "6m")) -> pd.DataFr
         rows[ts] = rec
 
     return pd.DataFrame.from_dict(rows, orient="index", columns=horizons)
+
+
+@dataclass
+class PlannedTrade:
+    """One entry walked to whichever of stop / target / time stop came first."""
+    ticker: str
+    entry_date: object
+    entry: float                 # actual fill (next bar's open, plus cost)
+    stop: float
+    target: float
+    exit_date: object
+    exit_price: float            # actual fill, net of cost
+    exit_reason: str             # stop | stop_gap | target | target_gap | time
+    r_multiple: float            # (exit - entry) / (entry - stop)
+    bars_held: int
+
+
+def simulate_planned_trades(hist, entry_dates, *, ticker: str = "",
+                            max_hold_bars: int = 63, cost_bps: float = 10.0,
+                            slippage_mult: float = 1.0) -> list[PlannedTrade]:
+    """Walk each entry to its plan's stop or target, bar by bar.
+
+    The plan is built **point-in-time** from ``hist.iloc[:i+1]``, so the stop and
+    target use only information available on the signal bar. The fill is the
+    *next* bar's open (matching :func:`forward_returns`), and results are reported
+    in R — ``(exit - entry) / (entry - stop)`` — which is what makes a $50 name
+    and a $1,700 name comparable and is the unit expectancy is built from.
+
+    Within one bar the **stop is checked first**: daily OHLC cannot order intrabar
+    events, so we assume the worse path rather than the flattering one. A bar that
+    opens beyond a level fills at the open, not the level — which is why a gap
+    down can return worse than -1R.
+
+    Entries with no usable plan (missing/zero ATR) and entries on the final bar
+    (nothing to fill on) are skipped rather than raising.
+    """
+    if hist is None or hist.empty or not entry_dates:
+        return []
+    cost = cost_bps / 10_000.0 * slippage_mult
+    pos = {ts: i for i, ts in enumerate(hist.index)}
+    o, h, l, c = (hist[k].to_numpy(float) for k in ("Open", "High", "Low", "Close"))
+    n = len(hist)
+
+    trades: list[PlannedTrade] = []
+    for ts in entry_dates:
+        i = pos.get(ts)
+        if i is None or i + 1 >= n:
+            continue                                   # no next bar to fill on
+        plan = build_trade_plan(add_indicators(hist.iloc[: i + 1]))
+        stop, target = plan["stop"], plan["target"]
+        if not (np.isfinite(stop) and np.isfinite(target)):
+            continue
+        entry = o[i + 1] * (1 + cost)
+        risk = entry - stop
+        if not np.isfinite(entry) or risk <= 0:
+            continue
+
+        exit_px = exit_reason = exit_at = None
+        last = min(i + max_hold_bars, n - 1)
+        for j in range(i + 1, last + 1):
+            if o[j] <= stop:                           # gapped through the stop
+                exit_px, exit_reason = o[j], "stop_gap"
+            elif l[j] <= stop:
+                exit_px, exit_reason = stop, "stop"
+            elif o[j] >= target:                       # gapped through the target
+                exit_px, exit_reason = o[j], "target_gap"
+            elif h[j] >= target:
+                exit_px, exit_reason = target, "target"
+            if exit_reason:
+                exit_at = j
+                break
+        if exit_reason is None:                        # ran out of rope
+            exit_at, exit_px, exit_reason = last, c[last], "time"
+
+        net = exit_px * (1 - cost)
+        trades.append(PlannedTrade(
+            ticker=ticker, entry_date=ts, entry=entry, stop=stop, target=target,
+            exit_date=hist.index[exit_at], exit_price=net, exit_reason=exit_reason,
+            r_multiple=(net - entry) / risk, bars_held=exit_at - i,
+        ))
+    return trades
+
+
+def aggregate_trade_stats(trades) -> dict:
+    """Win rate, average win/loss and **expectancy in R** over planned trades.
+
+    ``exit_mix`` is the diagnostic worth reading first: mostly ``time`` means the
+    targets are unreachable, mostly ``stop`` means they are too tight.
+    """
+    rs = np.array([t.r_multiple for t in trades], dtype=float)
+    mix: dict = {}
+    for t in trades:
+        mix[t.exit_reason] = mix.get(t.exit_reason, 0) + 1
+    if rs.size == 0:
+        return {"n": 0, "win_rate": float("nan"), "avg_win_r": float("nan"),
+                "avg_loss_r": float("nan"), "expectancy_r": float("nan"),
+                "total_r": 0.0, "avg_bars_held": float("nan"), "exit_mix": mix}
+    wins, losses = rs[rs > 0], rs[rs <= 0]
+    win_rate = wins.size / rs.size
+    avg_win = float(wins.mean()) if wins.size else 0.0
+    avg_loss = float(losses.mean()) if losses.size else 0.0
+    return {
+        "n": int(rs.size),
+        "win_rate": float(win_rate),
+        "avg_win_r": avg_win if wins.size else float("nan"),
+        "avg_loss_r": avg_loss if losses.size else float("nan"),
+        "expectancy_r": float(win_rate * avg_win + (1 - win_rate) * avg_loss),
+        "total_r": float(rs.sum()),
+        "avg_bars_held": float(np.mean([t.bars_held for t in trades])),
+        "exit_mix": mix,
+    }
 
 
 def aggregate_event_stats(event_returns, baseline_returns=None) -> dict:
@@ -245,6 +367,8 @@ class BacktestResults:
     portfolio_summary: dict = field(default_factory=dict)
     benchmark_curve: "pd.Series | None" = None
     per_ticker_returns: dict = field(default_factory=dict)   # ticker -> forward-returns df
+    trades: list = field(default_factory=list)               # PlannedTrade, exits="plan"
+    trade_stats: dict = field(default_factory=dict)          # aggregate_trade_stats
     config: dict = field(default_factory=dict)
     report_path: "str | None" = None
     excel_path: "str | None" = None
@@ -253,10 +377,16 @@ class BacktestResults:
 def build_results_from_prices(prices, *, mode="technical", fundamental_scores=None,
                               horizons=("1m", "3m", "6m"), max_hold="3m",
                               max_positions=10, cost_bps=10.0,
-                              slippage_mult=1.0) -> BacktestResults:
+                              slippage_mult=1.0, exits="horizon") -> BacktestResults:
     """Assemble a BacktestResults from an in-memory price dict (no network).
 
     This is the offline-testable core of :func:`run_backtest`.
+
+    ``exits`` selects how a position is closed out. ``horizon`` (default) measures
+    fixed-horizon forward returns — what the signal *led to*. ``plan`` walks every
+    entry to its own :mod:`~stockanalysis.tradeplan` stop or target and reports
+    R-multiples — what the strategy *would have traded*. ``plan`` always enters on
+    the technical gate (``mode="gate"``), the only lookahead-free entry rule.
     """
     fundamental_scores = fundamental_scores or {}
     horizons = list(horizons)
@@ -282,6 +412,17 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
                               max_positions=max_positions, max_hold_bars=_bars(max_hold),
                               cost_bps=cost_bps, slippage_mult=slippage_mult)
 
+    trades: list = []
+    if exits == "plan":
+        for tk, tl in timeline_map.items():
+            # Reuse the replay above: every mode records the gate, so the entry
+            # dates come free rather than costing a second O(N^2) walk.
+            labelled = pd.DataFrame({"label": tl["gate"].map({True: "Entry", False: "Flat"})})
+            trades += simulate_planned_trades(
+                prices[tk], entry_events(labelled, ("Entry",)), ticker=tk,
+                max_hold_bars=_bars(max_hold), cost_bps=cost_bps,
+                slippage_mult=slippage_mult)
+
     return BacktestResults(
         mode=mode,
         event_stats={bucket: aggregate_event_stats(ev_all, base_all)},
@@ -289,9 +430,12 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
         portfolio_curve=port["curve"],
         portfolio_summary=port["summary"],
         per_ticker_returns=per_ticker,
+        trades=trades,
+        trade_stats=aggregate_trade_stats(trades) if exits == "plan" else {},
         config={"mode": mode, "horizons": horizons, "max_hold": max_hold,
                 "max_positions": max_positions, "cost_bps": cost_bps,
-                "slippage_mult": slippage_mult, "entry_bucket": bucket},
+                "slippage_mult": slippage_mult, "entry_bucket": bucket,
+                "exits": exits},
     )
 
 
@@ -310,7 +454,7 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
                  horizons=("1m", "3m", "6m"), max_hold="3m", max_positions=10,
                  cost_bps=10.0, slippage_mult=1.0, benchmark="SPY",
                  out_dir="output/backtest", export_excel=True,
-                 save_report=True) -> BacktestResults:
+                 save_report=True, exits="horizon") -> BacktestResults:
     """Network-driven entry point: fetch history, build results, write outputs."""
     from .ingest import load_watchlist
     from .screener import screen_fundamentals
@@ -327,7 +471,7 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
     results = build_results_from_prices(
         prices, mode=mode, fundamental_scores=f_scores, horizons=horizons,
         max_hold=max_hold, max_positions=max_positions, cost_bps=cost_bps,
-        slippage_mult=slippage_mult,
+        slippage_mult=slippage_mult, exits=exits,
     )
     results.config["period"] = period
 
@@ -335,7 +479,8 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
         results.benchmark_curve = _benchmark_curve(benchmark, period, results.portfolio_curve)
 
     out = Path(out_dir) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    if export_excel and results.event_stats.get(results.config["entry_bucket"]):
+    if export_excel and (results.event_stats.get(results.config["entry_bucket"])
+                         or results.trades):
         from .outputs.backtest_excel import write_backtest_workbook
         out.mkdir(parents=True, exist_ok=True)
         results.excel_path = write_backtest_workbook(results, out / "backtest.xlsx")

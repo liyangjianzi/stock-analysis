@@ -56,6 +56,11 @@ def _add_backtest_parser(sub) -> None:
     p.add_argument("--scope", choices=["technical", "composite"], default="technical",
                    help="technical = price-only (no lookahead); composite = full "
                         "Buy/Hold/Watch with TODAY's fundamentals (lookahead-biased).")
+    p.add_argument("--exits", choices=["horizon", "plan"], default="horizon",
+                   help="horizon = fixed-horizon forward returns (what the signal "
+                        "led to); plan = walk each entry to its trade-plan stop or "
+                        "target and report R-multiples (what you'd have traded). "
+                        "plan always enters on the technical gate (default: %(default)s).")
     p.add_argument("--period", default="5y", help="yfinance history period (default: 5y).")
     p.add_argument("--horizon", choices=["1m", "3m", "6m"], action="append", default=None,
                    help="Forward-return horizon(s); repeatable (default: 1m 3m 6m).")
@@ -138,6 +143,7 @@ def main(argv=None) -> int:
                   "check, not proof of edge.")
         try:
             results = bt.run_backtest(
+                exits=args.exits,
                 period=args.period, mode=args.scope, horizons=horizons,
                 max_hold=args.max_hold, max_positions=args.max_positions,
                 cost_bps=args.cost_bps, slippage_mult=args.slippage_mult,
@@ -150,6 +156,16 @@ def main(argv=None) -> int:
 
         s = results.portfolio_summary or {}
         print(f"\nBacktest ({results.mode}) done.")
+        ts = results.trade_stats or {}
+        if ts.get("n"):
+            mix = "  ".join(f"{k}:{v}" for k, v in sorted(ts["exit_mix"].items()))
+            print(f"  Planned trades: {ts['n']}   win rate {ts['win_rate']:.1%}   "
+                  f"expectancy {ts['expectancy_r']:+.2f}R")
+            print(f"    avg win {ts['avg_win_r']:+.2f}R   avg loss {ts['avg_loss_r']:+.2f}R"
+                  f"   total {ts['total_r']:+.1f}R   avg hold {ts['avg_bars_held']:.0f} bars")
+            print(f"    exits: {mix}")
+        elif results.config.get("exits") == "plan":
+            print("  Planned trades: none (no gate entries with a usable plan).")
         if s:
             print(f"  Trades: {s.get('n_trades')}  Win rate: {s.get('win_rate')}  "
                   f"Total return: {s.get('total_return')}  Max DD: {s.get('max_drawdown')}")

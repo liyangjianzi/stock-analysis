@@ -104,7 +104,7 @@ def test_posture_timeline_point_in_time_independent_check():
 
 def test_posture_timeline_labels_are_technical():
     tl = posture_timeline(_spike_ohlcv(), min_bars=60)
-    assert set(tl.columns) == {"tech_score", "label"}
+    assert set(tl.columns) == {"tech_score", "label", "gate"}
     assert set(tl["label"]).issubset({"Bearish", "Neutral", "Bullish"})
 
 
