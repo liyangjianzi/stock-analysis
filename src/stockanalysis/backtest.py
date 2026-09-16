@@ -18,7 +18,8 @@ import pandas as pd
 
 from . import config
 from .indicators import add_indicators
-from .signals import TECHNICAL_COMPONENTS, compute_technical_posture
+from .signals import (TECHNICAL_COMPONENTS, compute_technical_posture,
+                      decide_action)
 
 #: Forward-return horizons in trading days.
 HORIZONS_BARS: dict[str, int] = {"1m": 21, "3m": 63, "6m": 126}
@@ -31,7 +32,8 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
     Returns a DataFrame indexed by date (from ``min_bars`` onward) with columns
     ``tech_score`` (0-len(components)) and ``label``. In ``technical`` mode
     ``label`` is the posture (Bearish/Neutral/Bullish); in ``composite`` mode it
-    is the fused action (Buy/Hold/Watch) using ``fundamental_score``.
+    is :func:`~stockanalysis.signals.decide_action`'s Buy/Hold/Watch, combining
+    ``fundamental_score`` with the technical entry gate.
     """
     cols = ["tech_score", "label"]
     # NOTE: strict inequality (<=) means exactly min_bars rows returns empty;
@@ -40,16 +42,16 @@ def posture_timeline(hist, *, mode="technical", fundamental_score=None,
         return pd.DataFrame(columns=cols)
 
     comps = TECHNICAL_COMPONENTS if components is None else components
-    n_comp = len(comps)
-    f = 0.0 if fundamental_score is None else float(fundamental_score)
+    f = 0 if fundamental_score is None else int(fundamental_score)
 
     out: dict = {}
     for i in range(min_bars, len(hist)):
         enriched = add_indicators(hist.iloc[: i + 1])           # trailing-only
-        posture, tscore, _ = compute_technical_posture(enriched, components=comps)
+        posture, tscore, detail = compute_technical_posture(enriched, components=comps)
         if mode == "composite":
-            composite = 0.70 * (f / 6.0) + 0.30 * (tscore / n_comp)
-            label = "Buy" if composite >= 0.60 else "Hold" if composite >= 0.40 else "Watch"
+            # Share the live decision rule rather than re-implementing it here —
+            # a backtest of a different rule than the one that ships is worthless.
+            label = decide_action(f, detail, components=comps)
         else:
             label = posture
         out[hist.index[i]] = {"tech_score": tscore, "label": label}

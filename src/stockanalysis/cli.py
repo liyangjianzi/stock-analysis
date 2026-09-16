@@ -9,7 +9,7 @@ import argparse
 import logging
 import sys
 
-from . import config, pipeline
+from . import config, pipeline, signals
 
 
 def _add_run_parser(sub) -> None:
@@ -28,6 +28,22 @@ def _add_run_parser(sub) -> None:
     p.add_argument("--no-report", action="store_true",
                    help="Skip writing the combined HTML report (screener + "
                         "signal matrix + top-N dashboards/profiles + market overview).")
+    p.add_argument("--fund-min", type=int, default=signals.DEFAULT_FUND_MIN,
+                   metavar="N",
+                   help="Minimum fundamental score (of 6) for a name to be ownable; "
+                        "below it the action is Watch (default: %(default)s).")
+    p.add_argument("--account", type=float, default=config.DEFAULT_ACCOUNT_SIZE,
+                   metavar="USD",
+                   help="Account equity the position sizing is measured against "
+                        "(default: %(default)s, a notional figure).")
+    p.add_argument("--risk-pct", type=float, default=config.DEFAULT_RISK_PCT * 100,
+                   metavar="PCT",
+                   help="Percent of the account risked per trade, as a number "
+                        "(1.0 = 1%%) (default: %(default)s).")
+    p.add_argument("--max-weight", type=float, default=config.DEFAULT_MAX_WEIGHT * 100,
+                   metavar="PCT",
+                   help="Cap on one position's notional, as a percent of the "
+                        "account (default: %(default)s).")
     p.add_argument("--top", type=int, default=5, metavar="N",
                    help="Limit the report's technical-dashboard and fundamental-"
                         "profile sections to the N strongest names (the screener/"
@@ -90,6 +106,10 @@ def main(argv=None) -> int:
                 save_report=not args.no_report,
                 top_n=args.top,
                 out_dir=args.out,
+                fund_min=args.fund_min,
+                account_size=args.account,
+                risk_pct=args.risk_pct / 100.0,      # CLI takes percent, API takes a fraction
+                max_weight=args.max_weight / 100.0,
             )
         except Exception as e:
             print(f"Pipeline failed: {e}", file=sys.stderr)

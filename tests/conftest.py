@@ -102,3 +102,34 @@ def fundamentals_df() -> pd.DataFrame:
     df = pd.DataFrame.from_dict(data, orient="index")
     df.index.name = "Ticker"
     return df
+
+
+def pullback_ohlcv(n: int = 260, slide_bars: int = 5, slide_pct: float = 0.075,
+                   rebound: float = 0.03) -> pd.DataFrame:
+    """An uptrend that slides back into EMA50 and closes strong on the last bar.
+
+    This is the pattern the technical registry is built to catch, and the only
+    shared fixture that fires the whole entry gate (``trend_up`` +
+    ``pullback_zone`` + ``turn_confirm``) at once — a clean trend sits too far
+    above EMA50 for ``pullback_zone``, and a random walk never clears the prior
+    high on a green bar for ``turn_confirm``. The defaults land the last close
+    ~0.5 ATR above EMA50; widening ``rebound`` pushes it out of the zone (a
+    handy way to test a gate *failure*).
+
+    A plain helper rather than a fixture so callers can vary the parameters.
+    """
+    base = np.linspace(100.0, 200.0, n)
+    closes = base.copy()
+    start = closes[-slide_bars - 1]
+    for i in range(slide_bars):                       # the pullback
+        closes[-slide_bars + i] = start * (1 - slide_pct * (i + 1) / slide_bars)
+    closes[-1] = closes[-2] * (1 + rebound)           # the confirming turn
+    return _make_ohlcv(closes)
+
+
+@pytest.fixture
+def setup_frame() -> pd.DataFrame:
+    """An indicator-enriched :func:`pullback_ohlcv` — the shared frame that fires
+    the whole entry gate, so ``generate_signals`` yields a Buy."""
+    from stockanalysis.indicators import add_indicators
+    return add_indicators(pullback_ohlcv())

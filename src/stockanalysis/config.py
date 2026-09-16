@@ -59,6 +59,29 @@ def load_watchlist_csv(path=None) -> dict[str, str]:
 HISTORY_PERIOD = "3y"
 
 # -----------------------------------------------------------------------------
+# Risk / position sizing defaults, consumed by stockanalysis.tradeplan.
+#
+# The account size is a **notional** unless the caller overrides it (CLI:
+# ``--account``). Every run's report states the figure it used so a share count
+# is never mistaken for a real position. The decision knobs that belong to the
+# signal contract itself (GATE_COMPONENTS, DEFAULT_FUND_MIN) live next to the
+# component registry in signals.py; only the account-specific numbers live here.
+# -----------------------------------------------------------------------------
+DEFAULT_ACCOUNT_SIZE = 100_000.0   # notional equity the sizing is measured against
+DEFAULT_RISK_PCT = 0.01            # fraction of the account risked per trade (1%)
+DEFAULT_MAX_WEIGHT = 0.20          # cap on one position's notional (20% of account)
+MIN_RR = 1.5                       # reward:risk below which a plan is flagged
+ATR_STOP_MULT = 1.5                # stop distance in ATRs when no support is below
+STOP_BUFFER_ATR = 0.25             # ATRs of slack placed under a structural level
+# Distance floors, in ATRs, for accepting a support/resistance level as a stop or
+# target. Price often sits *on* a level, and the nearest one can be a fraction of
+# a percent away — too tight to survive a normal day's range as a stop, and
+# meaningless as a target. Levels inside the floor are skipped for the next one
+# out; if none qualifies, the ATR stop / 2R target take over.
+MIN_STOP_ATR = 0.5
+MIN_TARGET_ATR = 1.0
+
+# -----------------------------------------------------------------------------
 # Stage-0 (daily market overview) configuration.
 # -----------------------------------------------------------------------------
 CANDIDATE_UNIVERSE = {

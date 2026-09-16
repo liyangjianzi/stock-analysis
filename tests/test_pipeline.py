@@ -64,7 +64,7 @@ def _stub_run(monkeypatch, tickers, screens=True):
                         })
 
     def fake_build_full_report(screened_df, signal_matrix, tech, profiles,
-                               overview_data, *, selected, generated_at):
+                               overview_data, *, selected, generated_at, **kw):
         return f"<html>{selected}</html>"
 
     monkeypatch.setattr(pipeline.report, "build_full_report", fake_build_full_report)
@@ -146,3 +146,24 @@ def test_run_skips_the_report_unless_requested(monkeypatch, tmp_path):
     assert results.report_path is None
     build.assert_not_called()
     save.assert_not_called()
+
+
+def test_run_threads_the_risk_knobs_into_generate_signals(monkeypatch, tmp_path):
+    """The sizing inputs must reach the signal engine, not just the CLI."""
+    _stub_run(monkeypatch, ["AAA"])
+    captured = {}
+
+    def fake_generate_signals(screened, tech, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame({"Ticker": ["AAA"], "Composite": [0.5],
+                             "Final Action Signal": ["Hold"]})
+
+    monkeypatch.setattr(pipeline, "generate_signals", fake_generate_signals)
+    pipeline.run(watchlist={"AAA": "Tech"}, export_target=None,
+                 account_size=25_000, risk_pct=0.02, max_weight=0.15, fund_min=5,
+                 out_dir=str(tmp_path))
+
+    assert captured["account_size"] == 25_000
+    assert captured["risk_pct"] == 0.02
+    assert captured["max_weight"] == 0.15
+    assert captured["fund_min"] == 5

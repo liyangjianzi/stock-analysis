@@ -8,10 +8,15 @@ from stockanalysis.thesis import sources, store
 
 
 @pytest.fixture
-def signal_matrix(make_screened):
-    """A real generate_signals frame: AAPL->Buy, KO->Hold, XYZ->Watch (tech 0)."""
+def signal_matrix(make_screened, setup_frame):
+    """A real generate_signals frame: AAPL->Buy, KO->Hold, XYZ->Watch.
+
+    AAPL gets a series that fires the technical entry gate (quality + timing);
+    KO has the fundamentals but no price data, so it can only be a Hold; XYZ
+    fails the quality screen outright.
+    """
     screened = make_screened({"AAPL": 6, "KO": 5, "XYZ": 2})
-    return generate_signals(screened, tech_data={})
+    return generate_signals(screened, {"AAPL": setup_frame})
 
 
 # --- from_manual ---------------------------------------------------------------

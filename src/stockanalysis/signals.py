@@ -12,32 +12,40 @@ of independent bullish confirmations.
 Score contract:
   - fundamental score: 0-6 (from :mod:`stockanalysis.screener`)
   - technical score:   0-len(TECHNICAL_COMPONENTS) (default 5)
-  - composite = 0.70*(fund/6) + 0.30*(tech/len) -> Buy >=0.60, Hold >=0.40, else Watch
+  - composite = 0.70*(fund/6) + 0.30*(tech/len) -- a **ranking** key only
+
+Action contract (see :func:`decide_action`): fundamentals and technicals answer
+two different questions and are tested separately, not averaged. Fundamentals say
+*what is worth owning*; the technical gate says *whether today is the day*::
+
+    Buy   = fund_score >= fund_min AND every *gating* component fires
+    Hold  = fund_score >= fund_min but the gate does not
+    Watch = fund_score <  fund_min
+
+The composite deliberately does **not** decide the action. Averaging a
+conjunctive pattern into a weighted score hands out partial credit for half a
+setup, which let a name with perfect fundamentals and no technical confirmation
+at all (0.70*(6/6) = 0.70) clear a 0.60 "Buy" bar.
 """
 from __future__ import annotations
 
+import logging
 import math
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import numpy as np
 import pandas as pd
 
-from .indicators import find_support_resistance
+from . import config
+from .indicators import find_support_resistance, value_at as _at
+from .tradeplan import MATRIX_COLUMNS, build_trade_plan, empty_plan
+
+log = logging.getLogger(__name__)
 
 
 # --- Individual scoring components --------------------------------------------
 # Each predicate is pure and NaN/short-data robust. They assume a non-empty df
 # (compute_technical_posture guards emptiness before calling them).
-
-def _at(df: pd.DataFrame, col: str, bars_ago: int = 0) -> float:
-    """Value of ``col`` at ``bars_ago`` bars before the latest bar (0 = latest,
-    i.e. ``df[col].iloc[-1-bars_ago]``); ``np.nan`` if the column is missing or
-    there isn't enough history. The single place that implements the bracket
-    notation (``[n]``) used in the predicate docstrings below."""
-    if col not in df or len(df) <= bars_ago:
-        return np.nan
-    return df[col].iloc[-1 - bars_ago]
-
 
 def _trend_up(df: pd.DataFrame) -> bool:
     """Uptrend intact and accelerating: Close > EMA50, and EMA50 has risen at
@@ -81,18 +89,51 @@ def _vol_pattern(df: pd.DataFrame) -> bool:
     return bool(vol_sma5_prev < vol_sma20 and volume >= 1.2 * vol_sma20)
 
 
-TechnicalComponent = tuple[str, Callable[[pd.DataFrame], bool]]
+class TechnicalComponent(NamedTuple):
+    """One scored predicate in the registry.
+
+    ``gating`` is what makes a component *required* for a Buy rather than merely
+    scored. Keeping it here — instead of in a parallel tuple of names — means a
+    custom registry passed as ``components=`` gates on its own entries, so the
+    gate and the registry cannot silently disagree.
+    """
+    name: str
+    predicate: Callable[[pd.DataFrame], bool]
+    gating: bool = False
+
+
+def _components(components=None) -> list[TechnicalComponent]:
+    """Normalize a registry, accepting plain ``(name, predicate)`` tuples so an
+    ad-hoc caller needn't import :class:`TechnicalComponent` (such entries are
+    non-gating). ``None`` means the default registry."""
+    if components is None:
+        return TECHNICAL_COMPONENTS
+    return [c if isinstance(c, TechnicalComponent) else TechnicalComponent(*c)
+            for c in components]
 
 #: Single source of truth for the technical score. Add/remove a (name, predicate)
 #: tuple and the max score, composite divisor, posture cutoffs and detail keys all
 #: follow automatically.
+#: Single source of truth for the technical score AND the entry gate. Three
+#: components are ``gating`` — trend (context), pullback zone (location) and the
+#: confirming bar (trigger); ``dip_deep`` and ``vol_pattern`` stay scored but
+#: non-blocking, since requiring them on top of the other three makes a Buy
+#: near-unreachable.
 TECHNICAL_COMPONENTS: list[TechnicalComponent] = [
-    ("trend_up", _trend_up),
-    ("dip_deep", _dip_deep),
-    ("pullback_zone", _pullback_zone),
-    ("turn_confirm", _turn_confirm),
-    ("vol_pattern", _vol_pattern),
+    TechnicalComponent("trend_up", _trend_up, gating=True),
+    TechnicalComponent("dip_deep", _dip_deep),
+    TechnicalComponent("pullback_zone", _pullback_zone, gating=True),
+    TechnicalComponent("turn_confirm", _turn_confirm, gating=True),
+    TechnicalComponent("vol_pattern", _vol_pattern),
 ]
+
+#: The gating component names, *derived* from the registry above — a read-only
+#: convenience for callers and docs, never a second place to edit.
+GATE_COMPONENTS: tuple[str, ...] = tuple(
+    c.name for c in TECHNICAL_COMPONENTS if c.gating)
+
+#: Minimum fundamental score (of 6) for a name to be considered ownable at all.
+DEFAULT_FUND_MIN = 4
 
 #: Default posture cutoff: Bullish once at least 4 of the 5 default components fire
 #: (score >= ceil(bull_frac * N); 2/3 -> ceil(3.33)=4 for N=5).
@@ -136,17 +177,17 @@ def compute_technical_posture(df: pd.DataFrame,
     Posture scales with the component count (see :func:`_posture`). Robust to
     NaN/short data; a predicate that raises is treated as False.
     """
-    components = TECHNICAL_COMPONENTS if components is None else components
-    detail = {name: False for name, _ in components}
+    components = _components(components)
+    detail = {c.name: False for c in components}
     detail["nearest_level"] = None
     if df is None or df.empty:
         return "Bearish", 0, detail
 
-    for name, fn in components:
+    for c in components:
         try:
-            detail[name] = bool(fn(df))
+            detail[c.name] = bool(c.predicate(df))
         except Exception:
-            detail[name] = False
+            detail[c.name] = False
 
     # Context (not scored): nearest support/resistance level to the last close.
     close = df.iloc[-1].get("Close", np.nan)
@@ -154,7 +195,7 @@ def compute_technical_posture(df: pd.DataFrame,
     if sr and np.isfinite(close):
         detail["nearest_level"] = min(sr, key=lambda L: abs(L["level"] - close))
 
-    score = sum(detail[name] for name, _ in components)
+    score = sum(detail[c.name] for c in components)
     posture = _posture(score, len(components), bull_frac, bear_frac)
     return posture, score, detail
 
@@ -167,13 +208,56 @@ ACTION_COLORS = {"Buy": "B7E1CD", "Hold": "FCE8B2", "Watch": "D9D9D9"}
 POSTURE_COLORS = {"Bullish": "B7E1CD", "Neutral": "FCE8B2", "Bearish": "F4C7C3"}
 
 
-def generate_signals(screened: pd.DataFrame, tech_data: dict,
-                     buy_thr: float = 0.60, hold_thr: float = 0.40) -> pd.DataFrame:
-    """Fuse fundamentals (weight 0.70) and technicals (weight 0.30) into a
-    final Buy / Hold / Watch action per stock.
+def decide_action(fund_score: int, detail: dict, *,
+                  fund_min: int = DEFAULT_FUND_MIN, components=None) -> str:
+    """Decide Buy / Hold / Watch from a fundamental score and a posture ``detail``.
 
-    Returns a tidy DataFrame: Ticker, Sector, Fundamental Score,
-    Technical Posture, Final Action Signal (+ supporting numeric columns).
+    Two independent tests, never averaged (see the module docstring): quality
+    (``fund_score >= fund_min``) gets a name onto the list, and the technical
+    gate — every ``gating`` component in ``components`` firing — decides whether
+    today is the entry. Quality without the gate is **Hold** (own-worthy, waiting
+    for the setup); failing quality is **Watch** however good the chart looks.
+
+    ``components`` must be the same registry the ``detail`` was computed with, so
+    a custom registry gates on its own entries.
+    """
+    if fund_score < fund_min:
+        return "Watch"
+    gating = (c.name for c in _components(components) if c.gating)
+    return "Buy" if all(detail.get(name) for name in gating) else "Hold"
+
+
+#: Weights for the *ranking* key only — never an action threshold. See
+#: :func:`decide_action` for what actually decides Buy/Hold/Watch.
+RANK_WEIGHTS = (0.70, 0.30)   # fundamental, technical
+
+
+def rank_score(fund_score: int, tech_score: int, *, components=None,
+               weights: tuple[float, float] = RANK_WEIGHTS) -> float:
+    """The matrix's sort key: how *interesting* a name is, not whether to buy it.
+
+    Named so the ``Composite`` column's role is explicit in code and not only in
+    the docs — it orders the table, drives the heatmaps and picks ``top_tickers``,
+    and it is deliberately not compared against any action threshold.
+    """
+    w_fund, w_tech = weights
+    return w_fund * (fund_score / 6.0) + w_tech * (tech_score / len(_components(components)))
+
+
+def generate_signals(screened: pd.DataFrame, tech_data: dict, *,
+                     fund_min: int = DEFAULT_FUND_MIN,
+                     components=None,
+                     account_size: float = config.DEFAULT_ACCOUNT_SIZE,
+                     risk_pct: float = config.DEFAULT_RISK_PCT,
+                     max_weight: float = config.DEFAULT_MAX_WEIGHT) -> pd.DataFrame:
+    """Score every screened stock and attach an executable trade plan.
+
+    The action comes from :func:`decide_action` (quality test + technical gate);
+    ``Composite`` is carried as the ranking key only. Each row also gets the
+    :mod:`stockanalysis.tradeplan` columns — Entry / Stop / Target / R:R /
+    Shares / Risk $ — sized against ``account_size`` and ``risk_pct``.
+
+    Returns a tidy DataFrame ranked Buy > Hold > Watch, then by Composite.
     """
     if screened is None or screened.empty:
         return pd.DataFrame()
@@ -182,17 +266,17 @@ def generate_signals(screened: pd.DataFrame, tech_data: dict,
     for ticker, row in screened.iterrows():
         f_score = int(row.get("Fundamental_Score", 0))           # 0–6
         df_t = tech_data.get(ticker)
-        posture, t_score, detail = compute_technical_posture(df_t)  # t_score 0-len(components)
+        posture, t_score, detail = compute_technical_posture(df_t, components)
 
-        # Weighted composite: fundamentals dominate (0.70) over technicals (0.30).
-        composite = 0.70 * (f_score / 6.0) + 0.30 * (t_score / len(TECHNICAL_COMPONENTS))
+        composite = rank_score(f_score, t_score, components=components)
+        action = decide_action(f_score, detail, fund_min=fund_min,
+                               components=components)
 
-        if composite >= buy_thr:
-            action = "Buy"
-        elif composite >= hold_thr:
-            action = "Hold"
-        else:
-            action = "Watch"
+        # Watch names are not candidates for entry, so they carry no plan; this
+        # also skips the S/R fit for every name that failed the quality test.
+        plan = (build_trade_plan(df_t, account_size=account_size, risk_pct=risk_pct,
+                                 max_weight=max_weight)
+                if action != "Watch" else empty_plan())
 
         rows.append({
             "Ticker": ticker,
@@ -202,6 +286,7 @@ def generate_signals(screened: pd.DataFrame, tech_data: dict,
             "Tech Score": t_score,
             "Composite": round(composite, 3),
             "Final Action Signal": action,
+            **{col: plan[key] for key, col in MATRIX_COLUMNS.items()},
         })
 
     result = pd.DataFrame(rows)

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import config, overview, profile, report
+from . import config, overview, profile, report, signals
 from .indicators import add_indicators
 from .ingest import load_watchlist
 from .outputs import get_exporter
@@ -65,7 +65,11 @@ def run(watchlist: dict | None = None,
         export_opts: dict | None = None,
         save_report: bool = True,
         top_n: int | None = 5,
-        out_dir: str = "output") -> Results:
+        out_dir: str = "output",
+        fund_min: int = signals.DEFAULT_FUND_MIN,
+        account_size: float = config.DEFAULT_ACCOUNT_SIZE,
+        risk_pct: float = config.DEFAULT_RISK_PCT,
+        max_weight: float = config.DEFAULT_MAX_WEIGHT) -> Results:
     """Run the full pipeline and return a :class:`Results`.
 
     Parameters
@@ -89,6 +93,13 @@ def run(watchlist: dict | None = None,
                     every screened ticker regardless of ``top_n``).
     out_dir       : base output directory; this run's artifacts land in a fresh
                     timestamped subdir ``out_dir/<YYYY-MM-DD_HHMMSS>/``.
+    fund_min      : minimum fundamental score (of 6) for a name to be ownable.
+                    Below it the action is Watch regardless of the chart.
+    account_size  : equity the position sizing is measured against. The default
+                    is a **notional** $100k, echoed in the report so a share
+                    count is never mistaken for a real position.
+    risk_pct      : fraction of ``account_size`` risked per trade (0.01 = 1%).
+    max_weight    : cap on one position's notional as a fraction of the account.
     """
     watchlist = config.load_watchlist_csv() if watchlist is None else watchlist
     export_opts = dict(export_opts or {})
@@ -97,7 +108,9 @@ def run(watchlist: dict | None = None,
     prices, fundamentals_df = load_watchlist(watchlist, period=period)
     screened_df = screen_fundamentals(fundamentals_df)
     tech = compute_indicators(prices)
-    signal_matrix = generate_signals(screened_df, tech)
+    signal_matrix = generate_signals(screened_df, tech, fund_min=fund_min,
+                                     account_size=account_size, risk_pct=risk_pct,
+                                     max_weight=max_weight)
 
     results = Results(
         prices=prices, fundamentals_df=fundamentals_df, screened_df=screened_df,
@@ -123,6 +136,7 @@ def run(watchlist: dict | None = None,
         html_doc = report.build_full_report(
             screened_df, signal_matrix, tech, profiles, overview_data,
             selected=selected,
+            account_size=account_size, risk_pct=risk_pct,
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
         results.report_path = report.save_report(html_doc, run_dir / "report.html")

@@ -9,6 +9,8 @@ import pandas as pd
 from conftest import wandering_ohlcv as _wandering_ohlcv
 
 from stockanalysis import report
+from stockanalysis.config import MIN_RR
+from stockanalysis.tradeplan import MATRIX_COLUMNS
 from stockanalysis.indicators import add_indicators
 
 
@@ -225,3 +227,70 @@ def test_save_report_writes_utf8_and_creates_parent_dirs(tmp_path):
     written = tmp_path / "run" / "nested" / "report.html"
     assert written.exists()
     assert written.read_text(encoding="utf-8") == html_doc
+
+
+# --- Trade Plan section --------------------------------------------------------
+
+def _planned_matrix():
+    """A signal matrix carrying the tradeplan columns, one row per action."""
+    m = _signal_matrix(["BUY", "HOLD", "WATCH"],
+                       actions=["Buy", "Hold", "Watch"])
+    # Keyed off the shipped contract, so a column rename moves the fixture too.
+    plan = {
+        MATRIX_COLUMNS["entry"]: [100.0, 50.0, np.nan],
+        MATRIX_COLUMNS["stop"]: [95.0, 47.0, np.nan],
+        MATRIX_COLUMNS["stop_basis"]: ["structure", "atr", None],
+        MATRIX_COLUMNS["target"]: [115.0, 53.0, np.nan],
+        MATRIX_COLUMNS["target_basis"]: ["structure", "2R", None],
+        MATRIX_COLUMNS["rr"]: [MIN_RR * 2, MIN_RR / 2, np.nan],   # HOLD's is thin
+        MATRIX_COLUMNS["shares"]: [200, 33, 0],
+        MATRIX_COLUMNS["risk_amount"]: [1000.0, 99.0, 0.0],
+    }
+    for col, values in plan.items():
+        m[col] = values
+    return m
+
+
+def _plan_html(matrix=None, tickers=("BUY",), **kw):
+    """Build a full report and return (whole_doc, just_the_trade_plan_section)."""
+    out = report.build_full_report(_screened_df(list(tickers)),
+                                   _planned_matrix() if matrix is None else matrix,
+                                   {}, [], _overview_data(),
+                                   selected=[], generated_at="now", **kw)
+    return out, out[out.index('id="trade_plan"'):out.index('id="dashboards"')]
+
+
+def test_trade_plan_section_lists_buy_and_hold_only():
+    _, plan_html = _plan_html()
+
+    assert "BUY" in plan_html and "HOLD" in plan_html
+    assert "WATCH" not in plan_html          # no plan for a name that failed quality
+    assert "115.00" in plan_html             # target, formatted
+    assert "structure" in plan_html          # the basis is shown, not just the level
+
+
+def test_trade_plan_flags_thin_rr():
+    _, plan_html = _plan_html(min_rr=MIN_RR)
+    assert "#f85149" in plan_html            # R:R 1.0 < 1.5 is coloured
+
+
+def test_trade_plan_states_its_sizing_assumptions():
+    out, _ = _plan_html(account_size=250_000, risk_pct=0.005)
+    assert "250,000" in out
+    assert "0.50%" in out
+
+
+def test_trade_plan_section_is_registered_in_the_nav():
+    out, _ = _plan_html()
+    assert '<a href="#trade_plan">Trade Plan</a>' in out
+
+
+def test_trade_plan_handles_a_matrix_without_plan_columns():
+    """An older or partial matrix must degrade, not raise."""
+    out, _ = _plan_html(_signal_matrix(["AAA"], actions=["Buy"]), tickers=("AAA",))
+    assert 'id="trade_plan"' in out
+
+
+def test_trade_plan_empty_when_everything_is_a_watch():
+    out, _ = _plan_html(_signal_matrix(["AAA"], actions=["Watch"]), tickers=("AAA",))
+    assert "Nothing passed the quality screen." in out

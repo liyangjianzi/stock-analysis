@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from openpyxl import load_workbook
 
 from stockanalysis.outputs import get_exporter
-from stockanalysis.outputs.excel import ExcelExporter
+from stockanalysis.outputs.excel import NUMBER_FORMATS, ExcelExporter
+from stockanalysis.tradeplan import MATRIX_COLUMNS
 
 
 def _signal_matrix():
@@ -108,3 +110,23 @@ def test_styling_skips_absent_columns_without_raising(tmp_path):
     ws = _export(tmp_path, bare)
     col = _col(ws, "Final Action Signal")
     assert ws[f"{col}2"].fill.fgColor.rgb.endswith("B7E1CD")
+
+
+def test_trade_plan_columns_are_written_and_formatted(tmp_path):
+    """Extra columns flow through to_excel untouched; formats are applied by name."""
+    matrix = _full_matrix()
+    entry, rr, shares = (MATRIX_COLUMNS[k] for k in ("entry", "rr", "shares"))
+    matrix[entry] = [100.123456, 50.0, 20.0]
+    matrix[rr] = [2.5, 1.0, 0.0]
+    matrix[shares] = [200, 33, 0]
+    ws = _export(tmp_path, matrix)
+
+    assert ws[f"{_col(ws, entry)}2"].value == pytest.approx(100.123456)
+    assert ws[f"{_col(ws, entry)}2"].number_format == NUMBER_FORMATS[entry]
+    assert ws[f"{_col(ws, rr)}2"].number_format == NUMBER_FORMATS[rr]
+    assert ws[f"{_col(ws, shares)}2"].number_format == NUMBER_FORMATS[shares]
+
+
+def test_composite_number_format_survives_the_shared_format_map(tmp_path):
+    ws = _export(tmp_path, _full_matrix())
+    assert ws[f"{_col(ws, 'Composite')}2"].number_format == "0.000"

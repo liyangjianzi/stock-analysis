@@ -15,6 +15,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from ..signals import ACTION_COLORS, POSTURE_COLORS
+from ..tradeplan import MATRIX_COLUMNS as _PLAN
 from .base import FUNDAMENTALS_SHEET, SIGNAL_MATRIX_SHEET, Exporter
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,19 @@ _SCORE_SCALE = dict(
     end_type="max", end_color="63BE7B",
 )
 SCORE_COLUMNS = ("Fundamental Score", "Tech Score", "Composite")
+
+#: Explicit number formats per column, keyed off tradeplan.MATRIX_COLUMNS so
+#: renaming a plan column can't silently orphan its format (this map fails
+#: open — an absent column is skipped, so a stale key raises nothing).
+#: Without these, the trade-plan floats
+#: render at full precision and inflate the auto-fitted column width (widths are
+#: measured from ``len(str(value))`` in _style_base). Applied by name, so a
+#: column that isn't present is simply skipped.
+NUMBER_FORMATS = {
+    "Composite": "0.000",
+    _PLAN["entry"]: "#,##0.00", _PLAN["stop"]: "#,##0.00", _PLAN["target"]: "#,##0.00",
+    _PLAN["rr"]: "0.00", _PLAN["shares"]: "#,##0", _PLAN["risk_amount"]: "#,##0",
+}
 
 _MAX_COL_WIDTH = 40  # cap so a long sector name doesn't blow out the layout
 
@@ -110,9 +124,14 @@ def _style_signal_matrix(ws) -> None:
             continue
         rng = f"{letter}2:{letter}{n_rows}"
         ws.conditional_formatting.add(rng, ColorScaleRule(**_SCORE_SCALE))
-        if col_name == "Composite":
-            for row in range(2, n_rows + 1):
-                ws[f"{letter}{row}"].number_format = "0.000"
+
+    # Number formats (scores and the trade-plan columns alike).
+    for col_name, fmt in NUMBER_FORMATS.items():
+        letter = cols.get(col_name)
+        if not letter:
+            continue
+        for row in range(2, n_rows + 1):
+            ws[f"{letter}{row}"].number_format = fmt
 
 
 class ExcelExporter(Exporter):

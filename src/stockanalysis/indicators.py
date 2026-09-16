@@ -21,6 +21,21 @@ from ta.volatility import AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 
+def value_at(df: pd.DataFrame, col: str, bars_ago: int = 0) -> float:
+    """Value of ``col`` at ``bars_ago`` bars before the latest bar (0 = latest,
+    i.e. ``df[col].iloc[-1-bars_ago]``); ``np.nan`` if the column is missing or
+    there isn't enough history.
+
+    The single NaN-safe reader of the column contract above — both the signal
+    predicates (where it implements the ``[n]`` bracket notation in their
+    docstrings) and the trade plan go through it, so a change to what "missing"
+    means lands in one place.
+    """
+    if col not in df or len(df) <= bars_ago:
+        return np.nan
+    return df[col].iloc[-1 - bars_ago]
+
+
 def add_indicators(df: pd.DataFrame, envelope_coverage: float = 0.95,
                    envelope_fallback_pct: float = 0.025) -> pd.DataFrame:
     """Return a copy of an OHLCV DataFrame enriched with EMA/Envelope/MACD/RSI/Volume.

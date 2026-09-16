@@ -12,13 +12,13 @@ Quick start::
 from __future__ import annotations
 
 from . import (backtest, charts, config, indicators, ingest, overview, profile,
-              report, screener, signals)
+              report, screener, signals, tradeplan)
 from .backtest import BacktestResults, run_backtest
 from .pipeline import Results, run, run_output_dir
 
 __all__ = [
     "run", "Results", "run_output_dir",
-    "config", "ingest", "screener", "indicators", "signals",
+    "config", "ingest", "screener", "indicators", "signals", "tradeplan",
     "overview", "profile", "charts", "report",
     "backtest", "BacktestResults", "run_backtest",
 ]

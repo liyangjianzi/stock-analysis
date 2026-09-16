@@ -28,12 +28,13 @@ import numpy as np
 import pandas as pd
 from plotly.offline import get_plotlyjs_version
 
-from . import charts
+from . import charts, config
 from .profile import _fmt_val  # cross-module private helper: same number
 # formatting the ASCII profile report already uses, kept consistent rather
 # than re-implemented.
 from .screener import screen_fundamentals
 from .signals import TECHNICAL_COMPONENTS, compute_technical_posture
+from .tradeplan import MATRIX_COLUMNS
 
 # Solid dark-theme palette for the signal matrix, mirroring the notebook's
 # local style_signals() ac/pc dicts (notebooks/stock_analysis.ipynb) rather
@@ -55,6 +56,11 @@ _RDYLGN = ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b",
 _NUMBER_FORMATS = {
     "PE": "{:.1f}", "EPS_Growth": "{:.1%}", "Rev_Growth": "{:.1%}",
     "Debt_Equity": "{:.2f}", "Div_Yield": "{:.2%}", "FCF": "{:,.0f}",
+    # Trade plan columns, keyed off tradeplan.MATRIX_COLUMNS so a rename there
+    # can't silently orphan the format (_fmt_cell fails open to plain escaping).
+    MATRIX_COLUMNS["entry"]: "{:,.2f}", MATRIX_COLUMNS["stop"]: "{:,.2f}",
+    MATRIX_COLUMNS["target"]: "{:,.2f}", MATRIX_COLUMNS["rr"]: "{:.2f}",
+    MATRIX_COLUMNS["shares"]: "{:,.0f}", MATRIX_COLUMNS["risk_amount"]: "{:,.0f}",
 }
 
 _SCREENER_COLUMNS = ["Ticker", "Sector", "PE", "EPS_Growth", "Rev_Growth",
@@ -203,25 +209,68 @@ def _table_raw(headers: list[str], rows: list[list[str]]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
+def _plain_cell(value, col: str, row) -> str:
+    """Default cell: the value through ``_NUMBER_FORMATS``, no styling."""
+    return f"<td>{_fmt_cell(col, value)}</td>"
+
+
+def _screener_cell(value, col: str, row) -> str:
+    """Screener metric cell, highlighted when its Pass_* flag is set."""
+    text = _fmt_cell(col, value)
+    pass_col = _SCREENER_PASS_COLS.get(col)
+    if pass_col and bool(row.get(pass_col, False)):
+        return (f'<td style="background:{_SCREENER_PASS_BG};'
+                f'color:{_contrast_text(_SCREENER_PASS_BG)}">{text}</td>')
+    return f"<td>{text}</td>"
+
+
+def _rr_cell(min_rr: float):
+    """Reward:risk cell, coloured when it falls below ``min_rr`` — flagged rather
+    than hidden, so the trader still sees the levels and decides."""
+    def cell(value, col: str, row) -> str:
+        if _is_missing(value) or value >= min_rr:
+            return f"<td>{_fmt_cell(col, value)}</td>"
+        return (f'<td style="color:{_RR_WARN_COLOR};font-weight:600;'
+                f'text-align:right">{_fmt_cell(col, value)}</td>')
+    return cell
+
+
+#: Column -> cell renderer ``(value, col, row) -> "<td>...</td>"``. Cell styling is
+#: a property of the *column*, not of which table it appears in, so every frame
+#: renderer shares one dispatch and a column added to a second table renders the
+#: same way for free. Columns absent here fall back to :func:`_plain_cell`.
+_CELLS = {
+    "Final Action Signal": lambda v, c, r: _action_cell(v),
+    "Technical Posture":   lambda v, c, r: _posture_cell(v),
+    "Fundamental Score":   lambda v, c, r: _heatmap_cell(v, 6, _GREENS),
+    "Tech Score":          lambda v, c, r: _heatmap_cell(v, len(TECHNICAL_COMPONENTS), _GREENS),
+    "Composite":           lambda v, c, r: _heatmap_cell(v, 1, _RDYLGN, fmt="{:.2f}"),
+}
+
+
+def _render_frame(df: pd.DataFrame, columns: list[str], *, cells: dict | None = None,
+                  headers: dict | None = None) -> str:
+    """Render ``df`` as an HTML table over the ``columns`` allow-list.
+
+    ``columns`` is intersected with the frame's actual columns (so a partial
+    frame degrades to fewer columns rather than raising) and also fixes display
+    order. ``cells`` overrides :data:`_CELLS` per column; ``headers`` renames
+    headers. The shared body of every table section in this module.
+    """
+    cells = _CELLS if cells is None else cells
+    cols = [c for c in columns if c in df.columns]
+    hdr = [html.escape((headers or {}).get(c, c)) for c in cols]
+    rows = [[cells.get(c, _plain_cell)(row[c], c, row) for c in cols]
+            for _, row in df.iterrows()]
+    return _table_raw(hdr, rows)
+
+
 def _render_screener_section(screened_df: pd.DataFrame) -> str:
     if screened_df is None or screened_df.empty:
         return '<p class="empty">No fundamentals passed the screener.</p>'
     df = screened_df.reset_index()
-    cols = [c for c in _SCREENER_COLUMNS if c in df.columns]
-    headers = [html.escape(_SCREENER_HEADERS.get(c, c)) for c in cols]
-    rows = []
-    for _, row in df.iterrows():
-        cells = []
-        for c in cols:
-            text = _fmt_cell(c, row[c])
-            pass_col = _SCREENER_PASS_COLS.get(c)
-            if pass_col in df.columns and bool(row[pass_col]):
-                cells.append(f'<td style="background:{_SCREENER_PASS_BG};'
-                             f'color:{_contrast_text(_SCREENER_PASS_BG)}">{text}</td>')
-            else:
-                cells.append(f"<td>{text}</td>")
-        rows.append(cells)
-    return _table_raw(headers, rows)
+    return _render_frame(df, _SCREENER_COLUMNS, headers=_SCREENER_HEADERS,
+                         cells={c: _screener_cell for c in _SCREENER_PASS_COLS})
 
 
 def _render_technical_screener_section(tech: dict) -> str:
@@ -234,14 +283,14 @@ def _render_technical_screener_section(tech: dict) -> str:
     )
 
     headers = (["Ticker"]
-               + [html.escape(_tech_header(name, fn)) for name, fn in TECHNICAL_COMPONENTS]
+               + [html.escape(_tech_header(c.name, c.predicate)) for c in TECHNICAL_COMPONENTS]
                + ["Tech Score", "Technical Posture"])
 
     rows = []
     for ticker, posture, score, detail in entries:
         cells = [f"<td>{_esc(ticker)}</td>"]
-        for name, _ in TECHNICAL_COMPONENTS:
-            if detail.get(name, False):
+        for c in TECHNICAL_COMPONENTS:
+            if detail.get(c.name, False):
                 cells.append(f'<td style="background:{_SCREENER_PASS_BG};'
                              f'color:{_contrast_text(_SCREENER_PASS_BG)};'
                              f'text-align:center">&#10003;</td>')
@@ -253,31 +302,47 @@ def _render_technical_screener_section(tech: dict) -> str:
     return _table_raw(headers, rows)
 
 
+#: Columns of the Trade Plan table, in display order: the plan columns (derived
+#: from tradeplan.MATRIX_COLUMNS, so they follow a rename) plus the identifying
+#: Ticker/Action. Like _SIGNAL_COLUMNS this is an allow-list — the renderer
+#: intersects it with the frame's actual columns.
+_PLAN_COLUMNS = ["Ticker", "Final Action Signal"] + list(MATRIX_COLUMNS.values())
+
+#: Colour for an R:R below the configured minimum — a plan worth flagging, not
+#: suppressing: the trader still sees the levels and decides.
+_RR_WARN_COLOR = "#f85149"
+
+
+def _render_trade_plan_section(signal_matrix: pd.DataFrame, *, account_size: float,
+                               risk_pct: float, min_rr: float) -> str:
+    """The executable half of the report: entry, stop, target, R:R and size.
+
+    Only Buy and Hold rows appear — a Watch name failed the quality test and
+    carries no plan. The sizing assumptions are stated inline so a share count is
+    never mistaken for a real position.
+    """
+    if signal_matrix is None or signal_matrix.empty:
+        return '<p class="empty">No signals generated.</p>'
+    if "Final Action Signal" not in signal_matrix.columns:
+        return '<p class="empty">No trade plan available.</p>'
+
+    df = signal_matrix[signal_matrix["Final Action Signal"].isin(("Buy", "Hold"))]
+    if df.empty:
+        return '<p class="empty">Nothing passed the quality screen.</p>'
+
+    note = (f'<p class="note">Sized for an account of '
+            f'<strong>{account_size:,.0f}</strong> risking '
+            f'<strong>{risk_pct:.2%}</strong> per trade. Entry is the last close; '
+            f'fills are assumed at the next open. R:R below {min_rr:.1f} is '
+            f'flagged in red.</p>')
+    return note + _render_frame(df, _PLAN_COLUMNS,
+                                cells={**_CELLS, MATRIX_COLUMNS["rr"]: _rr_cell(min_rr)})
+
+
 def _render_signal_matrix_section(signal_matrix: pd.DataFrame) -> str:
     if signal_matrix is None or signal_matrix.empty:
         return '<p class="empty">No signals generated.</p>'
-    df = signal_matrix
-    cols = [c for c in _SIGNAL_COLUMNS if c in df.columns]
-    tech_max = len(TECHNICAL_COMPONENTS)
-    rows = []
-    for _, row in df[cols].iterrows():
-        cells = []
-        for c in cols:
-            value = row[c]
-            if c == "Final Action Signal":
-                cells.append(_action_cell(value))
-            elif c == "Technical Posture":
-                cells.append(_posture_cell(value))
-            elif c == "Fundamental Score":
-                cells.append(_heatmap_cell(value, 6, _GREENS))
-            elif c == "Tech Score":
-                cells.append(_heatmap_cell(value, tech_max, _GREENS))
-            elif c == "Composite":
-                cells.append(_heatmap_cell(value, 1, _RDYLGN, fmt="{:.2f}"))
-            else:
-                cells.append(f"<td>{_fmt_cell(c, value)}</td>")
-        rows.append(cells)
-    return _table_raw(cols, rows)
+    return _render_frame(signal_matrix, _SIGNAL_COLUMNS)
 
 
 def _render_fig(fig, div_id: str) -> str:
@@ -437,6 +502,7 @@ tr:nth-child(even) td:not([style]){background:#11151c}
 td.empty-cell{color:#8b949e;text-align:center}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.85em;margin:2px;font-weight:600}
 .empty{color:#8b949e;font-style:italic}
+.note{color:#8b949e;font-size:0.85rem;margin:0 0 0.6rem}
 .dashboard{margin:1rem 0;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:0.5rem}
 .profile-card{border:1px solid #30363d;border-radius:8px;padding:1rem;margin:1rem 0;background:#161b22}
 .profile-header h3{margin-bottom:0.2rem;color:#f0f6fc}
@@ -446,14 +512,6 @@ td.empty-cell{color:#8b949e;text-align:center}
 .profile-group ul{margin:0;padding-left:1.2rem}
 """
 
-_SECTIONS = [
-    ("screener", "Fundamental Screener"),
-    ("tech_screener", "Technical Screener"),
-    ("signals", "Combined Signal Matrix"),
-    ("dashboards", "Top Technical Dashboards"),
-    ("profiles", "Fundamental Profiles"),
-    ("overview", "Daily Market Overview"),
-]
 
 
 def build_full_report(
@@ -465,6 +523,9 @@ def build_full_report(
     *,
     selected: list[str],
     generated_at: str,
+    account_size: float = config.DEFAULT_ACCOUNT_SIZE,
+    risk_pct: float = config.DEFAULT_RISK_PCT,
+    min_rr: float = config.MIN_RR,
 ) -> str:
     """Render the full combined report as one self-contained HTML string.
 
@@ -474,19 +535,36 @@ def build_full_report(
     pre-fetched list of :func:`stockanalysis.profile.build_profile` dicts
     for ``selected``, in the same order; ``overview_data`` is
     :func:`stockanalysis.overview.daily_overview`'s return dict.
+
+    ``account_size``/``risk_pct``/``min_rr`` are presentation-only here: the
+    share counts were already computed upstream by
+    :func:`stockanalysis.signals.generate_signals`. They are passed so the Trade
+    Plan section can state the assumptions it is reporting and flag thin R:R.
     """
-    nav = "".join(f'<a href="#{anchor}">{title}</a>' for anchor, title in _SECTIONS)
-    body_sections = [
-        _render_screener_section(screened_df),
-        _render_technical_screener_section(tech),
-        _render_signal_matrix_section(signal_matrix),
-        _render_dashboards_section(tech, selected),
-        _render_profiles_section(profiles),
-        _render_overview_section(overview_data),
+    # One list, so anchor / title / body can't drift apart. They used to be two
+    # lists joined by zip(), which silently dropped a section if you added to one
+    # and forgot the other.
+    sections = [
+        ("screener", "Fundamental Screener",
+         _render_screener_section(screened_df)),
+        ("tech_screener", "Technical Screener",
+         _render_technical_screener_section(tech)),
+        ("signals", "Combined Signal Matrix",
+         _render_signal_matrix_section(signal_matrix)),
+        ("trade_plan", "Trade Plan",
+         _render_trade_plan_section(signal_matrix, account_size=account_size,
+                                    risk_pct=risk_pct, min_rr=min_rr)),
+        ("dashboards", "Top Technical Dashboards",
+         _render_dashboards_section(tech, selected)),
+        ("profiles", "Fundamental Profiles",
+         _render_profiles_section(profiles)),
+        ("overview", "Daily Market Overview",
+         _render_overview_section(overview_data)),
     ]
+    nav = "".join(f'<a href="#{a}">{t}</a>' for a, t, _ in sections)
     sections_html = "".join(
-        f'<section id="{anchor}"><h2>{title}</h2>{content}</section>'
-        for (anchor, title), content in zip(_SECTIONS, body_sections)
+        f'<section id="{a}"><h2>{t}</h2>{content}</section>'
+        for a, t, content in sections
     )
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"

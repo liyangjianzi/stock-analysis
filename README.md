@@ -164,7 +164,12 @@ notebooks/
   pickup). Components live in `TECHNICAL_COMPONENTS`; the max follows its
   length, and posture is Bullish at `score ≥ ⌈⅔·max⌉` (≥4 of 5).
 - **Composite:** `0.70·(fund/6) + 0.30·(tech/N)` (N = len(TECHNICAL_COMPONENTS),
-  default 5) → **Buy ≥ 0.60 · Hold ≥ 0.40 · Watch < 0.40**.
+  default 5). The composite **ranks** the matrix; it no longer decides the action.
+  The action comes from `signals.decide_action`: **Buy** = fundamental score ≥
+  `--fund-min` (default 4) **and** every component in `signals.GATE_COMPONENTS`
+  (`trend_up`, `pullback_zone`, `turn_confirm`) fires; **Hold** = quality without
+  the entry gate; **Watch** = below `--fund-min`. Every non-Watch row also carries
+  a trade plan (entry / stop / target / R:R / shares) — see `tradeplan.py`.
 
 A strong company in a poor tape lands in *Hold/Watch*; a fundamentally weak name
 never reaches *Buy* on technicals alone.

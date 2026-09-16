@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from conftest import pullback_ohlcv
 from stockanalysis.backtest import posture_timeline, entry_events, forward_returns, aggregate_event_stats, yearly_means, simulate_portfolio
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import compute_technical_posture, TECHNICAL_COMPONENTS
@@ -112,9 +113,24 @@ def test_posture_timeline_composite_uses_fundamentals(uptrend_ohlcv):
     high = posture_timeline(uptrend_ohlcv, mode="composite", fundamental_score=6)
 
     assert set(low["label"]).issubset({"Buy", "Hold", "Watch"})
-    # With a strong uptrend, raising the fundamental score can only push the
-    # composite up, so the count of "Buy" labels must be >= the low-score count.
+    # Below fund_min nothing is ownable, so every bar is a Watch...
+    assert set(low["label"]) == {"Watch"}
+    # ...and raising the score can only promote bars, never demote them.
     assert (high["label"] == "Buy").sum() >= (low["label"] == "Buy").sum()
+
+
+def test_posture_timeline_composite_shares_the_live_gate():
+    """The backtest must replay the shipped decision rule, not its own copy.
+
+    A pullback series that fires the entry gate produces a Buy on its last bar;
+    the same series with a score below fund_min produces a Watch.
+    """
+    hist = pullback_ohlcv()
+    buy = posture_timeline(hist, mode="composite", fundamental_score=6, min_bars=60)
+    watch = posture_timeline(hist, mode="composite", fundamental_score=0, min_bars=60)
+
+    assert buy["label"].iloc[-1] == "Buy"
+    assert watch["label"].iloc[-1] == "Watch"
 
 
 def test_entry_events_collapse_consecutive_bullish():
