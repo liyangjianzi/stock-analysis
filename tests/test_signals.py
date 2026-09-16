@@ -281,29 +281,32 @@ def test_top_tickers_on_empty_matrix_returns_empty_list():
 
 # --- posture cutoff ------------------------------------------------------------
 
-def test_default_bullish_cutoff_is_four_of_five():
-    """The documented contract (CLAUDE.md, notebook §3): Bullish at >=4 of 5."""
-    assert math.ceil(DEFAULT_BULL_FRAC * len(TECHNICAL_COMPONENTS)) == 4
+def test_default_bullish_cutoff_is_three_of_five():
+    """Calibrated against the measured score distribution: >=3 fires on ~9.4% of
+    bars. The old >=4 fired on 0.9% — an event, not a posture."""
+    assert math.ceil(DEFAULT_BULL_FRAC * len(TECHNICAL_COMPONENTS)) == 3
 
 
-def test_default_bearish_cutoff_is_one_of_five():
-    """Mirror of the Bullish contract: Bearish at <=1 of 5."""
-    assert math.floor(DEFAULT_BEAR_FRAC * len(TECHNICAL_COMPONENTS)) == 1
+def test_default_bearish_cutoff_is_zero_of_five():
+    """Bearish only when nothing fires (~4.9% of bars). The old <=1 covered
+    55.5% of all bars, so the label carried no information."""
+    assert math.floor(DEFAULT_BEAR_FRAC * len(TECHNICAL_COMPONENTS)) == 0
 
 
 def test_posture_boundaries_for_the_default_registry():
     assert _posture(5, 5) == "Bullish"
-    assert _posture(4, 5) == "Bullish"      # bull cutoff, inclusive
-    assert _posture(2, 5) == "Neutral"
-    assert _posture(1, 5) == "Bearish"      # bear cutoff, inclusive
-    assert _posture(0, 5) == "Bearish"
+    assert _posture(4, 5) == "Bullish"
+    assert _posture(3, 5) == "Bullish"      # bull cutoff, inclusive
+    assert _posture(2, 5) == "Neutral"      # the modal band (85.8% of bars)
+    assert _posture(1, 5) == "Neutral"
+    assert _posture(0, 5) == "Bearish"      # bear cutoff: nothing fired
 
 
 def test_posture_bands_rescale_with_the_component_count():
     """Both cutoffs derive from max_score, so a resized registry rescales them."""
-    assert [_posture(s, 3) for s in range(4)] == ["Bearish", "Bearish", "Bullish", "Bullish"]
-    assert [_posture(s, 9) for s in (0, 3, 4, 5, 6, 9)] == [
-        "Bearish", "Bearish", "Neutral", "Neutral", "Bullish", "Bullish"]
+    assert [_posture(s, 3) for s in range(4)] == ["Bearish", "Neutral", "Bullish", "Bullish"]
+    assert [_posture(s, 9) for s in (0, 1, 4, 5, 6, 9)] == [
+        "Bearish", "Neutral", "Neutral", "Bullish", "Bullish", "Bullish"]
 
 
 def test_posture_of_an_empty_registry_is_bearish():

@@ -135,14 +135,32 @@ GATE_COMPONENTS: tuple[str, ...] = tuple(
 #: Minimum fundamental score (of 6) for a name to be considered ownable at all.
 DEFAULT_FUND_MIN = 4
 
-#: Default posture cutoff: Bullish once at least 4 of the 5 default components fire
-#: (score >= ceil(bull_frac * N); 2/3 -> ceil(3.33)=4 for N=5).
-DEFAULT_BULL_FRAC = 2 / 3
+# Posture cutoffs, calibrated against the score's *measured* distribution rather
+# than assumed to be symmetric. Point-in-time replay over 10,523 ticker-bars
+# (the 21-name watchlist, 3y) gives:
+#
+#     0/5  4.9% | 1/5 50.6% | 2/5 35.1% | 3/5  8.5% | 4/5 0.8% | 5/5 0.1%
+#
+# The registry is a *conjunctive* pullback pattern, so the score piles up at 1-2
+# (85.7% of bars) and the top of the range is nearly unreachable. The original
+# mirrored 1/3 and 2/3 fractions assumed the roughly symmetric spread you get
+# from independent confirmations; applied to this distribution they labelled
+# 55.5% of all bars "Bearish" and 0.9% "Bullish" — a label that fires on the
+# majority of days carries no information, and one that fires twice a year per
+# name isn't a posture, it's an event.
+#
+# Recalibrated so both tail labels mean something: Bearish only when *nothing*
+# fires (4.9%), Bullish once the setup is materially assembled (9.4%). Neutral
+# is deliberately broad (85.8%) because that is the honest answer on most days —
+# the label cannot carry more information than the underlying score does.
+#
+# Both still derive from len(components), so a resized registry rescales them.
 
-#: Default Bearish cutoff, the mirror of :data:`DEFAULT_BULL_FRAC`: Bearish at no
-#: more than 1 of the 5 default components (score <= floor(bear_frac * N);
-#: 1/3 -> floor(1.67)=1 for N=5).
-DEFAULT_BEAR_FRAC = 1 / 3
+#: Bullish at ``score >= ceil(bull_frac * N)``; 0.55 -> ceil(2.75)=3 for N=5.
+DEFAULT_BULL_FRAC = 0.55
+
+#: Bearish at ``score <= floor(bear_frac * N)``; 0.0 -> 0, i.e. no component fired.
+DEFAULT_BEAR_FRAC = 0.0
 
 
 def _posture(score: int, max_score: int, bull_frac: float = DEFAULT_BULL_FRAC,
