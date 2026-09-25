@@ -1,0 +1,11 @@
+=== TRAIN (2016-2021): gate composition ===
+  base (trend+pull+turn)           n= 3643  win=51.41%  exp=+0.0908R  CI=[+0.0480,+0.1337]  clustCI=[-0.0057,+0.1874]   [0s]
+  +dip_deep                        n= 1456  win=51.85%  exp=+0.1169R  CI=[+0.0461,+0.1878]  clustCI=[-0.0024,+0.2362]   [0s]
+  +vol_pattern                     n=  196  win=46.94%  exp=-0.0129R  CI=[-0.1858,+0.1599]  clustCI=[-0.2402,+0.2144]   [0s]
+  +dip+vol (all five)              n=   82  win=52.44%  exp=+0.2226R  CI=[-0.0733,+0.5185]  clustCI=[-0.1513,+0.5965]   [0s]
+  -trend_up (pull+turn)            n=44053  win=55.38%  exp=+0.1325R  CI=[+0.1203,+0.1447]  clustCI=[+0.0531,+0.2120]   [630s]
+  -pullback_zone (trend+turn)      n=45939  win=48.80%  exp=+0.0948R  CI=[+0.0805,+0.1090]  clustCI=[+0.0168,+0.1727]   [325s]
+  -turn_confirm (trend+pull)       n=16288  win=50.80%  exp=+0.0886R  CI=[+0.0666,+0.1105]  clustCI=[+0.0045,+0.1726]   [235s]
+  dip+turn only                    n=16594  win=54.54%  exp=+0.1358R  CI=[+0.1129,+0.1587]  clustCI=[+0.0339,+0.2377]   [9s]
+  trend+dip+turn                   n= 5069  win=53.03%  exp=+0.1016R  CI=[+0.0521,+0.1512]  clustCI=[+0.0143,+0.1889]   [0s]
+cache size 201748

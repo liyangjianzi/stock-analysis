@@ -1,0 +1,6 @@
+real entries: 7288
+
+GATE           n= 7253  exp=+0.0305R  win=48.19%  clustCI=[-0.0377, +0.0987]
+A date-matched   null exp=+0.0420R (sd 0.0174, range [+0.0098,+0.0703], 12 reps)  win=49.21%   gate is z=-0.66 vs this null
+B ticker-matched null exp=+0.0732R (sd 0.0190, range [+0.0436,+0.1122], 12 reps)  win=50.14%   gate is z=-2.25 vs this null
+C unconditional  null exp=+0.0628R (sd 0.0173, range [+0.0198,+0.0811], 12 reps)  win=50.17%   gate is z=-1.87 vs this null

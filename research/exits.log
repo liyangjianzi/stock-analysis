@@ -1,0 +1,45 @@
+=== BASELINE ===
+plan (resistance target)    TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+
+=== fixed R-multiple target (plan stop kept) ===
+target = 1.0R               TR n= 3643 exp=+0.0759 win=55.2%  TE n= 3610 exp=-0.0373 win=49.2%  clustCI=[-0.1172,+0.0427]  hold= 8.3b
+target = 1.5R               TR n= 3643 exp=+0.1529 win=47.8%  TE n= 3610 exp=-0.0164 win=40.7%  clustCI=[-0.1207,+0.0879]  hold=11.4b
+target = 2.0R               TR n= 3643 exp=+0.2064 win=42.8%  TE n= 3610 exp=-0.0262 win=34.6%  clustCI=[-0.1468,+0.0944]  hold=13.9b
+target = 2.5R               TR n= 3643 exp=+0.2669 win=39.6%  TE n= 3610 exp=-0.0080 win=31.2%  clustCI=[-0.1414,+0.1255]  hold=16.1b
+target = 3.0R               TR n= 3643 exp=+0.3080 win=37.5%  TE n= 3610 exp=-0.0089 win=28.4%  clustCI=[-0.1537,+0.1358]  hold=17.9b
+target = 4.0R               TR n= 3643 exp=+0.3758 win=34.8%  TE n= 3610 exp=+0.0187 win=25.5%  clustCI=[-0.1477,+0.1850]  hold=20.7b
+
+=== trailing ATR stop, no target ===
+trail 1.0 ATR               TR n= 3643 exp=+0.0468 win=36.0%  TE n= 3610 exp=-0.0611 win=33.0%  clustCI=[-0.1374,+0.0152]  hold= 5.3b
+trail 1.5 ATR               TR n= 3643 exp=+0.1277 win=37.3%  TE n= 3610 exp=-0.0519 win=33.0%  clustCI=[-0.1503,+0.0464]  hold= 8.4b
+trail 2.0 ATR               TR n= 3643 exp=+0.2195 win=37.3%  TE n= 3610 exp=-0.0971 win=30.9%  clustCI=[-0.2036,+0.0094]  hold=11.7b
+trail 2.5 ATR               TR n= 3643 exp=+0.2680 win=37.1%  TE n= 3610 exp=-0.0903 win=28.0%  clustCI=[-0.2222,+0.0415]  hold=14.9b
+trail 3.0 ATR               TR n= 3643 exp=+0.3132 win=35.6%  TE n= 3610 exp=-0.0431 win=27.1%  clustCI=[-0.1985,+0.1123]  hold=17.8b
+
+=== stop width: fallback ATR multiple ===
+atr_stop_mult=1.0           TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+atr_stop_mult=1.5           TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+atr_stop_mult=2.0           TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+atr_stop_mult=2.5           TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+atr_stop_mult=3.0           TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+
+=== stop width: buffer under structure ===
+stop_buffer_atr=0.0         TR n= 3626 exp=+0.0549 win=46.5%  TE n= 3589 exp=-0.0970 win=39.8%  clustCI=[-0.2094,+0.0155]  hold= 7.2b
+stop_buffer_atr=0.25        TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+stop_buffer_atr=0.5         TR n= 3647 exp=+0.0887 win=55.6%  TE n= 3621 exp=-0.0216 win=48.7%  clustCI=[-0.1144,+0.0711]  hold= 9.5b
+stop_buffer_atr=0.75        TR n= 3649 exp=+0.1135 win=59.2%  TE n= 3627 exp=-0.0291 win=51.5%  clustCI=[-0.1175,+0.0592]  hold=10.5b
+stop_buffer_atr=1.0         TR n= 3651 exp=+0.1215 win=62.8%  TE n= 3628 exp=-0.0223 win=54.3%  clustCI=[-0.1097,+0.0651]  hold=11.5b
+
+=== minimum target distance ===
+min_target_atr=0.5          TR n= 3643 exp=+0.0593 win=56.4%  TE n= 3610 exp=-0.0360 win=51.8%  clustCI=[-0.1128,+0.0408]  hold= 6.6b
+min_target_atr=1.0          TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+min_target_atr=1.5          TR n= 3643 exp=+0.1373 win=47.7%  TE n= 3610 exp=-0.0430 win=39.7%  clustCI=[-0.1444,+0.0584]  hold= 9.8b
+min_target_atr=2.0          TR n= 3643 exp=+0.1822 win=44.7%  TE n= 3610 exp=-0.0398 win=35.9%  clustCI=[-0.1534,+0.0738]  hold=11.1b
+min_target_atr=3.0          TR n= 3643 exp=+0.2273 win=41.5%  TE n= 3610 exp=-0.0233 win=32.5%  clustCI=[-0.1583,+0.1118]  hold=13.5b
+
+=== max holding period ===
+max_hold=10 bars            TR n= 3643 exp=+0.0510 win=50.9%  TE n= 3610 exp=-0.0341 win=46.0%  clustCI=[-0.1204,+0.0521]  hold= 5.7b
+max_hold=21 bars            TR n= 3643 exp=+0.0883 win=51.5%  TE n= 3610 exp=-0.0352 win=45.2%  clustCI=[-0.1257,+0.0554]  hold= 7.3b
+max_hold=42 bars            TR n= 3643 exp=+0.0879 win=51.3%  TE n= 3610 exp=-0.0321 win=45.0%  clustCI=[-0.1246,+0.0604]  hold= 8.1b
+max_hold=63 bars            TR n= 3643 exp=+0.0908 win=51.4%  TE n= 3610 exp=-0.0304 win=44.9%  clustCI=[-0.1237,+0.0628]  hold= 8.3b
+max_hold=126 bars           TR n= 3643 exp=+0.0981 win=51.5%  TE n= 3610 exp=-0.0274 win=45.0%  clustCI=[-0.1212,+0.0663]  hold= 8.5b
