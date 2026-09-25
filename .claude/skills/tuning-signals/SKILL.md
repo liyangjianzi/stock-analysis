@@ -21,36 +21,94 @@ Gate entries, plan exits, 503 S&P 500 names, 10y (`b93b46d`):
 |---|---|
 | Trades / win rate | 7,253 / 48.2% |
 | Expectancy | **+0.030R** |
-| SE, t, p | 0.0155, 1.97, **0.049** |
-| 95% CI | **[+0.000, +0.061]R** |
+| Naive SE, t, p | 0.0155, 1.97, 0.049 — **do not quote this one, see below** |
+| **Cluster-robust SE, t, p** | **0.0348, 0.88, 0.39** (clustered by calendar month) |
+| **95% CI** | **[−0.038, +0.099]R** — a month-block bootstrap agrees: [−0.036, +0.098], p=0.386 |
+| Train / test halves | 2016–21: **+0.091R** (n=3,643) · 2022–26: **−0.030R** (n=3,610) |
 | Positive years | **6 of 11** — negative in 2016 (n=5), **2021, 2022, 2023** consecutively, and 2026 (partial) |
 | Gate fire rate | **0.66%** of bars (broad universe; a tech-heavy 21-name sample gives 1.12% — don't quote that one) |
 | Score distribution | `0/5 4.9% · 1/5 50.6% · 2/5 35.1% · 3/5 8.5% · 4/5 0.8% · 5/5 0.1%` (21-name replay, 10,523 bars — the posture cutoffs are calibrated to *this*, so re-derive it if you change the registry) |
 
-Any variant must beat **this**, on the same data, by more than its own error bar.
+### The benchmark is not zero — it is a random entry
+
+Running **randomly chosen bars** through the same trade plan and exit walk gives:
+
+| Null (same plan, same exits, 12 reps) | Expectancy | Win rate |
+|---|---|---|
+| Unconditional random ticker + bar | **+0.063R** | 50.2% |
+| Date-matched (real dates, random ticker) | +0.042R | 49.2% |
+| Ticker-matched (real ticker, random bar) | +0.073R | 50.1% |
+| **The shipped gate** | **+0.030R** | 48.2% |
+
+**The gate is no better than random, and its point estimate sits below it.** The
+12-rep study above put it at z = −2.25 against the ticker-matched null (−1.87
+unconditional), but that z divides by the spread *between null draws* (sd 0.019R)
+and ignores the gate's own sampling error. Clustered by month — how the shipped
+`edge vs random` line computes it — the edge is **−0.050R, 95% CI [−0.140, +0.040],
+p=0.28** (2026-09-25 re-verification, 1 rep): below random, but not distinguishably so. **Don't quote "worse than
+random" or z = −2.25.** Either way the positive expectancy in this repo comes from
+the trade plan's stop/target geometry, not from the entry rule, which adds nothing
+to it. So "beat +0.030R" is the wrong bar. **A variant must beat ≈+0.06R, the
+random-entry null, measured on the same period.** Anything that can't clear it is
+indistinguishable from picking bars with a dice roll, however good its backtest looks.
+
+Only ~0.01R of the gap is execution (gate entries gap up +0.114% overnight to the
+fill vs +0.056% for random bars, t=3.5 — real but small). The rest is selection —
+the gate's bars score below average, though the clustered CI can't rule out that
+the gap is zero.
+
+Any variant must beat **that null**, on the same data, by more than its own error bar.
+
+**The honest read of that table: the edge is not distinguishable from zero.** The
+per-trade SE treats 7,253 correlated entries as 7,253 independent draws; they are
+really ~118 monthly clusters, and clustering triples the SE and drops t from 1.97
+to 0.88. The `p=0.049` that earlier passes reported is an artifact of the wrong
+error bar, not a marginal result. Everything below is therefore about *not making
+it worse*, not about finding the number that unlocks it.
 
 Verify these against a fresh run before trusting them — they were measured on
 2026-09-15 and the cache moves. `git log --oneline -- src/stockanalysis/signals.py`
 will show whether the engine changed underneath them.
 
+**Last re-verified 2026-09-25** — engine unchanged, cache rebuilt with `--full` after
+the adjustment-drift fix, bars cut at 2026-09-24: 7,262 trades / 48.1%, **+0.030R,
+95% CI [−0.039, +0.098], p=0.39** (117 months); halves +0.091R (n=3,624) / −0.031R
+(n=3,638); 6 of 10 years positive (the 10y window has slid past 2016; still
+negative 2021–23 and 2026). Same conclusions. Two things move between re-runs and
+are not signal: the 1-rep random null (+0.073 → +0.075 → +0.080R across runs —
+pass `--null-reps 12` if the edge line is what you're reading), and a few trades
+per year from Yahoo restating adjusted history (COR, IVZ, MCK moved up to 1%).
+
 ## Required workflow
 
-1. **Reproduce the baseline first.** If your harness doesn't return +0.030R on the
-   full universe, the harness is wrong — fix that before believing any variant.
-2. **Split before you look.** Tune on 2016–2021, confirm on 2022–2026. Report both.
-   A variant that only works in-sample is not a variant, it is a coincidence.
-3. **Report the interval, never the point estimate.** `expectancy ± 1.96·SE`.
-   With ~7k trades SE ≈ 0.016R, so an improvement under ~+0.03R is inside the noise.
-4. **Require a plateau.** Sweep each threshold across ≥5 neighbouring values. If
-   RSI3<25 works and <22 / <28 don't, you found noise, not an edge.
-5. **Count effective sample, not trades.** 7,253 trades cluster into ~118 months
-   across correlated names. Divide by cluster, not by row.
+The shipped backtest now does the arithmetic for steps 1–3 and 5 — use it rather
+than a hand-rolled harness, and quote what it prints:
 
 ```bash
-stock-analysis backtest --exits plan --universe data/universe_sp500.csv   # ~6 min
+stock-analysis backtest --exits plan --universe data/universe_sp500.csv --period 10y --split 2022-01-01   # ~7 min
 ```
-Search variants in-memory instead — `compute_technical_posture(df, components=...)`
-accepts a custom registry, so no source edit is needed to price an idea.
+
+1. **Reproduce the baseline first.** It must print ~+0.030R on the full universe.
+   If your variant's harness doesn't reproduce that, the harness is wrong — fix it
+   before believing any variant.
+2. **Split before you look.** Tune on 2016–2021, confirm on 2022–2026. The
+   `halves (split 2022-01-01)` line is exactly this; report both halves.
+   A variant that only works in-sample is not a variant, it is a coincidence.
+3. **Report the interval, never the point estimate.** The printed `95% CI` is
+   clustered by month — SE ≈ 0.035R on ~7k trades, so an improvement under
+   ~+0.07R is inside the noise. (The naive per-trade SE, 0.016R, is the wrong one.)
+4. **Require a plateau.** Sweep each threshold across ≥5 neighbouring values. If
+   RSI3<25 works and <22 / <28 don't, you found noise, not an edge.
+5. **Beat the random entry, not zero.** The `edge vs random` line compares against
+   the same plan walked from random bars of the same tickers. A variant whose
+   verdict is not `beats random entry` has not shown an edge, however positive
+   its expectancy.
+
+Search variants in-memory instead of editing source —
+`compute_technical_posture(df, components=...)` accepts a custom registry, and
+`backtest.build_results_from_prices(prices, exits="plan", ...)` returns the same
+`robustness` block the CLI prints. `research/` holds the vectorized 09-16 harness
+if a sweep needs to be faster than that.
 
 ## Already tested — do not re-propose
 
@@ -60,11 +118,108 @@ accepts a custom registry, so no source edit is needed to price an idea.
 - **Fixed-horizon forward returns** as evidence. They showed +5.27% at 1m for a
   setup worth +0.03R, because they ignore the stop. Use `--exits plan`.
 
+### The 2026-09-16 pass — 8 entry variants, 26 exit variants, nothing survived
+
+Train 2016–21 / test 2022–26, cluster-robust CIs. **Every** variant was positive on
+train (+0.09R to +0.24R) and collapsed to ~0 on test. That uniformity *is* the
+finding: 2016–21 was a bull regime in which nearly any confirming-bar entry paid,
+so a train-only number measures the regime, not the rule.
+
+| Variant | Train | Test |
+|---|---|---|
+| baseline gate | +0.091 | **−0.030** |
+| + breadth filter (skip entries when <72% of the universe is above its EMA200) | +0.219 | **−0.012** |
+| `trend_up` gain 2% → 0% (no trend-slope requirement) | +0.109 | **−0.029** |
+| `pullback_zone` 1.0 → 0.5 ATR | +0.128 | +0.029 |
+| `dip_deep` promoted to gating | +0.117 | +0.003 |
+| drop `trend_up` (pullback + turn only) | +0.133 | +0.010 |
+| drop `trend_up`, + breadth filter | +0.241 | +0.022 |
+| `dip_deep` + `turn_confirm` only | +0.136 | +0.033 |
+
+Specifically **do not re-propose**:
+
+- **A market-regime / breadth filter.** Train says the edge lives in *weak* breadth
+  (buy dips in a washed-out tape, +0.22R) and that filtering *for* strong breadth
+  monotonically destroys it. None of it replicates: the same filter is −0.012R on
+  test. The direction is not even stable — the low-breadth years in train (2018–20)
+  were good and the low-breadth years in test (2022) were the worst in the sample.
+- **`trend_up`'s two knobs (`ema_gain`, `gain_bars`).** Swept 0–7% and 10–60 bars.
+  Test expectancy is *flat at ≈ −0.03R across the entire range* — the knobs carry
+  no information. Train shows a tidy monotone rise with tighter `ema_gain` and a
+  peak at `gain_bars=10` (+0.205R); that peak is the single worst cell out of
+  sample (−0.093R). Textbook peak-not-plateau.
+- **Tightening `pullback_zone`.** This is the *only* gradient that replicated in
+  shape — expectancy falls monotonically as the zone widens, in both halves — and
+  it still fails. Bucketing entries by extension above EMA50, the tightest bucket
+  (≤0.25 ATR) is +0.111R pooled with a clustered CI of [+0.018, +0.204], the one
+  interval in the whole study excluding zero. But out of sample alone it is
+  +0.087R, **p=0.195**, and the underlying continuous relationship does not exist:
+  Spearman(extension, R) = −0.011 on train and **−0.0045 on test** (p=0.68). A
+  monotone bucket chart with no rank correlation behind it is a bucketing artifact.
+- **Exit-side tuning of any kind** — fixed R-multiple targets (1R–4R), ATR trailing
+  stops (1.0–3.0 ATR), `stop_buffer_atr` (0–1.0), `min_target_atr` (0.5–3.0),
+  `max_hold` (10–126 bars). All 26 are ≤0 on test. Exits are the **most seductive
+  overfit surface in this repo**: train expectancy can be dialled from +0.05R to
+  **+0.38R** (target = 4R) or +0.31R (3-ATR trail) purely by choosing an exit, with
+  no out-of-sample effect whatsoever. A train-only exit number proves nothing.
+
+### Swapping in different indicators — also tested, also dead
+
+The natural next proposal after tuning fails is "use different indicators."
+Seven structurally distinct families were run as standalone gates through the
+identical plan and exits (train / test, against a period-matched random null):
+
+| Entry family | Train | Test |
+|---|---|---|
+| *random null (3 draws)* | *+0.093 … +0.112* | *+0.005 … +0.021* |
+| shipped gate | +0.091 | **−0.030** |
+| Donchian-20 breakout | +0.100 | +0.005 |
+| 52-week-high momentum | +0.080 | −0.018 |
+| MACD cross up | +0.122 | −0.011 |
+| 2-sigma band reversion | +0.117 | +0.025 |
+| RSI(14) cross up through 30 | +0.168 | +0.056 |
+| EMA200 + RSI<40 | +0.083 | +0.001 |
+| **cross-sectional 12-1 momentum, top decile** | **+0.065** | **+0.061** |
+
+Every family lands **inside the random-entry null band** on test. The shipped gate
+is the only one below it. Note the train column: the random null itself scores
++0.09 to +0.11 on train, i.e. **better in-sample than the shipped gate** — more
+evidence that a train-only number here measures the 2016–21 regime and nothing else.
+
+The reason is structural, not incidental: RSI, MACD, Stochastic, CCI, Williams %R
+and friends are near-collinear transforms of one price series. Swapping among them
+is a change of coordinates, not new information. **Do not re-propose a different
+oscillator, a different moving-average pair, or a different band.**
+
+**The one open lead** is the last row: cross-sectional 12-1 momentum is the only
+rule whose test expectancy matched its train expectancy (+0.065 → +0.061) instead
+of decaying ~0.09 like everything else, and it is the only family that reads
+information from *outside* the single ticker's OHLCV. It is **not** a confirmed
+edge — pooled clustered CI [−0.003, +0.129] includes zero, 7 of 10 years positive,
+and the cutoff sweep is flat on train (+0.065…+0.086 across 0.70–0.98) while
+rising only on test, which is the signature of a one-half threshold. Treat it as
+the hypothesis worth a proper study, not as a result. Note also that it fires ~13
+times a day across 503 names: that is a portfolio-scale statistical strategy, not
+a 10-slot swing system.
+
+### Two structural facts found along the way
+
+- **`config.ATR_STOP_MULT` is unreachable.** Sweeping it 1.0 → 3.0 returns
+  *bit-identical* results, because **100.00%** of 7,253 entries take the structural
+  stop — with `MIN_STOP_ATR=0.5` and 20 levels searched over 252 bars there is
+  always a qualifying support. The ATR fallback never fires on this universe.
+  (`min_target_atr`'s 2R fallback fires 0.86% of the time.) Treat it as dead
+  config: don't "tune" it, and don't believe a result that claims it mattered.
+- **30.2% of plans have a planned R:R below 1.0** (median 1.30). The gate finds
+  entries whose nearest structure is worse than break-even on paper. Filtering
+  those out is the already-dead R:R floor above — the point here is only that a
+  low median R:R is the *normal* state of this plan, not a bug to chase.
+
 ## Rationalization table
 
 | Excuse | Reality |
 |---|---|
-| "p=0.049 is significant" | With ~8 knobs and one dataset, p just under 0.05 is the *expected* output of searching. It is not evidence. |
+| "p=0.049 is significant" | It was never 0.049. Clustered by month it is **0.39**. And with ~8 knobs and one dataset, p just under 0.05 is the *expected* output of searching even when it is computed correctly. |
 | "The point estimate went up" | 142 trades gave +0.034R; 7,253 gave +0.030R. Point estimates barely moved — only the CI shrank. Report the CI. |
 | "I only changed one parameter" | You chose *which* one after seeing the data. That is still a search. |
 | "It's better in 8 of 11 years" | Say which years, and whether the losing ones are consecutive. 2021–23 being all-negative is regime dependence, not variance. |

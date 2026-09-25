@@ -43,9 +43,24 @@ correction. `scripts/run_daily.sh` runs this after the pipeline, non-fatally.
 The cache (`data/cache/prices.db`) is gitignored — a rebuildable artifact. Its bars
 **must** come from the same `auto_adjust=True`, tz-naive path as `fetch_stock_data`
 (`ingest.fetch_bulk_prices` pins this); a different adjustment convention would
-silently backtest prices the live pipeline never sees. The S&P 500 list is
+silently backtest prices the live pipeline never sees. That holds **over time**
+too: a dividend or split rescales every earlier bar, but a top-up window only
+rewrites its own. So `cache.refresh` (which the CLI calls — write fetched bars
+through it, not `upsert_bars` directly) upserts a top-up only if `cache.drifted`
+finds its closes agree with the cached ones on shared dates (newest cached bar excluded — it may
+have been intraday); a ticker that disagrees is refetched whole and swapped in by
+`cache.replace_bars` (as is everything under `--full`), never stitched onto the
+old basis. Before this check, APH drifted ×0.998451 in a week of nightly top-ups. The S&P 500 list is
 **current constituents only** — delisted names are absent, so results still carry
 survivorship bias, just far less sector concentration than the 21-name watchlist.
+
+`--exits plan` never prints a bare expectancy. Every run also reports the 95% CI
+**clustered by entry month** (7k correlated trades are ~118 draws, not 7k), the two
+halves either side of `--split YYYY-MM-DD` (default: the calendar midpoint) with
+the positive-year count, and the **edge over a random-entry null** — the same plan
+and exits walked from random bars of the same tickers (`--null-reps N`, default 1;
+0 skips it, ~1 min on 503 names). The null is the bar, not zero: the stop/target
+geometry is positive on its own. The workbook gains `Robustness` + `Yearly R` sheets.
 
 ### Sanity-checking edits without network
 - **Test suite (fully offline):** `pip install -e ".[test]"` then `pytest`. The
@@ -70,8 +85,9 @@ Module map (one responsibility each; core modules never import IPython/`display`
 | `screener.py` | `screen_fundamentals` (0–6) |
 | `indicators.py` | `add_indicators` + `fit_regression_channel` + `find_support_resistance` + `value_at` (the one NaN-safe reader of the column contract, shared by the signal predicates and the trade plan) |
 | `signals.py` | `compute_technical_posture` (registry-driven 0–N, default 5) + `decide_action` (quality test + entry gate) + `generate_signals` + `top_tickers` (head of the ranked matrix) |
-| `backtest.py` | Point-in-time replay + event study + portfolio sim. `--exits plan` walks each gate entry to its own trade-plan stop/target and reports **R-multiples** (`simulate_planned_trades`/`aggregate_trade_stats`); `--exits horizon` keeps the fixed-horizon forward returns |
-| `cache.py` | SQLite research price cache (stdlib) — `connect`/`upsert_bars`/`load_universe`; bars only, no `.info`. Feeds broad-universe backtests offline |
+| `backtest.py` | Point-in-time replay + event study + portfolio sim. `--exits plan` walks each gate entry to its own trade-plan stop/target and reports **R-multiples** (`simulate_planned_trades`/`aggregate_trade_stats`), plus the ticker-matched random-entry null (`random_entry_trades`); `--exits horizon` keeps the fixed-horizon forward returns |
+| `robustness.py` | Pure inference for plan backtests: `cluster_expectancy` (month-clustered SE/CI/p), `compare` (edge over the null + verdict), `evaluate` (all / first / second half + yearly). Fills `BacktestResults.robustness` |
+| `cache.py` | SQLite research price cache (stdlib) — `connect`/`refresh`/`load_universe`, with `drifted`/`replace_bars`/`upsert_bars` beneath `refresh`; bars only, no `.info`. Feeds broad-universe backtests offline |
 | `tradeplan.py` | `build_trade_plan` — stop / target / R:R / share count for one ticker, from `ATR14` + `find_support_resistance`. Pure, no fetches |
 | `overview.py` | Stage-0 daily market overview — **data only**, returns dicts |
 | `profile.py` | `build_profile` — deep fundamental report (returns a dict incl. a `report` string); `save_report` writes that string as UTF-8 text (mirrors `charts.save_html`) |
@@ -86,7 +102,7 @@ Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df`
 
 Thesis flow (separate, on demand): `signal_matrix` (or manual input) → `thesis.sources` → `IDEA` thesis → lifecycle transitions in `thesis.store` (JSON under `data/theses/`, `DEFAULT_THESES_DIR`) → `thesis.review` postmortem/summary → `thesis.report` aggregated HTML journal (`stock-analysis thesis report` → `output/theses/<ts>/report.html`). Driven by `stock-analysis thesis …` or the `stockanalysis.thesis` library API; demo in `notebooks/thesis_tracking.ipynb`. The `stock-analysis thesis` command surface and workflow are documented as a project skill: `.claude/skills/thesis-tracking/SKILL.md`.
 
-**Before changing any signal threshold** — the `TECHNICAL_COMPONENTS` predicates, which components are `gating`, `DEFAULT_FUND_MIN`, or the `config.py` placement knobs — read the project skill `.claude/skills/tuning-signals/SKILL.md`. It carries the measured baseline (7,253 trades, +0.030R, 95% CI [+0.000, +0.061]), the required hold-out/plateau workflow, and the variants already tested and found dead, so a tuning pass doesn't rediscover them.
+**Before changing any signal threshold** — the `TECHNICAL_COMPONENTS` predicates, which components are `gating`, `DEFAULT_FUND_MIN`, or the `config.py` placement knobs — read the project skill `.claude/skills/tuning-signals/SKILL.md`. It carries the measured baseline (7,253 trades, +0.030R, 95% CI [−0.038, +0.099] clustered by month — indistinguishable from zero and from a random entry), the required hold-out/plateau workflow, and the variants already tested and found dead, so a tuning pass doesn't rediscover them.
 
 Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives **only** in the notebook/CLI, never in the package core — the rule is about *interactive* display, not a pure function that returns a string. `report.py` and `thesis/report.py` are the two deliberate, precedented exceptions: both build a self-contained HTML string from already-fetched data with no `Styler`/`fig.show()`/print side effects, so they're safe to call from a headless job.
 
