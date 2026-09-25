@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import config
+from . import config, robustness
 from .indicators import add_indicators
 from .tradeplan import build_trade_plan
 from .signals import (TECHNICAL_COMPONENTS, _components,
@@ -25,9 +25,13 @@ from .signals import (TECHNICAL_COMPONENTS, _components,
 #: Forward-return horizons in trading days.
 HORIZONS_BARS: dict[str, int] = {"1m": 21, "3m": 63, "6m": 126}
 
+#: Bars of history before the replay scores its first bar — shared with the
+#: random-entry null so it draws from exactly the bars the gate could fire on.
+WARMUP_BARS = 60
+
 
 def posture_timeline(hist, *, mode="technical", fundamental_score=None,
-                     components=None, min_bars: int = 60,
+                     components=None, min_bars: int = WARMUP_BARS,
                      fast: bool = False) -> pd.DataFrame:
     """Replay posture bar-by-bar, point-in-time.
 
@@ -170,13 +174,16 @@ def simulate_planned_trades(hist, entry_dates, *, ticker: str = "",
     pos = {ts: i for i, ts in enumerate(hist.index)}
     o, h, l, c = (hist[k].to_numpy(float) for k in ("Open", "High", "Low", "Close"))
     n = len(hist)
+    # One indicator pass, sliced per entry: exact, because every column the plan
+    # reads is causal (pinned by a test, like posture_timeline's fast path).
+    enriched = add_indicators(hist)
 
     trades: list[PlannedTrade] = []
     for ts in entry_dates:
         i = pos.get(ts)
         if i is None or i + 1 >= n:
             continue                                   # no next bar to fill on
-        plan = build_trade_plan(add_indicators(hist.iloc[: i + 1]))
+        plan = build_trade_plan(enriched.iloc[: i + 1])
         stop, target = plan["stop"], plan["target"]
         if not (np.isfinite(stop) and np.isfinite(target)):
             continue
@@ -216,15 +223,22 @@ def aggregate_trade_stats(trades) -> dict:
 
     ``exit_mix`` is the diagnostic worth reading first: mostly ``time`` means the
     targets are unreachable, mostly ``stop`` means they are too tight.
+
+    The expectancy always travels with its error bar — ``se``/``ci_lo``/``ci_hi``/
+    ``p`` clustered by entry month (:func:`robustness.cluster_expectancy`), over
+    ``months`` clusters. Quote the CI, not the point estimate.
     """
     rs = np.array([t.r_multiple for t in trades], dtype=float)
     mix: dict = {}
     for t in trades:
         mix[t.exit_reason] = mix.get(t.exit_reason, 0) + 1
+    c = robustness.cluster_expectancy(trades)
+    err = {k: c[k] for k in ("se", "ci_lo", "ci_hi", "p", "months")}
     if rs.size == 0:
         return {"n": 0, "win_rate": float("nan"), "avg_win_r": float("nan"),
                 "avg_loss_r": float("nan"), "expectancy_r": float("nan"),
-                "total_r": 0.0, "avg_bars_held": float("nan"), "exit_mix": mix}
+                "total_r": 0.0, "avg_bars_held": float("nan"), "exit_mix": mix,
+                **err}
     wins, losses = rs[rs > 0], rs[rs <= 0]
     win_rate = wins.size / rs.size
     avg_win = float(wins.mean()) if wins.size else 0.0
@@ -238,7 +252,37 @@ def aggregate_trade_stats(trades) -> dict:
         "total_r": float(rs.sum()),
         "avg_bars_held": float(np.mean([t.bars_held for t in trades])),
         "exit_mix": mix,
+        **err,
     }
+
+
+def random_entry_trades(prices, trades, *, reps: int = 1, seed: int = 0,
+                        min_bars: int = WARMUP_BARS, **sim_kw) -> list[PlannedTrade]:
+    """The random-entry null: the same plan and exits, walked from random bars.
+
+    **Ticker-matched** — for each of ``trades`` draw ``reps`` bars from the *same*
+    ticker, uniform over ``[min_bars, len-2]`` (where the gate could have fired and
+    a next bar exists to fill on). Holding the names fixed isolates what the
+    entry's *timing* adds. The stop/target geometry has a positive expectancy on
+    its own, so this — not zero — is the bar a gate has to clear.
+
+    ``sim_kw`` goes straight to :func:`simulate_planned_trades`, so pass the same
+    ``max_hold_bars``/``cost_bps``/``slippage_mult`` as the gate's walk. Tickers
+    are visited in sorted order so a seed reproduces regardless of trade order.
+    """
+    rng = np.random.default_rng(seed)
+    counts: dict = {}
+    for t in trades:
+        counts[t.ticker] = counts.get(t.ticker, 0) + 1
+    out: list[PlannedTrade] = []
+    for tk in sorted(counts):
+        hist = prices.get(tk)
+        if hist is None or len(hist) - 2 < min_bars:
+            continue
+        pos = np.sort(rng.integers(min_bars, len(hist) - 1, size=counts[tk] * reps))
+        out += simulate_planned_trades(hist, [hist.index[i] for i in pos],
+                                       ticker=tk, **sim_kw)
+    return out
 
 
 def aggregate_event_stats(event_returns, baseline_returns=None) -> dict:
@@ -388,6 +432,7 @@ class BacktestResults:
     per_ticker_returns: dict = field(default_factory=dict)   # ticker -> forward-returns df
     trades: list = field(default_factory=list)               # PlannedTrade, exits="plan"
     trade_stats: dict = field(default_factory=dict)          # aggregate_trade_stats
+    robustness: dict = field(default_factory=dict)           # robustness.evaluate, exits="plan"
     config: dict = field(default_factory=dict)
     report_path: "str | None" = None
     excel_path: "str | None" = None
@@ -397,7 +442,8 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
                               horizons=("1m", "3m", "6m"), max_hold="3m",
                               max_positions=10, cost_bps=10.0,
                               slippage_mult=1.0, exits="horizon",
-                              fast=True) -> BacktestResults:
+                              fast=True, null_reps=1, null_seed=0,
+                              split_at=None) -> BacktestResults:
     """Assemble a BacktestResults from an in-memory price dict (no network).
 
     This is the offline-testable core of :func:`run_backtest`.
@@ -407,6 +453,11 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
     entry to its own :mod:`~stockanalysis.tradeplan` stop or target and reports
     R-multiples — what the strategy *would have traded*. ``plan`` always enters on
     the technical gate (``mode="gate"``), the only lookahead-free entry rule.
+
+    ``plan`` also fills ``robustness`` (:func:`robustness.evaluate`): clustered CIs
+    for the whole run and each side of ``split_at`` (default: the calendar midpoint
+    of ``prices``), yearly R, and the edge over :func:`random_entry_trades` drawn
+    ``null_reps`` times per trade with ``null_seed`` (``null_reps=0`` skips it).
     """
     fundamental_scores = fundamental_scores or {}
     horizons = list(horizons)
@@ -434,15 +485,24 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
                               cost_bps=cost_bps, slippage_mult=slippage_mult)
 
     trades: list = []
+    evaluation: dict = {}
     if exits == "plan":
+        sim_kw = dict(max_hold_bars=_bars(max_hold), cost_bps=cost_bps,
+                      slippage_mult=slippage_mult)
         for tk, tl in timeline_map.items():
             # Reuse the replay above: every mode records the gate, so the entry
             # dates come free rather than costing a second O(N^2) walk.
             labelled = pd.DataFrame({"label": tl["gate"].map({True: "Entry", False: "Flat"})})
             trades += simulate_planned_trades(
-                prices[tk], entry_events(labelled, ("Entry",)), ticker=tk,
-                max_hold_bars=_bars(max_hold), cost_bps=cost_bps,
-                slippage_mult=slippage_mult)
+                prices[tk], entry_events(labelled, ("Entry",)), ticker=tk, **sim_kw)
+        null = (random_entry_trades(prices, trades, reps=null_reps, seed=null_seed,
+                                    **sim_kw) if null_reps else None)
+        if split_at is None:
+            spans = [d for h in prices.values() if h is not None and not h.empty
+                     for d in (h.index[0], h.index[-1])]
+            split_at = robustness.midpoint(spans) if spans else None
+        if split_at is not None:
+            evaluation = robustness.evaluate(trades, null, split_at)
 
     return BacktestResults(
         mode=mode,
@@ -453,10 +513,12 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
         per_ticker_returns=per_ticker,
         trades=trades,
         trade_stats=aggregate_trade_stats(trades) if exits == "plan" else {},
+        robustness=evaluation,
         config={"mode": mode, "horizons": horizons, "max_hold": max_hold,
                 "max_positions": max_positions, "cost_bps": cost_bps,
                 "slippage_mult": slippage_mult, "entry_bucket": bucket,
-                "exits": exits},
+                "exits": exits, "null_reps": null_reps, "null_seed": null_seed,
+                "split_at": evaluation.get("split_at")},
     )
 
 
@@ -475,7 +537,8 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
                  horizons=("1m", "3m", "6m"), max_hold="3m", max_positions=10,
                  cost_bps=10.0, slippage_mult=1.0, benchmark="SPY",
                  out_dir="output/backtest", export_excel=True,
-                 save_report=True, exits="horizon", prices=None) -> BacktestResults:
+                 save_report=True, exits="horizon", prices=None,
+                 null_reps=1, null_seed=0, split_at=None) -> BacktestResults:
     """Network-driven entry point: fetch history, build results, write outputs.
 
     ``prices`` short-circuits the fetch with an already-loaded ``{ticker: frame}``
@@ -501,6 +564,7 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
         prices, mode=mode, fundamental_scores=f_scores, horizons=horizons,
         max_hold=max_hold, max_positions=max_positions, cost_bps=cost_bps,
         slippage_mult=slippage_mult, exits=exits,
+        null_reps=null_reps, null_seed=null_seed, split_at=split_at,
     )
     results.config["period"] = period
 

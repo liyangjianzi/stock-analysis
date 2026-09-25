@@ -1,4 +1,5 @@
-"""Excel writer for backtest results — Summary, Event Study, Planned Trades.
+"""Excel writer for backtest results — Summary, Event Study, Planned Trades,
+and (``exits="plan"``) Robustness + Yearly R.
 
 Reuses the base styling from :mod:`stockanalysis.outputs.excel` so the two
 workbooks look consistent. Not an :class:`Exporter` subclass: the Exporter
@@ -15,9 +16,29 @@ from .excel import _style_base
 
 log = logging.getLogger(__name__)
 
+_PERIODS = (("all", "All"), ("first", "First half"), ("second", "Second half"))
+_STAT_COLS = ["n", "months", "exp_r", "se", "ci_lo", "ci_hi", "p"]
+
+
+def _robustness_frames(rb: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Gate / Null / Edge x All / First half / Second half, plus yearly R."""
+    cols = [*_STAT_COLS, "verdict"]
+    rows = []
+    for key, period in _PERIODS:
+        for series in ("gate", "null", "edge"):
+            d = rb[key][series]            # null None / edge {} when skipped
+            if d:
+                rows.append({"Series": series.title(), "Period": period,
+                             **{c: d.get(c) for c in cols}})
+    table = pd.DataFrame(rows, columns=["Series", "Period", *cols])
+    table["split_at"] = pd.Timestamp(rb["split_at"]).date()
+    yearly = pd.DataFrame([{"year": y, **d} for y, d in rb["yearly"].items()],
+                          columns=["year", "n", "gate_r", "null_r"])
+    return table, yearly
+
 
 def write_backtest_workbook(results, path) -> str:
-    """Write a styled two-sheet backtest workbook and return its path."""
+    """Write the styled backtest workbook and return its path."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -46,6 +67,10 @@ def write_backtest_workbook(results, path) -> str:
             event_df.to_excel(xl, sheet_name="Event Study", index=False)
         if not trades_df.empty:
             trades_df.to_excel(xl, sheet_name="Planned Trades", index=False)
+        if results.robustness:
+            table, yearly = _robustness_frames(results.robustness)
+            table.to_excel(xl, sheet_name="Robustness", index=False)
+            yearly.to_excel(xl, sheet_name="Yearly R", index=False)
         for ws in xl.sheets.values():
             _style_base(ws)
 

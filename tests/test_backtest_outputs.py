@@ -37,3 +37,22 @@ def test_write_backtest_workbook(tmp_path, uptrend_ohlcv, downtrend_ohlcv):
     wb = openpyxl.load_workbook(out)
     assert "Backtest Summary" in wb.sheetnames
     assert "Event Study" in wb.sheetnames
+
+
+def test_plan_workbook_carries_the_robustness_and_yearly_sheets(tmp_path, uptrend_ohlcv):
+    res = build_results_from_prices({"UP": uptrend_ohlcv}, exits="plan", max_hold="1m")
+    wb = openpyxl.load_workbook(write_backtest_workbook(res, tmp_path / "bt.xlsx"))
+    assert "Robustness" in wb.sheetnames and "Yearly R" in wb.sheetnames
+
+    ws = wb["Robustness"]
+    header = [c.value for c in ws[1]]
+    assert header[:3] == ["Series", "Period", "n"]
+    assert {"exp_r", "ci_lo", "ci_hi", "p", "verdict"} <= set(header)
+    rows = {(r[0], r[1]) for r in ws.iter_rows(min_row=2, values_only=True)}
+    assert {("Gate", "All"), ("Null", "Second half"), ("Edge", "First half")} <= rows
+
+
+def test_horizon_workbook_has_no_robustness_sheet(tmp_path, uptrend_ohlcv):
+    res = build_results_from_prices({"UP": uptrend_ohlcv}, horizons=("1m",), max_hold="1m")
+    wb = openpyxl.load_workbook(write_backtest_workbook(res, tmp_path / "bt.xlsx"))
+    assert "Robustness" not in wb.sheetnames

@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import date
 from pathlib import Path
 
 from . import config, pipeline, signals
@@ -52,6 +53,38 @@ def _add_run_parser(sub) -> None:
                         "(default: %(default)s).")
 
 
+def _iso_date(s: str) -> str:
+    """Fail at parse time, not after a six-minute replay."""
+    try:
+        date.fromisoformat(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {s!r}") from None
+    return s
+
+
+def _ci(d: dict) -> str:
+    return f"[{d['ci_lo']:+.2f}, {d['ci_hi']:+.2f}]"
+
+
+def _print_robustness(rb: dict, null_reps) -> None:
+    """The halves, the year count and the edge over random entry — the three
+    checks a bare expectancy hides (see :mod:`stockanalysis.robustness`)."""
+    if not rb:
+        return
+    first, second = rb["first"]["gate"], rb["second"]["gate"]
+    print(f"    halves (split {rb['split_at']:%Y-%m-%d}): "
+          f"first {first['exp_r']:+.2f}R {_ci(first)} n={first['n']} · "
+          f"second {second['exp_r']:+.2f}R {_ci(second)} n={second['n']}")
+    neg = ", ".join(str(y) for y in rb["negative_years"]) or "none"
+    print(f"    positive years: {rb['positive_years']} of {rb['years']} (negative: {neg})")
+    null, edge = rb["all"]["null"], rb["all"]["edge"]
+    if null:
+        reps = f"{null_reps} rep{'s' if null_reps != 1 else ''}"
+        print(f"    random entry (ticker-matched, {reps}): "
+              f"{null['exp_r']:+.2f}R {_ci(null)}")
+        print(f"    edge vs random: {edge['exp_r']:+.2f}R {_ci(edge)} -> {edge['verdict']}")
+
+
 def _add_backtest_parser(sub) -> None:
     p = sub.add_parser("backtest", help="Backtest the signal engine over history.")
     p.add_argument("--scope", choices=["technical", "composite"], default="technical",
@@ -65,6 +98,13 @@ def _add_backtest_parser(sub) -> None:
                         "led to); plan = walk each entry to its trade-plan stop or "
                         "target and report R-multiples (what you'd have traded). "
                         "plan always enters on the technical gate (default: %(default)s).")
+    p.add_argument("--null-reps", type=int, default=1, metavar="N",
+                   help="exits=plan: random entries drawn per gate trade (same ticker, "
+                        "same plan and exits) as the bar the gate must beat; 0 skips "
+                        "it (default: %(default)s).")
+    p.add_argument("--split", type=_iso_date, default=None, metavar="YYYY-MM-DD",
+                   help="exits=plan: report the halves before/after this date "
+                        "(default: the calendar midpoint of the price history).")
     p.add_argument("--period", default="5y", help="yfinance history period (default: 5y).")
     p.add_argument("--horizon", choices=["1m", "3m", "6m"], action="append", default=None,
                    help="Forward-return horizon(s); repeatable (default: 1m 3m 6m).")
@@ -255,6 +295,7 @@ def main(argv=None) -> int:
                 cost_bps=args.cost_bps, slippage_mult=args.slippage_mult,
                 out_dir=args.out, export_excel=not args.no_excel,
                 save_report=not args.no_report,
+                null_reps=args.null_reps, split_at=args.split,
             )
         except Exception as e:
             print(f"Backtest failed: {e}", file=sys.stderr)
@@ -265,8 +306,10 @@ def main(argv=None) -> int:
         ts = results.trade_stats or {}
         if ts.get("n"):
             mix = "  ".join(f"{k}:{v}" for k, v in sorted(ts["exit_mix"].items()))
-            print(f"  Planned trades: {ts['n']}   win rate {ts['win_rate']:.1%}   "
-                  f"expectancy {ts['expectancy_r']:+.2f}R")
+            print(f"  Planned trades: {ts['n']}   win rate {ts['win_rate']:.1%}")
+            print(f"    expectancy {ts['expectancy_r']:+.2f}R   95% CI {_ci(ts)}   "
+                  f"p={ts['p']:.2f}   (clustered by month, {ts['months']} months)")
+            _print_robustness(results.robustness, results.config.get("null_reps"))
             print(f"    avg win {ts['avg_win_r']:+.2f}R   avg loss {ts['avg_loss_r']:+.2f}R"
                   f"   total {ts['total_r']:+.1f}R   avg hold {ts['avg_bars_held']:.0f} bars")
             print(f"    exits: {mix}")
