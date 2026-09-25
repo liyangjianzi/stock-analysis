@@ -21,6 +21,10 @@ partial fetch can simply be re-run.
 ``auto_adjust=True``, tz-naive path as :func:`stockanalysis.ingest.fetch_stock_data`
 (see :func:`stockanalysis.ingest.fetch_bulk_prices`). A cache built on a different
 adjustment convention would silently measure prices the live pipeline never sees.
+The same holds *over time*: a dividend or split rescales every earlier bar, so a
+top-up window is only upserted when :func:`drifted` says it still agrees with
+the cache; otherwise the ticker is refetched whole and :func:`replace_bars`
+swaps its history out in one transaction.
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import config
@@ -61,6 +66,26 @@ def connect(path=None) -> sqlite3.Connection:
     return conn
 
 
+#: Relative Close tolerance for :func:`drifted`. Yahoo's float noise is ~1e-7; a
+#: quarterly dividend re-adjustment is ~1e-3 (APH, 2026-09-24: x0.998451).
+DRIFT_RTOL = 1e-4
+
+_INSERT = ("INSERT OR REPLACE INTO bars "
+           "(ticker, date, open, high, low, close, volume) VALUES (?,?,?,?,?,?,?)")
+
+
+def _rows(ticker: str, df: pd.DataFrame):
+    """``df`` as insert tuples, or None when it is None/empty/off-contract."""
+    if df is None or df.empty or not set(COLUMNS).issubset(df.columns):
+        return None
+    idx = pd.to_datetime(df.index)
+    return [
+        (ticker, d.strftime("%Y-%m-%d"), *(None if pd.isna(v) else float(v)
+                                           for v in r))
+        for d, r in zip(idx, df[COLUMNS].to_numpy())
+    ]
+
+
 def upsert_bars(conn: sqlite3.Connection, ticker: str, df: pd.DataFrame) -> int:
     """Write an OHLCV frame for ``ticker``; returns the number of rows written.
 
@@ -68,32 +93,70 @@ def upsert_bars(conn: sqlite3.Connection, ticker: str, df: pd.DataFrame) -> int:
     in place rather than duplicating, so a refresh can safely re-fetch a few days
     of tail overlap. A frame that is None/empty or missing the column contract
     writes nothing and returns 0 (NaN means fail, never crash).
+
+    Only safe for a window on the *same* adjustment basis as the cache — check
+    :func:`drifted` first; a full refetch goes through :func:`replace_bars`.
     """
-    if df is None or df.empty or not set(COLUMNS).issubset(df.columns):
+    rows = _rows(ticker, df)
+    if not rows:
         return 0
-    idx = pd.to_datetime(df.index)
-    rows = [
-        (ticker, d.strftime("%Y-%m-%d"), *(None if pd.isna(v) else float(v)
-                                           for v in r))
-        for d, r in zip(idx, df[COLUMNS].to_numpy())
-    ]
     with conn:
-        conn.executemany(
-            "INSERT OR REPLACE INTO bars "
-            "(ticker, date, open, high, low, close, volume) VALUES (?,?,?,?,?,?,?)",
-            rows)
+        conn.executemany(_INSERT, rows)
     return len(rows)
 
 
-def load_bars(conn: sqlite3.Connection, ticker: str) -> pd.DataFrame:
+def replace_bars(conn: sqlite3.Connection, ticker: str, df: pd.DataFrame) -> int:
+    """Rewrite ``ticker``'s whole history as ``df``; returns rows written.
+
+    Unlike :func:`upsert_bars`, cached rows outside ``df`` are dropped: after a
+    full refetch, any older bar was fetched on the previous adjustment basis and
+    would sit as a stale stub at the start of history. Delete and insert share
+    one transaction; a degenerate frame deletes nothing.
+    """
+    rows = _rows(ticker, df)
+    if not rows:
+        return 0
+    with conn:
+        conn.execute("DELETE FROM bars WHERE ticker = ?", (ticker,))
+        conn.executemany(_INSERT, rows)
+    return len(rows)
+
+
+def drifted(conn: sqlite3.Connection, ticker: str, window: pd.DataFrame,
+            rtol: float = DRIFT_RTOL) -> bool:
+    """True when a freshly fetched ``window`` can't be stitched onto the cache.
+
+    ``auto_adjust=True`` rescales every bar before a dividend/split ex-date, but a
+    top-up only rewrites its own bars — upserting it would leave two adjustment
+    bases with a step between them. A re-adjustment shows as the window's closes
+    disagreeing with the cached closes on shared dates. The newest cached bar is
+    excluded: it may have been fetched intraday and legitimately settled since.
+    No shared bars at all (a refresh gap longer than the window) also counts —
+    there is nothing to verify the basis against, and the upsert would leave a
+    hole. An uncached ticker or an empty window is not drift.
+    """
+    if last_date(conn, ticker) is None or window is None or window.empty \
+            or "Close" not in window:
+        return False
+    fresh = pd.Series(window["Close"].to_numpy(dtype=float),
+                      index=pd.to_datetime(window.index).normalize())
+    cached = load_bars(conn, ticker, start=fresh.index.min())["Close"].iloc[:-1]  # newest out
+    both = pd.DataFrame({"cached": cached, "fresh": fresh}).dropna()   # shared dates
+    return both.empty or not np.allclose(both["fresh"], both["cached"],
+                                         rtol=rtol, atol=0.0)
+
+
+def load_bars(conn: sqlite3.Connection, ticker: str, start=None) -> pd.DataFrame:
     """Read one ticker's history back as an OHLCV frame with a DatetimeIndex.
 
-    Returns an empty frame (with the right columns) when the ticker isn't cached,
-    so callers can treat it like any other degraded fetch.
+    ``start`` (any Timestamp-like) keeps bars on or after that date. Returns an
+    empty frame (with the right columns) when nothing matches, so callers can
+    treat it like any other degraded fetch.
     """
+    since = "" if start is None else pd.Timestamp(start).strftime("%Y-%m-%d")
     cur = conn.execute(
         "SELECT date, open, high, low, close, volume FROM bars "
-        "WHERE ticker = ? ORDER BY date", (ticker,))
+        "WHERE ticker = ? AND date >= ? ORDER BY date", (ticker, since))
     rows = cur.fetchall()
     if not rows:
         return pd.DataFrame(columns=COLUMNS)
@@ -141,3 +204,48 @@ def coverage(conn: sqlite3.Connection) -> pd.DataFrame:
         "SELECT ticker, COUNT(*), MIN(date), MAX(date) FROM bars "
         "GROUP BY ticker ORDER BY ticker").fetchall()
     return pd.DataFrame(rows, columns=["Ticker", "Bars", "From", "To"])
+
+
+def refresh(conn: sqlite3.Connection, tickers, *, period: str = "10y",
+            refresh_period: str = "1mo", full: bool = False,
+            chunk: int = 50) -> dict:
+    """Bring ``tickers`` up to date — the one safe way to write fetched bars.
+
+    Incremental by default: uncached names fetch ``period`` of history, cached
+    ones only a short ``refresh_period`` window, so a nightly run moves ~10k bars
+    rather than 1.2M. A window is upserted only if :func:`drifted` says it still
+    matches the cache; one that doesn't (a dividend/split re-adjustment, or a gap
+    longer than the window) is refetched over ``period`` and swapped in whole by
+    :func:`replace_bars`, never stitched onto the old basis. If that refetch
+    fails the name keeps its old, consistent bars and is caught again next run.
+    ``full`` refetches and replaces every name.
+
+    Returns ``{"fetched", "topped_up", "rebuilt"}`` — sorted names that got bars
+    by each route (fetch failures are logged by ``fetch_bulk_prices`` and simply
+    absent) — plus ``"bars"`` written.
+    """
+    from . import ingest              # lazy: keeps yfinance off cache's import path
+    known = set(cached_tickers(conn))
+    fresh = list(tickers) if full else [t for t in tickers if t not in known]
+    topup = [] if full else [t for t in tickers if t in known]
+
+    whole: dict = {}
+    windows: dict = {}
+    rebuilt: dict = {}
+    if fresh:
+        log.info("Fetching %d ticker(s) over %s...", len(fresh), period)
+        whole = ingest.fetch_bulk_prices(fresh, period=period, chunk=chunk)
+    if topup:
+        log.info("Topping up %d cached ticker(s) over %s...", len(topup), refresh_period)
+        windows = ingest.fetch_bulk_prices(topup, period=refresh_period, chunk=chunk)
+        rebase = sorted(t for t, df in windows.items() if drifted(conn, t, df))
+        if rebase:
+            log.info("Rebuilding %d ticker(s) whose top-up didn't match the cache "
+                     "over %s: %s", len(rebase), period, ", ".join(rebase))
+            windows = {t: df for t, df in windows.items() if t not in rebase}
+            rebuilt = ingest.fetch_bulk_prices(rebase, period=period, chunk=chunk)
+
+    bars = sum(replace_bars(conn, t, df) for t, df in {**whole, **rebuilt}.items())
+    bars += sum(upsert_bars(conn, t, df) for t, df in windows.items())
+    return {"fetched": sorted(whole), "topped_up": sorted(windows),
+            "rebuilt": sorted(rebuilt), "bars": bars}

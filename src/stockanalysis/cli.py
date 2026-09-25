@@ -141,8 +141,9 @@ def _add_cache_parser(sub) -> None:
                         "upsert is idempotent on (ticker, date), so the overlap "
                         "just restates bars (default: %(default)s).")
     p.add_argument("--full", action="store_true",
-                   help="Refetch --period for every ticker, ignoring what is "
-                        "already cached (use after a data correction).")
+                   help="Refetch --period for every ticker and replace its cached "
+                        "history (use after a data correction). Top-ups already "
+                        "rebuild any ticker re-adjusted by a dividend/split.")
     p.add_argument("--db", default=None,
                    help="Cache database path (default: data/cache/prices.db).")
     p.add_argument("--chunk", type=int, default=50,
@@ -229,7 +230,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "cache":
-        from . import cache as price_cache, ingest
+        from . import cache as price_cache
         conn = price_cache.connect(args.db)
         if args.status:
             cov = price_cache.coverage(conn)
@@ -243,28 +244,16 @@ def main(argv=None) -> int:
             print(f"{e}\nRun: stock-analysis universe --out {args.universe}",
                   file=sys.stderr)
             return 1
-        # Incremental by default: only names with no cached bars need full
-        # history. Everything else gets a short top-up window, which the
-        # (ticker, date) upsert folds in without duplicating. A nightly refresh
-        # is therefore seconds, not a re-download of the whole universe.
-        known = set(price_cache.cached_tickers(conn))
         wanted = list(wl)
-        fresh = [t for t in wanted if t not in known] if not args.full else wanted
-        topup = [t for t in wanted if t in known] if not args.full else []
-
-        bars: dict = {}
-        if fresh:
-            print(f"Fetching {len(fresh)} new ticker(s) over {args.period}...")
-            bars.update(ingest.fetch_bulk_prices(fresh, period=args.period,
-                                                 chunk=args.chunk))
-        if topup:
-            print(f"Topping up {len(topup)} cached ticker(s) over "
-                  f"{args.refresh_period}...")
-            bars.update(ingest.fetch_bulk_prices(topup, period=args.refresh_period,
-                                                 chunk=args.chunk))
-
-        written = sum(price_cache.upsert_bars(conn, tk, df) for tk, df in bars.items())
-        print(f"Cached {len(bars)}/{len(wanted)} tickers, {written:,} bars -> "
+        res = price_cache.refresh(conn, wanted, period=args.period,
+                                  refresh_period=args.refresh_period,
+                                  full=args.full, chunk=args.chunk)
+        if res["rebuilt"]:
+            print(f"Rebuilt {len(res['rebuilt'])} ticker(s) whose top-up didn't match "
+                  f"the cache (dividend/split re-adjustment or a refresh gap): "
+                  f"{', '.join(res['rebuilt'])}")
+        got = len(res["fetched"]) + len(res["topped_up"]) + len(res["rebuilt"])
+        print(f"Cached {got}/{len(wanted)} tickers, {res['bars']:,} bars -> "
               f"{args.db or config.DEFAULT_CACHE_DB}")
         return 0
 

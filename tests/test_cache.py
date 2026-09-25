@@ -168,3 +168,129 @@ def test_cache_cli_full_flag_refetches_everything(tmp_path, monkeypatch):
     monkeypatch.setattr("stockanalysis.ingest.fetch_bulk_prices", fake_bulk)
     cli.main(["cache", "--universe", str(uni), "--db", str(db), "--full"])
     assert calls == [(["AAA"], "10y")]
+
+
+# --- adjustment drift ------------------------------------------------------------
+# auto_adjust=True rescales *every* bar before a dividend/split ex-date. A top-up
+# window rewrites only its own bars, so without a check the cache ends up holding
+# two adjustment bases with a step between them (APH, 2026-09-24: x0.998451).
+
+def _readjusted(df, ex_date_pos, factor):
+    """What Yahoo serves after a dividend/split: every bar before the ex-date
+    rescaled by ``factor`` (volume untouched, as for a cash dividend)."""
+    out = df.copy()
+    out.iloc[:ex_date_pos, out.columns.get_indexer(["Open", "High", "Low", "Close"])] *= factor
+    return out
+
+
+def test_a_top_up_that_agrees_with_the_cache_is_not_drift(conn):
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist.iloc[:50])
+    assert not cache.drifted(conn, "AAA", hist.iloc[40:])
+
+
+def test_a_dividend_readjustment_inside_the_window_is_drift(conn):
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist.iloc[:50])
+    window = _readjusted(hist, ex_date_pos=55, factor=0.998451).iloc[40:]
+    assert cache.drifted(conn, "AAA", window)
+
+
+def test_a_restated_newest_bar_alone_is_not_drift(conn):
+    """The newest cached bar may have been fetched intraday; it settling is not a
+    re-adjustment and must not force a full refetch every night."""
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist.iloc[:50])
+    window = hist.iloc[40:].copy()
+    window.iloc[9, window.columns.get_loc("Close")] *= 1.03    # bar 49 = newest cached
+    assert not cache.drifted(conn, "AAA", window)
+
+
+def test_a_window_with_no_overlap_cannot_be_stitched_on(conn):
+    """A refresh gap longer than the window leaves nothing to compare against —
+    and a hole in the bars. Rebuild the ticker rather than patch it."""
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist.iloc[:30])
+    assert cache.drifted(conn, "AAA", hist.iloc[40:])
+
+
+def test_replace_bars_drops_history_the_new_frame_does_not_cover(conn):
+    """A rebuilt ticker must sit on one basis — rows older than the new fetch's
+    first bar would be a stale-basis stub."""
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist)
+    assert cache.replace_bars(conn, "AAA", hist.iloc[10:] * 0.5) == 50
+
+    back = cache.load_bars(conn, "AAA")
+    assert len(back) == 50
+    np.testing.assert_allclose(back["Close"].to_numpy(),
+                               hist["Close"].iloc[10:].to_numpy() * 0.5)
+
+
+def test_load_bars_can_start_mid_history(conn):
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist)
+    back = cache.load_bars(conn, "AAA", start=hist.index[40])
+    assert list(back.index) == list(hist.index[40:])
+
+
+# --- cache.refresh: the one safe way to write fetched bars ----------------------
+
+def _fake_bulk(monkeypatch, frames, calls):
+    """Serve ``frames[ticker]`` — the whole series for a 10y fetch, its last 20
+    bars for anything shorter — and record every (tickers, period) request."""
+    def fake(tickers, period="10y", chunk=50):
+        calls.append((sorted(tickers), period))
+        return {t: frames[t].iloc[0 if period == "10y" else -20:] for t in tickers}
+    monkeypatch.setattr("stockanalysis.ingest.fetch_bulk_prices", fake)
+
+
+def test_refresh_rebuilds_a_ticker_whose_history_was_readjusted(conn, monkeypatch):
+    """A top-up that disagrees with the cache refetches that ticker's full
+    period on the new basis instead of stitching two bases together."""
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist.iloc[:50])
+    cache.upsert_bars(conn, "BBB", hist.iloc[:50])
+    rebased = _readjusted(hist, ex_date_pos=55, factor=0.99)     # BBB went ex-div
+    calls = []
+    _fake_bulk(monkeypatch, {"AAA": hist, "BBB": rebased}, calls)
+
+    res = cache.refresh(conn, ["AAA", "BBB"])
+
+    assert calls == [(["AAA", "BBB"], "1mo"), (["BBB"], "10y")]
+    assert res == {"fetched": [], "topped_up": ["AAA"], "rebuilt": ["BBB"],
+                   "bars": 20 + 60}
+    np.testing.assert_allclose(cache.load_bars(conn, "BBB")["Close"].to_numpy(),
+                               rebased["Close"].to_numpy())
+    np.testing.assert_allclose(cache.load_bars(conn, "AAA")["Close"].to_numpy(),
+                               hist["Close"].to_numpy())
+
+
+def test_refresh_fetches_whole_history_only_for_new_tickers(conn, monkeypatch):
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist.iloc[:50])
+    calls = []
+    _fake_bulk(monkeypatch, {"AAA": hist, "NEW": hist}, calls)
+
+    res = cache.refresh(conn, ["AAA", "NEW"])
+
+    assert calls == [(["NEW"], "10y"), (["AAA"], "1mo")]
+    assert res["fetched"] == ["NEW"] and res["topped_up"] == ["AAA"]
+    assert len(cache.load_bars(conn, "NEW")) == 60
+
+
+def test_refresh_full_leaves_no_stale_basis_stub(conn, monkeypatch):
+    """``full`` is the repair path; bars older than the new period window were
+    fetched on the old basis and must go, not linger at the start of history."""
+    hist = _frame(n=60)
+    cache.upsert_bars(conn, "AAA", hist)
+    calls = []
+    _fake_bulk(monkeypatch, {"AAA": hist.iloc[5:] * 0.99}, calls)
+
+    cache.refresh(conn, ["AAA"], full=True)
+
+    assert calls == [(["AAA"], "10y")]
+    back = cache.load_bars(conn, "AAA")
+    assert back.index[0] == hist.index[5]
+    np.testing.assert_allclose(back["Close"].to_numpy(),
+                               hist["Close"].iloc[5:].to_numpy() * 0.99)
