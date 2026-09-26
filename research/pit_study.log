@@ -1,0 +1,103 @@
+
+=== A. Cross-section: 119 month-ends 2016-09-30..2026-07-31, 475 names/month covered (of 502)
+metric coverage among covered name-months: PE 91%, EPS_Growth 90%, Rev_Growth 98%, Debt_Equity 94%, Div_Yield 97%, FCF 99%
+score distribution: 0:0.7% 1:5.3% 2:17.0% 3:29.9% 4:30.1% 5:13.7% 6:3.4%
+share scoring >=4: 47.1%  (live-bug variant: 52.5%)
+
+-- PRIMARY: score>=4 minus <4, sector-neutral, 3m forward --
+  all     -0.27%  [ -0.88,  +0.34]  p=0.389  T=117
+  first   -0.52%  [ -1.38,  +0.33]  p=0.229  T=64
+  second  +0.04%  [ -0.77,  +0.85]  p=0.921  T=53
+
+-- score>=4 minus <4 by horizon (raw | sector-neutral | ex-Financials neutral) --
+   1m raw      all  -0.07%  [ -0.30,  +0.16]  p=0.578  T=119 | 1st -0.19% p=0.18 | 2nd +0.08% p=0.65
+   1m neutral  all  -0.09%  [ -0.28,  +0.10]  p=0.362  T=119 | 1st -0.18% p=0.15 | 2nd +0.01% p=0.93
+   1m exFin    all  -0.09%  [ -0.30,  +0.11]  p=0.353  T=119 | 1st -0.16% p=0.25 | 2nd -0.02% p=0.88
+   3m raw      all  -0.26%  [ -0.96,  +0.44]  p=0.463  T=117 | 1st -0.66% p=0.17 | 2nd +0.22% p=0.65
+   3m neutral  all  -0.27%  [ -0.88,  +0.34]  p=0.389  T=117 | 1st -0.52% p=0.23 | 2nd +0.04% p=0.92
+   3m exFin    all  -0.33%  [ -0.93,  +0.27]  p=0.284  T=117 | 1st -0.47% p=0.28 | 2nd -0.15% p=0.71
+   6m raw      all  -1.08%  [ -2.54,  +0.39]  p=0.149  T=114 | 1st -1.62% p=0.14 | 2nd -0.38% p=0.65
+   6m neutral  all  -0.90%  [ -2.23,  +0.42]  p=0.179  T=114 | 1st -1.20% p=0.23 | 2nd -0.53% p=0.48
+   6m exFin    all  -1.01%  [ -2.29,  +0.27]  p=0.122  T=114 | 1st -1.10% p=0.27 | 2nd -0.89% p=0.20
+  12m raw      all  -3.30%  [ -5.97,  -0.64]  p=0.015  T=108 | 1st -3.69% p=0.06 | 2nd -2.75% p=0.06
+  12m neutral  all  -2.66%  [ -5.18,  -0.14]  p=0.039  T=108 | 1st -2.65% p=0.17 | 2nd -2.67% p=0.02
+  12m exFin    all  -2.66%  [ -5.07,  -0.25]  p=0.030  T=108 | 1st -2.36% p=0.21 | 2nd -3.10% p=0.00
+
+-- cutoff shape (sector-neutral 3m, score>=k minus <k) --
+  >=2 (94.0% of names)  all  -1.42%  [ -2.64,  -0.20]  p=0.022  T=117 | 1st -0.59% | 2nd -2.42%
+  >=3 (77.0% of names)  all  -0.53%  [ -1.18,  +0.12]  p=0.109  T=117 | 1st -0.25% | 2nd -0.86%
+  >=4 (47.1% of names)  all  -0.27%  [ -0.88,  +0.34]  p=0.389  T=117 | 1st -0.52% | 2nd +0.04%
+  >=5 (17.1% of names)  all  -0.43%  [ -1.19,  +0.34]  p=0.276  T=117 | 1st -0.86% | 2nd +0.10%
+  >=6 ( 3.4% of names)  all  -0.80%  [ -1.89,  +0.29]  p=0.151  T=117 | 1st -1.34% | 2nd -0.15%
+
+-- per score level: mean sector-neutral 3m excess --
+  score 0:  +8.09%  [ -1.00, +17.18]  p=0.081  T=111
+  score 1:  +0.86%  [ -0.10,  +1.82]  p=0.077  T=117
+  score 2:  +0.08%  [ -0.35,  +0.52]  p=0.707  T=117
+  score 3:  -0.10%  [ -0.41,  +0.21]  p=0.518  T=117
+  score 4:  -0.05%  [ -0.39,  +0.29]  p=0.770  T=117
+  score 5:  -0.29%  [ -0.93,  +0.36]  p=0.383  T=117
+  score 6:  -0.78%  [ -1.85,  +0.28]  p=0.148  T=117
+
+-- rank IC: Spearman(score, 3m return) per month, sector-demeaned --
+  all    IC -0.0068 [-0.0305, +0.0169] p=0.575
+  first  IC -0.0191 [-0.0504, +0.0123] p=0.234
+  second IC +0.0081 [-0.0252, +0.0413] p=0.635
+
+-- each test alone: pass minus fail, sector-neutral 3m --
+  Pass_PE   pass 49.0%  all  -0.34%  [ -1.27,  +0.59]  p=0.479  T=117 | 1st -0.68% | 2nd +0.08%
+  Pass_EPS  pass 42.4%  all  -0.12%  [ -0.67,  +0.43]  p=0.673  T=117 | 1st -0.25% | 2nd +0.04%
+  Pass_Rev  pass 44.7%  all  +0.68%  [ -0.00,  +1.36]  p=0.051  T=117 | 1st +0.81% | 2nd +0.51%
+  Pass_DE   pass 64.0%  all  -0.21%  [ -0.66,  +0.24]  p=0.368  T=117 | 1st -0.15% | 2nd -0.28%
+  Pass_Div  pass 48.6%  all  -0.79%  [ -1.62,  +0.05]  p=0.066  T=117 | 1st -0.79% | 2nd -0.78%
+  Pass_FCF  pass 89.2%  all  -1.77%  [ -2.96,  -0.58]  p=0.004  T=117 | 1st -1.07% | 2nd -2.62%
+
+-- live-bug screen (yields <=1% read as >1.5%): >=4 minus <4, neutral 3m --
+  all     -0.36%  [ -0.94,  +0.22]  p=0.220  T=117
+  first   -0.57%  [ -1.37,  +0.22]  p=0.155  T=64
+  second  -0.11%  [ -0.92,  +0.70]  p=0.793  T=53
+
+-- by year: >=4 minus <4, sector-neutral 3m (formation year) --
+  2016:+0.04%  2017:+0.24%  2018:-1.51%  2019:-0.86%  2020:-2.41%  2021:+1.74%  2022:+0.92%  2023:-1.36%  2024:-0.49%  2025:+0.71%  2026:+0.97%
+
+=== B. Gate plan trades from output/backtest/2026-09-25_085737/backtest.xlsx: 7251 trades, 98% with point-in-time fundamentals
+random-entry null: 5 reps, 35213 covered trades
+
+-- all --
+  gate, any score         n= 7115  +0.030R  [-0.038, +0.098]  p=0.387
+  gate, score>=4  (=Buy)  n= 3215  +0.028R  [-0.049, +0.105]  p=0.477
+  gate, score<4           n= 3900  +0.032R  [-0.043, +0.107]  p=0.400
+  null, any score         n=35213  +0.056R  [+0.004, +0.108]  p=0.036
+  null, score>=4          n=16699  +0.043R  [-0.013, +0.099]  p=0.135
+  Buy - gate<4            -0.004R [-0.111, +0.103] p=0.939
+  Buy - null>=4           -0.015R [-0.110, +0.080] p=0.758
+  null>=4 - null<4        -0.025R [-0.103, +0.054] p=0.537
+
+-- first --
+  gate, any score         n= 3514  +0.092R  [-0.004, +0.188]  p=0.059
+  gate, score>=4  (=Buy)  n= 1540  +0.055R  [-0.047, +0.158]  p=0.290
+  gate, score<4           n= 1974  +0.121R  [+0.009, +0.233]  p=0.034
+  null, any score         n=17513  +0.106R  [+0.034, +0.179]  p=0.004
+  null, score>=4          n= 8301  +0.092R  [+0.012, +0.173]  p=0.024
+  Buy - gate<4            -0.066R [-0.217, +0.086] p=0.397
+  Buy - null>=4           -0.037R [-0.167, +0.094] p=0.579
+  null>=4 - null<4        -0.027R [-0.137, +0.083] p=0.634
+
+-- second --
+  gate, any score         n= 3601  -0.031R  [-0.125, +0.064]  p=0.525
+  gate, score>=4  (=Buy)  n= 1675  +0.002R  [-0.111, +0.116]  p=0.967
+  gate, score<4           n= 1926  -0.059R  [-0.150, +0.032]  p=0.202
+  null, any score         n=17700  +0.006R  [-0.068, +0.079]  p=0.879
+  null, score>=4          n= 8398  -0.006R  [-0.084, +0.071]  p=0.873
+  Buy - gate<4            +0.062R [-0.084, +0.207] p=0.406
+  Buy - null>=4           +0.009R [-0.128, +0.146] p=0.901
+  null>=4 - null<4        -0.023R [-0.133, +0.088] p=0.686
+
+-- gate trades by score (all periods) --
+  score 0: n=   72  -0.155R  [-0.641, +0.330]  p=0.530
+  score 1: n=  483  -0.012R  [-0.143, +0.120]  p=0.862
+  score 2: n= 1234  -0.004R  [-0.101, +0.093]  p=0.938
+  score 3: n= 2111  +0.069R  [-0.012, +0.151]  p=0.097
+  score 4: n= 2045  +0.044R  [-0.046, +0.133]  p=0.342
+  score 5: n=  950  -0.000R  [-0.117, +0.116]  p=0.998
+  score 6: n=  220  +0.002R  [-0.177, +0.182]  p=0.979

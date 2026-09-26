@@ -1,6 +1,6 @@
 ---
 name: tuning-signals
-description: Use when changing any threshold in this repo's signal engine — the predicates in signals.py TECHNICAL_COMPONENTS (EMA50 slope, RSI3 dip, ATR pullback zone, volume multiple), which components are gating, DEFAULT_FUND_MIN, or the placement knobs in config.py (ATR_STOP_MULT, STOP_BUFFER_ATR, MIN_STOP_ATR, MIN_TARGET_ATR, MIN_RR). Also use when asked to "improve expectancy", "tune the gate", "make the signal profitable", "optimize the parameters", or when a backtest result is about to be reported as an improvement.
+description: Use when changing any threshold in this repo's signal engine — the predicates in signals.py TECHNICAL_COMPONENTS (EMA50 slope, RSI3 dip, ATR pullback zone, volume multiple), which components are gating, DEFAULT_FUND_MIN or the screen_fundamentals thresholds (P/E, growth, debt/equity, dividend yield, FCF), or the placement knobs in config.py (ATR_STOP_MULT, STOP_BUFFER_ATR, MIN_STOP_ATR, MIN_TARGET_ATR, MIN_RR). Also use when asked to "improve expectancy", "tune the gate", "make the signal profitable", "optimize the parameters", or when a backtest result is about to be reported as an improvement.
 ---
 
 # Tuning Signals
@@ -245,6 +245,46 @@ the hypothesis worth a proper study, not as a result. Note also that it fires ~1
 times a day across 503 names: that is a portfolio-scale statistical strategy, not
 a 10-slot swing system.
 
+### The fundamental screen — tested point-in-time, no effect (2026-09-25)
+
+`backtest --scope composite` cannot test `DEFAULT_FUND_MIN`: yfinance `.info` is
+today's data, so it scores 2016 bars with 2026 fundamentals. `research/pit_*.py`
+(run order in `research/README.md`) rebuilds the six metrics from SEC filings as
+filed — validated against live Yahoo at 90–100% per-test agreement, 95% on the
+`>=4` cut — and scores them with the shipped `screen_fundamentals`.
+
+| Pre-declared test | All | 2016–21 | 2022–26 |
+|---|---|---|---|
+| Cross-section: `>=4` minus `<4`, sector-neutral 3m return | −0.27% [−0.88, +0.34] | −0.52% | +0.04% |
+| Gate trades: Buy (`gate AND >=4`) minus gate with `<4` | −0.004R [−0.111, +0.103] | −0.066R | +0.062R |
+| Buy minus random entries on `>=4` names | −0.015R [−0.110, +0.080] | −0.037R | +0.009R |
+
+The quality test adds nothing to the gate, and the gate adds nothing to a random
+entry: **both halves of the Buy rule measure as zero.** Specifically do not re-propose:
+
+- **Raising or lowering `DEFAULT_FUND_MIN`.** Every cutoff from `>=2` to `>=6` is
+  ≤0 on the sector-neutral 3m spread. Gate-trade expectancy by score is flat
+  (3: +0.069R, 4: +0.044R, 5: −0.000R, 6: +0.002R — every CI spans zero).
+- **Re-weighting or dropping individual tests.** Pass minus fail, sector-neutral
+  3m: only revenue growth is positive in both halves (+0.68%, p=0.051 — one of six,
+  so it fails any multiple-test correction); FCF>0 (−1.77%) and dividend yield
+  (−0.79%) point the wrong way. Keeping the winner after seeing all six is the
+  same search as tuning a threshold.
+- **Leaning on the fundamental score in `RANK_WEIGHTS` as if it ranked anything.**
+  Monthly rank IC against 3m returns is −0.007.
+
+Read the sign with care. For a quality screen's *relative* spread, current-
+constituent bias runs **against** the screen: low-quality firms that failed are
+absent, the ones that succeeded remain. So this shows the screen does not rank
+*survivors*; it cannot show whether it avoids blow-ups that left the index. That
+is the one open question, and it needs point-in-time index membership. Don't
+claim the screen is harmful from these numbers either.
+
+Since 2026-09-25 the dividend-yield unit fix in `ingest.fetch_fundamentals` fails
+sub-1% payers on `Pass_Div`, so live scores dropped a point for 16 of the 31
+watchlist names. A Buy/Hold/Watch count that shifted that day shifted because of
+the fix, not the market.
+
 ### Structural facts found along the way
 
 - **`config.ATR_STOP_MULT` is unreachable.** Sweeping it 1.0 → 3.0 returns
@@ -275,6 +315,8 @@ a 10-slot swing system.
 | "It's better in 8 of 11 years" | Say which years, and whether the losing ones are consecutive. 2021–23 being all-negative is regime dependence, not variance. |
 | "Survivorship bias makes it conservative" | Backwards. Current-constituent bias *inflates* a long-only result. A flattered measurement still showing ~0 is worse news, not better. |
 | "The user needs it profitable" | Then the honest answer is that it isn't, not a number that will lose their money more slowly. |
+| "Fundamentals are a quality filter — of course they help" | Measured point-in-time: Buy minus gate-with-`<4` is −0.004R [−0.111, +0.103]. Until a test on historical membership says otherwise, "they help" is a belief, not a result. |
+| "Survivorship hides the screen's value, so it probably works" | It makes the test blind to blow-up avoidance; it does not turn a null into an edge. "Probably works" is exactly what the data failed to show. |
 
 ## Red flags — stop
 
@@ -283,6 +325,8 @@ a 10-slot swing system.
 - A winning value with losing neighbours (peak, not plateau)
 - "Let me try a few more combinations" after a variant already failed
 - Changing what counts as an entry *and* the exits in the same comparison
+- Quoting a `--scope composite` backtest as evidence about fundamentals — it
+  applies today's `.info` to every past bar
 
 **If the honest result is "no improvement", that is the deliverable.** This repo
 already has a properly-powered measurement saying the setup is worth ~0. Confirming

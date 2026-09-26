@@ -63,8 +63,9 @@ and exits walked from random bars of the same tickers (`--null-reps N`, default 
 geometry is positive on its own. The workbook gains `Robustness` + `Yearly R` sheets.
 
 `research/` holds the offline harness behind the 2026-09-16 tuning study (vectorized
-predicates, memoized exit walks) — scratch code, **not** part of the package or its
-tests; its `README.md` gives the run order. It mirrors the predicates by hand, so
+predicates, memoized exit walks), plus `pit_*.py`, the 2026-09-25 point-in-time test
+of the fundamental screen (SEC filings as filed; needs network once) — scratch
+code, **not** part of the package or its tests; its `README.md` gives the run order. It mirrors the predicates by hand, so
 re-run `research/verify_equivalence.py` after any change to `signals.py`.
 
 ### Sanity-checking edits without network
@@ -110,7 +111,7 @@ Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df`
 
 Thesis flow (separate, on demand): `signal_matrix` (or manual input) → `thesis.sources` → `IDEA` thesis → lifecycle transitions in `thesis.store` (JSON under `data/theses/`, `DEFAULT_THESES_DIR`) → `thesis.review` postmortem/summary → `thesis.report` aggregated HTML journal (`stock-analysis thesis report` → `output/theses/<ts>/report.html`). Driven by `stock-analysis thesis …` or the `stockanalysis.thesis` library API; demo in `notebooks/thesis_tracking.ipynb`. The `stock-analysis thesis` command surface and workflow are documented as a project skill: `.claude/skills/thesis-tracking/SKILL.md`.
 
-**Before changing any signal threshold** — the `TECHNICAL_COMPONENTS` predicates, which components are `gating`, `DEFAULT_FUND_MIN`, or the `config.py` placement knobs — read the project skill `.claude/skills/tuning-signals/SKILL.md`. It carries the measured baseline (7,253 trades, +0.030R, 95% CI [−0.038, +0.099] clustered by month — indistinguishable from zero and from a random entry), the required hold-out/plateau workflow, and the variants already tested and found dead, so a tuning pass doesn't rediscover them.
+**Before changing any signal threshold** — the `TECHNICAL_COMPONENTS` predicates, which components are `gating`, `DEFAULT_FUND_MIN` or the `screen_fundamentals` thresholds, or the `config.py` placement knobs — read the project skill `.claude/skills/tuning-signals/SKILL.md`. It carries the measured baseline (7,253 trades, +0.030R, 95% CI [−0.038, +0.099] clustered by month — indistinguishable from zero and from a random entry), the point-in-time result that the fundamental screen adds nothing either (Buy minus gate-with-score<4: −0.004R [−0.111, +0.103]), the required hold-out/plateau workflow, and the variants already tested and found dead, so a tuning pass doesn't rediscover them.
 
 Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives **only** in the notebook/CLI, never in the package core — the rule is about *interactive* display, not a pure function that returns a string. `report.py` and `thesis/report.py` are the two deliberate, precedented exceptions: both build a self-contained HTML string from already-fetched data with no `Styler`/`fig.show()`/print side effects, so they're safe to call from a headless job.
 
