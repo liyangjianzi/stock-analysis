@@ -53,6 +53,12 @@ have been intraday); a ticker that disagrees is refetched whole and swapped in b
 old basis. Before this check, APH drifted ×0.998451 in a week of nightly top-ups. The S&P 500 list is
 **current constituents only** — delisted names are absent, so results still carry
 survivorship bias, just far less sector concentration than the 21-name watchlist.
+The bias is measured, not hypothetical: an equal-weight index rebuilt from today's
+list beats RSP (the real equal-weight S&P 500 ETF) by **+5.0%/yr** over 2006–26,
+against +1.1%/yr (about RSP's fee) from point-in-time membership, and it turned
+12-1 momentum from −2.2%/yr into +3.5%/yr (`research/mom_*.py`). Treat any
+universe-level result here as flattered; a cross-sectional rule needs the
+point-in-time path in `research/mom_fetch.py`.
 
 `--exits plan` never prints a bare expectancy. Every run also reports the 95% CI
 **clustered by entry month** (7k correlated trades are ~118 draws, not 7k), the two
@@ -63,10 +69,13 @@ and exits walked from random bars of the same tickers (`--null-reps N`, default 
 geometry is positive on its own. The workbook gains `Robustness` + `Yearly R` sheets.
 
 `research/` holds the offline harness behind the 2026-09-16 tuning study (vectorized
-predicates, memoized exit walks), plus `pit_*.py`, the 2026-09-25 point-in-time test
-of the fundamental screen (SEC filings as filed; needs network once) — scratch
-code, **not** part of the package or its tests; its `README.md` gives the run order. It mirrors the predicates by hand, so
-re-run `research/verify_equivalence.py` after any change to `signals.py`.
+predicates, memoized exit walks), plus two 2026-09-25 studies that each need network
+once: `pit_*.py`, the point-in-time test of the fundamental screen (SEC filings as
+filed), and `mom_*.py`, 12-1 momentum as a monthly portfolio on point-in-time S&P 500
+membership (fja05680/sp500) against an equal-weight benchmark checked against RSP.
+Both came back no-edge. Scratch code, **not** part of the package or its tests; its
+`README.md` gives the run order. It mirrors the predicates by hand, so re-run
+`research/verify_equivalence.py` after any change to `signals.py`.
 
 ### Sanity-checking edits without network
 - **Test suite (fully offline):** `pip install -e ".[test]"` then `pytest`. The

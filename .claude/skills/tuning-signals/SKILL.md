@@ -1,6 +1,6 @@
 ---
 name: tuning-signals
-description: Use when changing any threshold in this repo's signal engine — the predicates in signals.py TECHNICAL_COMPONENTS (EMA50 slope, RSI3 dip, ATR pullback zone, volume multiple), which components are gating, DEFAULT_FUND_MIN or the screen_fundamentals thresholds (P/E, growth, debt/equity, dividend yield, FCF), or the placement knobs in config.py (ATR_STOP_MULT, STOP_BUFFER_ATR, MIN_STOP_ATR, MIN_TARGET_ATR, MIN_RR). Also use when asked to "improve expectancy", "tune the gate", "make the signal profitable", "optimize the parameters", or when a backtest result is about to be reported as an improvement.
+description: Use when changing any threshold in this repo's signal engine — the predicates in signals.py TECHNICAL_COMPONENTS (EMA50 slope, RSI3 dip, ATR pullback zone, volume multiple), which components are gating, DEFAULT_FUND_MIN or the screen_fundamentals thresholds (P/E, growth, debt/equity, dividend yield, FCF), or the placement knobs in config.py (ATR_STOP_MULT, STOP_BUFFER_ATR, MIN_STOP_ATR, MIN_TARGET_ATR, MIN_RR). Also use when asked to "improve expectancy", "tune the gate", "make the signal profitable", "optimize the parameters", when proposing a new entry rule or strategy family (momentum, breakout, mean reversion, another indicator), or when a backtest result is about to be reported as an improvement.
 ---
 
 # Tuning Signals
@@ -28,6 +28,13 @@ Gate entries, plan exits, 503 S&P 500 names, 10y (`b93b46d`):
 | Positive years | **6 of 11** — negative in 2016 (n=5), **2021, 2022, 2023** consecutively, and 2026 (partial) |
 | Gate fire rate | **0.66%** of bars (broad universe; a tech-heavy 21-name sample gives 1.12% — don't quote that one) |
 | Score distribution | `0/5 4.9% · 1/5 50.6% · 2/5 35.1% · 3/5 8.5% · 4/5 0.8% · 5/5 0.1%` (21-name replay, 10,523 bars — the posture cutoffs are calibrated to *this*, so re-derive it if you change the registry) |
+
+**Every universe number in this skill is on today's constituents**
+(`data/universe_sp500.csv`), and that list is measurably flattering: an equal-weight
+index rebuilt from it beats RSP, the real equal-weight S&P 500 ETF, by **+5.0%/yr**
+over 2006–26, against +1.1%/yr (about RSP's fee) when rebuilt from point-in-time
+membership (`research/mom_*.py`). The gate's +0.030R is flattered too; by how much
+in R is unmeasured.
 
 ### The benchmark is not zero — it is a random entry
 
@@ -234,16 +241,40 @@ and friends are near-collinear transforms of one price series. Swapping among th
 is a change of coordinates, not new information. **Do not re-propose a different
 oscillator, a different moving-average pair, or a different band.**
 
-**The one open lead** is the last row: cross-sectional 12-1 momentum is the only
-rule whose test expectancy matched its train expectancy (+0.065 → +0.061) instead
-of decaying ~0.09 like everything else, and it is the only family that reads
-information from *outside* the single ticker's OHLCV. It is **not** a confirmed
-edge — pooled clustered CI [−0.003, +0.129] includes zero, 7 of 10 years positive,
-and the cutoff sweep is flat on train (+0.065…+0.086 across 0.70–0.98) while
-rising only on test, which is the signature of a one-half threshold. Treat it as
-the hypothesis worth a proper study, not as a result. Note also that it fires ~13
-times a day across 503 names: that is a portfolio-scale statistical strategy, not
-a 10-slot swing system.
+The last row was the pass's one open lead — the only rule whose test expectancy
+matched its train expectancy. It is now **closed**: measured as the portfolio it
+is, on point-in-time membership, it loses to an equal-weight benchmark (next section).
+
+### 12-1 momentum as a portfolio — tested point-in-time, dead (2026-09-25)
+
+The row above walked trades through the plan's stops on today's 503 names.
+`research/mom_*.py` (run order in `research/README.md`) measures it as the
+strategy it is: at each month-end hold the top 10% of *that month's* S&P 500
+members (fja05680 reconstruction) by 12-1 return, equal weight, for one month,
+against the equal-weight average of all members, net of 10 bps a side. 2006–26,
+of which 2006–15 had never been looked at.
+
+| 12-1 top 10%, net excess vs equal weight | All | 2006–15 | 2016–21 | 2022–26 |
+|---|---|---|---|---|
+| Point-in-time membership | **−2.18%/yr [−7.00, +2.63]** | −5.80% | −4.53% | +8.77% |
+| Today's constituents | +3.49%/yr [−1.81, +8.78] | −0.97% | +0.68% | +16.88% |
+
+10 of 21 years positive; the net excess drew down −61%, worst month 2009-03
+(−19.7%, a top decile of defensives into the junk rally). Specifically do not
+re-propose:
+
+- **Momentum with another lookback or cutoff.** All 16 cells (top 5/10/20/30% ×
+  6-1, 9-1, 12-1, 12-0) are negative in 2006–15 and in 2016–21 and positive in
+  2022–26 — a plateau of *regime*, not of edge. 2022–26 is when the AI and power
+  names ran (May 2024's top decile: SMCI, VST, NVDA, CEG).
+- **Momentum long-short.** Top minus bottom decile: −5.51%/yr [−17.5, +6.5].
+- **2022–26 as evidence.** On today's list it reads +16.9%/yr at p=0.015 — the
+  most significant number this repo has produced — and about half of it is
+  survivorship: point-in-time it is +8.8%/yr, CI [−2.2, +19.8].
+
+Yahoo prices only ~26% of the names that left the index, so the point-in-time
+universe still misses 44% of members in 2006 (1% by 2026); the RSP gap bounds
+that at ~1%/yr on the benchmark, too small to rescue −2.2%/yr.
 
 ### The fundamental screen — tested point-in-time, no effect (2026-09-25)
 
@@ -313,7 +344,8 @@ the fix, not the market.
 | "The point estimate went up" | 142 trades gave +0.034R; 7,253 gave +0.030R. Point estimates barely moved — only the CI shrank. Report the CI. |
 | "I only changed one parameter" | You chose *which* one after seeing the data. That is still a search. |
 | "It's better in 8 of 11 years" | Say which years, and whether the losing ones are consecutive. 2021–23 being all-negative is regime dependence, not variance. |
-| "Survivorship bias makes it conservative" | Backwards. Current-constituent bias *inflates* a long-only result. A flattered measurement still showing ~0 is worse news, not better. |
+| "Survivorship bias makes it conservative" | Backwards. Current-constituent bias *inflates* a long-only result — by **~5%/yr** on an equal-weight S&P 500 (today's list vs RSP, 2006–26), and it turned 12-1 momentum from −2.2%/yr into +3.5%/yr. A flattered measurement still showing ~0 is worse news, not better. |
+| "It's significant on the recent period" | 12-1 momentum, 2022–26, today's list: +16.9%/yr, p=0.015. Point-in-time over 2006–26: −2.2%/yr. One recent regime on a survivor list is the easiest significant number there is. |
 | "The user needs it profitable" | Then the honest answer is that it isn't, not a number that will lose their money more slowly. |
 | "Fundamentals are a quality filter — of course they help" | Measured point-in-time: Buy minus gate-with-`<4` is −0.004R [−0.111, +0.103]. Until a test on historical membership says otherwise, "they help" is a belief, not a result. |
 | "Survivorship hides the screen's value, so it probably works" | It makes the test blind to blow-up avoidance; it does not turn a null into an edge. "Probably works" is exactly what the data failed to show. |
@@ -327,6 +359,8 @@ the fix, not the market.
 - Changing what counts as an entry *and* the exits in the same comparison
 - Quoting a `--scope composite` backtest as evidence about fundamentals — it
   applies today's `.info` to every past bar
+- Reporting a cross-sectional or universe-wide rule measured only on today's
+  constituents — `research/mom_fetch.py` has the point-in-time membership path
 
 **If the honest result is "no improvement", that is the deliverable.** This repo
 already has a properly-powered measurement saying the setup is worth ~0. Confirming

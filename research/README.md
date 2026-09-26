@@ -31,8 +31,9 @@ Two scripts also need a sibling's output: `holdout.py` reads `breadth.pkl` (from
 `extension_doseresponse.py`). `memo.py` builds `trade_cache.pkl` on its own.
 
 **Results:** no threshold or exit variant survived out of sample, and no indicator
-family beat a random-entry null. The one unresolved lead is cross-sectional 12-1
-momentum. See `.claude/skills/tuning-signals/SKILL.md` for the tables.
+family beat a random-entry null. The one unresolved lead, cross-sectional 12-1
+momentum, was closed on 2026-09-25 (see the `mom_*.py` section below). See
+`.claude/skills/tuning-signals/SKILL.md` for the tables.
 
 ## Fundamental-screen study (2026-09-25) — `pit_*.py`
 
@@ -69,3 +70,42 @@ avoids blow-ups that left the index. That needs point-in-time index membership.
 Coverage: 475 of 502 names/month have a filing in the last 200 days; BRK-B excluded
 (class A/B share counts break market cap); 60 names have partial SEC history
 (IPOs, spin-offs, re-registered CIKs such as XOM, BLK) and are skipped while uncovered.
+
+## 12-1 momentum as a portfolio (2026-09-25) — `mom_*.py`
+
+The one open lead from the 09-16 pass, measured as the strategy it is: at each
+month-end hold the top 10% of the month's S&P 500 members by 12-1 return, equal
+weight, one month, against the equal-weight average of all members, net of 10 bps
+per side. 2006-2026, of which 2006-2015 the earlier pass never saw.
+
+| File | What it does |
+|---|---|
+| `mom_fetch.py` | Point-in-time membership from fja05680/sp500 (daily reconstruction since 1996) + yfinance total-return closes for all 973 tickers ever in the index since 2005, plus RSP. ~3 min, network. |
+| `mom_study.py` | Coverage, benchmark check vs RSP, primary result, grid, long-short. Seconds. Output in `mom_study.log`. |
+
+**Result: no edge; the 2022-26 number is a regime, and today's list doubled it.**
+
+| 12-1, top 10%, net excess vs equal weight | All | 2006-15 | 2016-21 | 2022-26 |
+|---|---|---|---|---|
+| Point-in-time membership (primary) | **−2.18%/yr [−7.00, +2.63]** | −5.80% | −4.53% | +8.77% |
+| Today's constituents (what the lead used) | +3.49%/yr [−1.81, +8.78] | −0.97% | +0.68% | +16.88% (p=0.015) |
+
+- Fails every part of the pre-declared bar: CI includes zero, negative in two of three periods.
+- The grid agrees: all 16 cells (top 5/10/20/30% x 6-1, 9-1, 12-1, 12-0) are negative
+  in 2006-15 and in 2016-21 and positive in 2022-26 — a plateau of *regime*, not of edge.
+- 10 of 21 years positive; max drawdown of the net excess −61%; worst month 2009-03
+  (−19.7%: the top decile was defensives — AMGN, MCD, GIS, utilities — into the junk rally).
+- Top-minus-bottom decile: −5.51%/yr [−17.5, +6.5].
+
+**The survivorship check is the finding worth keeping.** Rebuilt equal-weight minus
+RSP (the real equal-weight ETF, fee ~0.2-0.4%/yr): point-in-time **+1.12%/yr**
+(tracking error 1.2%, corr 0.997); today's list **+5.04%/yr**. Today's list flatters
+an equal-weight S&P 500 by ~5%/yr, and flatters momentum more than that: it turned
+a −2.2%/yr strategy into +3.5%/yr. Any universe-level backtest on
+`data/universe_sp500.csv` carries that bias.
+
+Caveats: Yahoo prices only ~26% of the names that left the index, so the point-in-
+time universe misses 44% of members in 2006, falling to 1% by 2026 (printed per
+year). Missing names are mostly failed or acquired firms; the RSP gap bounds their
+effect on the benchmark at ~1%/yr, too small to rescue the result. Delisting returns
+are unavailable (a name marks at its last close).
