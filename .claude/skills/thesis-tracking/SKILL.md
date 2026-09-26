@@ -55,6 +55,7 @@ the same run never duplicates. Thesis types: `dividend_income`,
 | `reviewed <id> --date D [--outcome OK\|WARN\|REVIEW --notes "…"]` | Record a review, advance the next date. |
 | `postmortem <id> [--no-prices]` | Markdown report → `data/theses/journal/pm_<id>.md`. Pulls MAE/MFE from yfinance unless `--no-prices`. |
 | `summary` | Aggregate realized performance (win rate, avg P&L %, by type). |
+| `report [--out DIR]` | Aggregated HTML journal of every thesis → `output/theses/<ts>/report.html`. |
 | `doctor` / `reindex` | Validate state vs index / rebuild `_index.json`. |
 
 ### Typical flow
@@ -69,6 +70,7 @@ stock-analysis thesis review-due                    # what needs a look
 stock-analysis thesis close <id> --reason target_hit --price 230 --date 2026-06-29
 stock-analysis thesis postmortem <id>               # report + MAE/MFE
 stock-analysis thesis summary
+stock-analysis thesis report                        # HTML journal of every thesis
 ```
 
 ## Library API
@@ -83,6 +85,9 @@ from stockanalysis import config, pipeline
 
 state = config.DEFAULT_THESES_DIR
 ids = from_signal_matrix(state, pipeline.run().signal_matrix)   # Buys → IDEA theses
+
+from stockanalysis.thesis.report import write_report
+write_report(state)                        # -> output/theses/<ts>/report.html
 ```
 
 Every function takes the state dir as its first argument; the lifecycle

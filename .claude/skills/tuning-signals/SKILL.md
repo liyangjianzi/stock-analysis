@@ -5,7 +5,7 @@ description: Use when changing any threshold in this repo's signal engine — th
 
 # Tuning Signals
 
-This repo can price any parameter set in ~6 minutes over 7,253 trades. That makes
+This repo can price any parameter set in ~5 minutes over ~7,250 trades. That makes
 **finding a better number trivially easy and almost always meaningless** — with
 ~8 tunable thresholds and one cached dataset, a search will always surface a
 combination that looks better in-sample. The discipline here is not about how to
@@ -76,7 +76,7 @@ the adjustment-drift fix, bars cut at 2026-09-24: 7,262 trades / 48.1%, **+0.030
 (n=3,638); 6 of 10 years positive (the 10y window has slid past 2016; still
 negative 2021–23 and 2026). Same conclusions. Two things move between re-runs and
 are not signal: the 1-rep random null (+0.073 → +0.075 → +0.080R across runs —
-pass `--null-reps 12` if the edge line is what you're reading), and a few trades
+pass `--null-reps 12`, ~4 min more, if the edge line is what you're reading), and a few trades
 per year from Yahoo restating adjusted history (COR, IVZ, MCK moved up to 1%).
 
 ## Required workflow
@@ -85,12 +85,15 @@ The shipped backtest now does the arithmetic for steps 1–3 and 5 — use it ra
 than a hand-rolled harness, and quote what it prints:
 
 ```bash
-stock-analysis backtest --exits plan --universe data/universe_sp500.csv --period 10y --split 2022-01-01   # ~7 min
+stock-analysis backtest --exits plan --universe data/universe_sp500.csv --period 10y --split 2022-01-01   # ~5 min
 ```
 
 1. **Reproduce the baseline first.** It must print ~+0.030R on the full universe.
    If your variant's harness doesn't reproduce that, the harness is wrong — fix it
-   before believing any variant.
+   before believing any variant. If the shipped command itself drifts with
+   `signals.py` unchanged, suspect the cache before the code: nightly top-ups
+   rebuild names a dividend/split re-adjusted, but only
+   `stock-analysis cache --full` catches Yahoo restating older history.
 2. **Split before you look.** Tune on 2016–2021, confirm on 2022–2026. The
    `halves (split 2022-01-01)` line is exactly this; report both halves.
    A variant that only works in-sample is not a variant, it is a coincidence.
@@ -104,11 +107,51 @@ stock-analysis backtest --exits plan --universe data/universe_sp500.csv --period
    verdict is not `beats random entry` has not shown an edge, however positive
    its expectancy.
 
-Search variants in-memory instead of editing source —
-`compute_technical_posture(df, components=...)` accepts a custom registry, and
-`backtest.build_results_from_prices(prices, exits="plan", ...)` returns the same
-`robustness` block the CLI prints. `research/` holds the vectorized 09-16 harness
-if a sweep needs to be faster than that.
+### Running a variant in-memory
+
+Don't edit source to try a variant — run it through
+`backtest.build_results_from_prices`, which returns the same `robustness` block
+the CLI prints. Two traps, both verified: it takes no `components=`, and
+**patching a `config` knob does nothing** — `build_trade_plan` binds those as
+defaults at import, so the run comes back bit-identical, which reads exactly
+like "this knob doesn't matter". Patch the names `backtest` actually calls, and
+vary entry and placement in **separate** runs:
+
+```python
+from functools import partial
+from unittest import mock
+from stockanalysis import backtest as bt, cache, config, signals
+from stockanalysis.indicators import value_at
+from stockanalysis.tradeplan import build_trade_plan
+
+with cache.connect() as conn:
+    prices = cache.load_universe(conn, list(config.load_watchlist_csv("data/universe_sp500.csv")))
+run = lambda: bt.build_results_from_prices(prices, exits="plan", split_at="2022-01-01")
+
+# entry variant: a predicate threshold (NaN compares False, i.e. fails, as shipped).
+# Plan backtests enter on the *gating* components only, so this swap alone leaves
+# every trade identical — dip_deep/vol_pattern move the score, never an entry. A
+# flat sweep of a non-gating threshold is that, not robustness.
+dip_22 = lambda df: value_at(df, "RSI3", 1) < 22
+variant = [c._replace(predicate=dip_22) if c.name == "dip_deep" else c
+           for c in signals.TECHNICAL_COMPONENTS]      # or c._replace(gating=...)
+with mock.patch("stockanalysis.backtest.TECHNICAL_COMPONENTS", variant):
+    r = run()
+
+# placement variant: a trade-plan knob
+with mock.patch("stockanalysis.backtest.build_trade_plan",
+                partial(build_trade_plan, stop_buffer_atr=1.0)):
+    r = run()
+
+r.robustness["first"]["gate"], r.robustness["second"]["gate"]   # train / test
+r.robustness["all"]["edge"]["verdict"]                           # vs random entry
+```
+
+For sweeps too big for ~5 min a variant, `research/` holds the 09-16 harness
+(vectorized predicates, memoized exit walks — seconds per variant). It mirrors
+the predicates by hand: run `research/verify_equivalence.py` first (needs no
+pickles; ALL MATCH as of 2026-09-25) and again whenever `signals.py` changes, then
+`run_baseline.py` to rebuild the gitignored pickles everything else reads.
 
 ## Already tested — do not re-propose
 
@@ -202,7 +245,7 @@ the hypothesis worth a proper study, not as a result. Note also that it fires ~1
 times a day across 503 names: that is a portfolio-scale statistical strategy, not
 a 10-slot swing system.
 
-### Two structural facts found along the way
+### Structural facts found along the way
 
 - **`config.ATR_STOP_MULT` is unreachable.** Sweeping it 1.0 → 3.0 returns
   *bit-identical* results, because **100.00%** of 7,253 entries take the structural
@@ -210,10 +253,17 @@ a 10-slot swing system.
   always a qualifying support. The ATR fallback never fires on this universe.
   (`min_target_atr`'s 2R fallback fires 0.86% of the time.) Treat it as dead
   config: don't "tune" it, and don't believe a result that claims it mattered.
+  This was measured by passing the knob to `build_trade_plan` directly plus a
+  stop-basis census — not by patching `config`, which is bit-identical for
+  *every* knob (see "Running a variant in-memory").
 - **30.2% of plans have a planned R:R below 1.0** (median 1.30). The gate finds
   entries whose nearest structure is worse than break-even on paper. Filtering
   those out is the already-dead R:R floor above — the point here is only that a
   low median R:R is the *normal* state of this plan, not a bug to chase.
+- **`config.MIN_RR` filters nothing.** Its only reader is `report.py`, which
+  flags plans below it in the HTML report. No entry, plan or backtest reads it,
+  so changing it cannot move a result; skipping low-R:R entries is the dead R:R
+  floor filter above.
 
 ## Rationalization table
 
