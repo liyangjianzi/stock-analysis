@@ -10,9 +10,9 @@ Run from this directory with the project venv active.
 | File | What it does |
 |---|---|
 | `tune_harness.py` | Vectorized mirrors of the `signals.TECHNICAL_COMPONENTS` predicates, plus expectancy stats with **naive and month-cluster** error bars. |
-| `verify_equivalence.py` | **Run this first.** Asserts the vectorized gate equals `backtest.posture_timeline(mode="gate")` bar for bar, including entry de-overlapping. If it fails, every number below is void. |
+| `verify_equivalence.py` | **Run this first** (needs no pickles). Asserts the vectorized gate equals `backtest.posture_timeline(mode="gate")` bar for bar, including entry de-overlapping. If it fails, every number below is void. Last run 2026-09-25: ALL MATCH. |
 | `memo.py` | Memoizes trade outcomes by `(ticker, entry bar)`. The exit walk depends only on the entry bar, never on which gate selected it, so variants share results — a 66s full-universe run becomes seconds once warm. |
-| `run_baseline.py` | Reproduces the shipped baseline (7,253 trades / 48.19% / +0.0305R) and caches `enriched.pkl` + `baseline_trades.pkl`. |
+| `run_baseline.py` | Reproduces the shipped baseline (7,253 trades / 48.19% / +0.0305R on the 09-16 cache — the cache moves; the skill records the latest re-verification) and caches `enriched.pkl` + `baseline_trades.pkl`. |
 | `sweep_entry.py`, `sweep_composition.py`, `sweep_regime.py` | Train-period (≤2021) sweeps of thresholds, gate composition, and a breadth regime filter. |
 | `holdout.py` | The single held-out confirmation pass over the shortlist. |
 | `gradient_check.py`, `extension_doseresponse.py` | Do the sweep *shapes* replicate out of sample? (Only `pullback_zone`'s did, and it still failed.) |

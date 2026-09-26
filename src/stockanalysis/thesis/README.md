@@ -47,6 +47,7 @@ stock-analysis thesis close <id> --reason target_hit --price 230 --date 2026-06-
 stock-analysis thesis review-due                    # what needs a look today
 stock-analysis thesis postmortem <id>               # markdown report + MAE/MFE
 stock-analysis thesis summary                        # win rate, avg P&L %, by type
+stock-analysis thesis report                         # HTML journal → output/theses/<ts>/report.html
 ```
 
 Other actions: `register` (manual idea), `list`, `show`, `invalidate`,
@@ -70,6 +71,9 @@ tid = from_manual(state, {                                       # or a hand-for
     "thesis_statement": "Durable franchise, fair price.",
     "target_price": 380, "stop_price": 340,
 })
+
+from stockanalysis.thesis.report import write_report
+write_report(state)                         # → output/theses/<ts>/report.html
 ```
 
 Every function takes the state dir as its first argument.
@@ -82,6 +86,7 @@ Every function takes the state dir as its first argument.
 | `store.py` | JSON persistence (atomic writes) + the lifecycle functions and ledger-based P&L. |
 | `sources.py` | `from_signal_matrix` and `from_manual` registration adapters. |
 | `review.py` | Injectable `YFinancePriceAdapter`, MAE/MFE, markdown postmortem, summary stats. |
+| `report.py` | `build_html_report` (pure) + `write_report` — one aggregated HTML journal of every thesis, into a timestamped `output/theses/<ts>/`. |
 | `cli.py` | The `stock-analysis thesis …` subcommand. |
 
 Demo notebook: [`notebooks/thesis_tracking.ipynb`](../../../notebooks/thesis_tracking.ipynb).
