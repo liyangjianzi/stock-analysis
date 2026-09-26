@@ -23,15 +23,14 @@ covered name still fails, exactly as in the live screen.
 """
 from __future__ import annotations
 
-import csv
-import math
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 
-from pit_fundamentals import load, metrics_at
+from pit_fundamentals import COLS, PASSES, load, metrics_at
+from stats import by_period, nw, window
 from stockanalysis import backtest as bt, cache, config, robustness
 from stockanalysis.screener import screen_fundamentals
 
@@ -39,10 +38,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 UNIVERSE = ROOT / "data" / "universe_sp500.csv"
 SPLIT = pd.Timestamp("2022-01-01")
+HALVES = (("first", None, SPLIT), ("second", SPLIT, None))
 STALE = pd.Timedelta(days=200)
 HORIZONS = (1, 3, 6, 12)
-COLS = ["PE", "EPS_Growth", "Rev_Growth", "Debt_Equity", "Div_Yield", "FCF"]
-PASSES = ["Pass_PE", "Pass_EPS", "Pass_Rev", "Pass_DE", "Pass_Div", "Pass_FCF"]
 NULL_REPS = 5
 # Class A trades ~1,500x class B, so summing the classes' share counts breaks
 # market cap (P/E comes out ~0.005). Every other multi-class name trades near par.
@@ -50,21 +48,6 @@ EXCLUDE = {"BRK-B"}
 
 
 # --- stats -------------------------------------------------------------------
-
-def nw(x, lags: int) -> dict:
-    """Mean of a monthly series with a Newey-West (Bartlett) SE."""
-    x = pd.Series(x, dtype=float).dropna().to_numpy()
-    T = len(x)
-    if T < 3:
-        return {"mean": np.nan, "se": np.nan, "lo": np.nan, "hi": np.nan, "p": np.nan, "T": T}
-    mu, e = x.mean(), x - x.mean()
-    var = e @ e / T
-    for k in range(1, min(lags, T - 1) + 1):
-        var += 2 * (1 - k / (lags + 1)) * (e[k:] @ e[:-k]) / T
-    se = math.sqrt(var / T)
-    p = math.erfc(abs(mu / se) / math.sqrt(2)) if se > 0 else np.nan
-    return {"mean": mu, "se": se, "lo": mu - 1.96 * se, "hi": mu + 1.96 * se, "p": p, "T": T}
-
 
 def fmt(r: dict, pct=True) -> str:
     s = 100 if pct else 1
@@ -75,9 +58,9 @@ def fmt(r: dict, pct=True) -> str:
 
 # --- data --------------------------------------------------------------------
 
-def sectors() -> dict[str, str]:
-    with open(UNIVERSE, newline="") as f:
-        return {r["ticker"]: r["sector"] for r in csv.DictReader(f)}
+def covered(m: pd.DataFrame) -> pd.Series:
+    """A name-date is scored only if it has a filing in the last STALE days."""
+    return m["filed"].notna() & ((m["date"] - m["filed"]) <= STALE)
 
 
 def score(df: pd.DataFrame, live_div_bug: bool = False) -> pd.DataFrame:
@@ -106,8 +89,8 @@ def monthly_panel(prices_adj: dict, snaps, prices_raw, sec) -> pd.DataFrame:
     q.columns = ["date", "Ticker", "close"]
     m = metrics_at(q[["Ticker", "date"]], snaps, prices_raw)
     m = m.merge(q, on=["Ticker", "date"])
-    m["covered"] = m["filed"].notna() & ((m["date"] - m["filed"]) <= STALE)
-    m = pd.concat([m, score(m).add_prefix("")], axis=1)
+    m["covered"] = covered(m)
+    m = pd.concat([m, score(m)], axis=1)
     m["score_live"] = score(m, live_div_bug=True)["Fundamental_Score"]
     for h in HORIZONS:
         f = fwd[h].stack().rename(f"r{h}").reset_index()
@@ -130,11 +113,6 @@ def spread_series(m: pd.DataFrame, h: int, flag: pd.Series, neutral: bool) -> pd
     return (g.get(True) - g.get(False)).dropna()
 
 
-def halves(series: pd.Series, h: int) -> dict:
-    return {"all": nw(series, h), "first": nw(series[series.index < SPLIT], h),
-            "second": nw(series[series.index >= SPLIT], h)}
-
-
 def test_a(m: pd.DataFrame):
     c = m[m["covered"] & m["r1"].notna()]
     print(f"\n=== A. Cross-section: {c['date'].nunique()} month-ends "
@@ -150,7 +128,7 @@ def test_a(m: pd.DataFrame):
 
     print("\n-- PRIMARY: score>=4 minus <4, sector-neutral, 3m forward --")
     s = spread_series(c, 3, c["Fundamental_Score"] >= 4, neutral=True)
-    for k, r in halves(s, 3).items():
+    for k, r in by_period(s, HALVES, 3).items():
         print(f"  {k:6s} {fmt(r)}")
 
     print("\n-- score>=4 minus <4 by horizon (raw | sector-neutral | ex-Financials neutral) --")
@@ -159,14 +137,14 @@ def test_a(m: pd.DataFrame):
         cc = c[c[f"r{h}"].notna()]
         xx = xf[xf[f"r{h}"].notna()]
         for label, frame, neu in (("raw", cc, False), ("neutral", cc, True), ("exFin", xx, True)):
-            hv = halves(spread_series(frame, h, frame["Fundamental_Score"] >= 4, neu), h)
+            hv = by_period(spread_series(frame, h, frame["Fundamental_Score"] >= 4, neu), HALVES, h)
             print(f"  {h:2d}m {label:8s} all {fmt(hv['all'])} | "
                   f"1st {hv['first']['mean']*100:+.2f}% p={hv['first']['p']:.2f} | "
                   f"2nd {hv['second']['mean']*100:+.2f}% p={hv['second']['p']:.2f}")
 
     print("\n-- cutoff shape (sector-neutral 3m, score>=k minus <k) --")
     for k in (2, 3, 4, 5, 6):
-        hv = halves(spread_series(c, 3, c["Fundamental_Score"] >= k, True), 3)
+        hv = by_period(spread_series(c, 3, c["Fundamental_Score"] >= k, True), HALVES, 3)
         share = (c["Fundamental_Score"] >= k).mean()
         print(f"  >={k} ({share:5.1%} of names)  all {fmt(hv['all'])} | "
               f"1st {hv['first']['mean']*100:+.2f}% | 2nd {hv['second']['mean']*100:+.2f}%")
@@ -184,17 +162,17 @@ def test_a(m: pd.DataFrame):
         if grp["s"].nunique() > 1 and len(grp) > 20:
             ics.append((d, grp["s"].rank().corr(grp["ex"].rank())))
     ic = pd.Series(dict(ics))
-    for k, r in halves(ic, 3).items():
+    for k, r in by_period(ic, HALVES, 3).items():
         print(f"  {k:6s} IC {r['mean']:+.4f} [{r['lo']:+.4f}, {r['hi']:+.4f}] p={r['p']:.3f}")
 
     print("\n-- each test alone: pass minus fail, sector-neutral 3m --")
     for p in PASSES:
-        hv = halves(spread_series(c, 3, c[p], True), 3)
+        hv = by_period(spread_series(c, 3, c[p], True), HALVES, 3)
         print(f"  {p:9s} pass {c[p].mean():5.1%}  all {fmt(hv['all'])} | "
               f"1st {hv['first']['mean']*100:+.2f}% | 2nd {hv['second']['mean']*100:+.2f}%")
 
     print("\n-- live-bug screen (yields <=1% read as >1.5%): >=4 minus <4, neutral 3m --")
-    hv = halves(spread_series(c, 3, c["score_live"] >= 4, True), 3)
+    hv = by_period(spread_series(c, 3, c["score_live"] >= 4, True), HALVES, 3)
     for k, r in hv.items():
         print(f"  {k:6s} {fmt(r)}")
 
@@ -216,7 +194,7 @@ def _scored(trades, snaps, prices_raw) -> pd.DataFrame:
                       "date": pd.to_datetime([t.entry_date for t in trades]),
                       "R": [t.r_multiple for t in trades]})
     m = metrics_at(q, snaps, prices_raw)
-    m["covered"] = m["filed"].notna() & ((m["date"] - m["filed"]) <= STALE)
+    m["covered"] = covered(m)
     return pd.concat([m, score(m)], axis=1)
 
 
@@ -240,31 +218,31 @@ def test_b(prices_adj, snaps, prices_raw):
           f"{g['covered'].mean():.0%} with point-in-time fundamentals")
     g = g[g["covered"]]
 
-    null_trades = bt.random_entry_trades(prices_adj, trades, reps=NULL_REPS, seed=0,
-                                         max_hold_bars=63, cost_bps=10.0)
-    n = _scored([SimpleNamespace(ticker=t.ticker, entry_date=t.entry_date,
-                                 r_multiple=t.r_multiple) for t in null_trades],
-                snaps, prices_raw)
+    # The CLI backtest's walk (max_hold 3m, 10 bps) is simulate_planned_trades' default.
+    null_trades = bt.random_entry_trades(prices_adj, trades, reps=NULL_REPS, seed=0)
+    n = _scored(null_trades, snaps, prices_raw)
     n = n[n["covered"]]
     print(f"random-entry null: {NULL_REPS} reps, {len(n)} covered trades")
 
-    for label, lo, hi in (("all", None, None), ("first", None, SPLIT), ("second", SPLIT, None)):
-        sel = lambda d: d[d["date"].between(lo or pd.Timestamp.min, hi or pd.Timestamp.max,
-                                            inclusive="left")]
-        gg, nn = sel(g), sel(n)
-        q, nq = gg[gg["Fundamental_Score"] >= 4], nn[nn["Fundamental_Score"] >= 4]
+    rows = (("gate, any score        ", "gate"), ("gate, score>=4  (=Buy) ", "buy"),
+            ("gate, score<4          ", "gate<4"), ("null, any score        ", "null"),
+            ("null, score>=4         ", "null>=4"))
+    edges = (("Buy - gate<4           ", "buy", "gate<4"),
+             ("Buy - null>=4          ", "buy", "null>=4"),
+             ("null>=4 - null<4       ", "null>=4", "null<4"))
+    for label, lo, hi in (("all", None, None), *HALVES):
+        gg, nn = g[window(g["date"], lo, hi)], n[window(n["date"], lo, hi)]
+        st = {k: _stats(d) for k, d in (
+            ("gate", gg), ("buy", gg[gg["Fundamental_Score"] >= 4]),
+            ("gate<4", gg[gg["Fundamental_Score"] < 4]), ("null", nn),
+            ("null>=4", nn[nn["Fundamental_Score"] >= 4]),
+            ("null<4", nn[nn["Fundamental_Score"] < 4]))}
         print(f"\n-- {label} --")
-        print(f"  gate, any score         {_fmt_r(_stats(gg))}")
-        print(f"  gate, score>=4  (=Buy)  {_fmt_r(_stats(q))}")
-        print(f"  gate, score<4           {_fmt_r(_stats(gg[gg['Fundamental_Score'] < 4]))}")
-        print(f"  null, any score         {_fmt_r(_stats(nn))}")
-        print(f"  null, score>=4          {_fmt_r(_stats(nq))}")
-        e1 = robustness.compare(_stats(q), _stats(gg[gg["Fundamental_Score"] < 4]))
-        e2 = robustness.compare(_stats(q), _stats(nq))
-        e3 = robustness.compare(_stats(nq), _stats(nn[nn["Fundamental_Score"] < 4]))
-        print(f"  Buy - gate<4            {e1['exp_r']:+.3f}R [{e1['ci_lo']:+.3f}, {e1['ci_hi']:+.3f}] p={e1['p']:.3f}")
-        print(f"  Buy - null>=4           {e2['exp_r']:+.3f}R [{e2['ci_lo']:+.3f}, {e2['ci_hi']:+.3f}] p={e2['p']:.3f}")
-        print(f"  null>=4 - null<4        {e3['exp_r']:+.3f}R [{e3['ci_lo']:+.3f}, {e3['ci_hi']:+.3f}] p={e3['p']:.3f}")
+        for text, k in rows:
+            print(f"  {text} {_fmt_r(st[k])}")
+        for text, a, b in edges:
+            e = robustness.compare(st[a], st[b])
+            print(f"  {text} {e['exp_r']:+.3f}R [{e['ci_lo']:+.3f}, {e['ci_hi']:+.3f}] p={e['p']:.3f}")
 
     print("\n-- gate trades by score (all periods) --")
     for s_ in sorted(g["Fundamental_Score"].unique()):
@@ -272,11 +250,12 @@ def test_b(prices_adj, snaps, prices_raw):
 
 
 if __name__ == "__main__":
-    tickers = [t for t in config.load_watchlist_csv(UNIVERSE) if t not in EXCLUDE]
+    sectors = config.load_watchlist_csv(UNIVERSE)
+    tickers = [t for t in sectors if t not in EXCLUDE]
     with cache.connect() as conn:
         prices_adj = cache.load_universe(conn, tickers)
-    _, snaps, prices_raw = load()
-    m = monthly_panel(prices_adj, snaps, prices_raw, sectors())
+    snaps, prices_raw = load()
+    m = monthly_panel(prices_adj, snaps, prices_raw, sectors)
     m.to_pickle(HERE / "pit_panel.pkl")
     test_a(m)
     test_b(prices_adj, snaps, prices_raw)

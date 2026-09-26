@@ -9,6 +9,7 @@ This is O(N^2) per ticker — fine for a watchlist of dozens over a few years.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -271,9 +272,7 @@ def random_entry_trades(prices, trades, *, reps: int = 1, seed: int = 0,
     are visited in sorted order so a seed reproduces regardless of trade order.
     """
     rng = np.random.default_rng(seed)
-    counts: dict = {}
-    for t in trades:
-        counts[t.ticker] = counts.get(t.ticker, 0) + 1
+    counts = Counter(t.ticker for t in trades)
     out: list[PlannedTrade] = []
     for tk in sorted(counts):
         hist = prices.get(tk)
@@ -468,36 +467,23 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
     horizons = list(horizons)
     entry_labels = ("Buy",) if mode == "composite" else ("Bullish",)
     bucket = entry_labels[0]
-    label_study = exits != "plan"
+    cfg = {"mode": mode, "horizons": horizons, "max_hold": max_hold,
+           "max_positions": max_positions, "cost_bps": cost_bps,
+           "slippage_mult": slippage_mult, "entry_bucket": bucket,
+           "exits": exits, "null_reps": null_reps, "null_seed": null_seed,
+           "split_at": None}
 
-    timeline_map, ev_returns, base_returns, per_ticker = {}, [], [], {}
+    timeline_map = {}
     for tk, hist in prices.items():
         tl = posture_timeline(hist, mode=mode, fast=fast,
                               fundamental_score=fundamental_scores.get(tk))
-        if tl.empty:
-            continue
-        timeline_map[tk] = tl
-        if not label_study:
-            continue
-        ev = forward_returns(hist, entry_events(tl, entry_labels), horizons)
-        per_ticker[tk] = ev
-        if not ev.empty:
-            ev_returns.append(ev)
-        base_returns.append(forward_returns(hist, list(hist.index[:-1]), horizons))
+        if not tl.empty:
+            timeline_map[tk] = tl
 
-    ev_all = pd.concat(ev_returns) if ev_returns else pd.DataFrame(columns=horizons)
-    base_all = pd.concat(base_returns) if base_returns else pd.DataFrame(columns=horizons)
-
-    port = (simulate_portfolio(prices, timeline_map, entry_labels=entry_labels,
-                               max_positions=max_positions, max_hold_bars=_bars(max_hold),
-                               cost_bps=cost_bps, slippage_mult=slippage_mult)
-            if label_study else {"curve": pd.Series(dtype=float), "summary": {}})
-
-    trades: list = []
-    evaluation: dict = {}
     if exits == "plan":
         sim_kw = dict(max_hold_bars=_bars(max_hold), cost_bps=cost_bps,
                       slippage_mult=slippage_mult)
+        trades: list = []
         for tk, tl in timeline_map.items():
             # Reuse the replay above: every mode records the gate, so the entry
             # dates come free rather than costing a second O(N^2) walk.
@@ -510,24 +496,34 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
             spans = [d for h in prices.values() if h is not None and not h.empty
                      for d in (h.index[0], h.index[-1])]
             split_at = robustness.midpoint(spans) if spans else None
-        if split_at is not None:
-            evaluation = robustness.evaluate(trades, null, split_at)
+        evaluation = robustness.evaluate(trades, null, split_at) if split_at is not None else {}
+        cfg["split_at"] = evaluation.get("split_at")
+        return BacktestResults(mode=mode, trades=trades,
+                               trade_stats=aggregate_trade_stats(trades),
+                               robustness=evaluation, config=cfg)
 
+    ev_returns, base_returns, per_ticker = [], [], {}
+    for tk, tl in timeline_map.items():
+        hist = prices[tk]
+        ev = forward_returns(hist, entry_events(tl, entry_labels), horizons)
+        per_ticker[tk] = ev
+        if not ev.empty:
+            ev_returns.append(ev)
+        base_returns.append(forward_returns(hist, list(hist.index[:-1]), horizons))
+    ev_all = pd.concat(ev_returns) if ev_returns else pd.DataFrame(columns=horizons)
+    base_all = pd.concat(base_returns) if base_returns else pd.DataFrame(columns=horizons)
+
+    port = simulate_portfolio(prices, timeline_map, entry_labels=entry_labels,
+                              max_positions=max_positions, max_hold_bars=_bars(max_hold),
+                              cost_bps=cost_bps, slippage_mult=slippage_mult)
     return BacktestResults(
         mode=mode,
-        event_stats={bucket: aggregate_event_stats(ev_all, base_all)} if label_study else {},
+        event_stats={bucket: aggregate_event_stats(ev_all, base_all)},
         yearly=yearly_means(ev_all),
         portfolio_curve=port["curve"],
         portfolio_summary=port["summary"],
         per_ticker_returns=per_ticker,
-        trades=trades,
-        trade_stats=aggregate_trade_stats(trades) if exits == "plan" else {},
-        robustness=evaluation,
-        config={"mode": mode, "horizons": horizons, "max_hold": max_hold,
-                "max_positions": max_positions, "cost_bps": cost_bps,
-                "slippage_mult": slippage_mult, "entry_bucket": bucket,
-                "exits": exits, "null_reps": null_reps, "null_seed": null_seed,
-                "split_at": evaluation.get("split_at")},
+        config=cfg,
     )
 
 

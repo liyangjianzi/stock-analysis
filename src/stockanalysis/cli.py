@@ -248,10 +248,6 @@ def main(argv=None) -> int:
         res = price_cache.refresh(conn, wanted, period=args.period,
                                   refresh_period=args.refresh_period,
                                   full=args.full, chunk=args.chunk)
-        if res["rebuilt"]:
-            print(f"Rebuilt {len(res['rebuilt'])} ticker(s) whose top-up didn't match "
-                  f"the cache (dividend/split re-adjustment or a refresh gap): "
-                  f"{', '.join(res['rebuilt'])}")
         got = len(res["fetched"]) + len(res["topped_up"]) + len(res["rebuilt"])
         print(f"Cached {got}/{len(wanted)} tickers, {res['bars']:,} bars -> "
               f"{args.db or config.DEFAULT_CACHE_DB}")

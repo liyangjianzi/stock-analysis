@@ -43,7 +43,7 @@ measured before because yfinance `.info` is today-only. Needs network once.
 | File | What it does |
 |---|---|
 | `pit_fetch.py` | SEC XBRL `companyfacts` for the 503 names (~70 s; User-Agent carries a contact, <=8 req/s) + yfinance closes that are split- but not dividend-adjusted, for market cap. Writes `pit_facts.pkl`, `pit_prices.pkl`. |
-| `pit_fundamentals.py` | One snapshot per ticker per filing date (~8 min), metrics rebuilt only from facts filed by then; `metrics_at` prices any `(ticker, date)` from the latest filing *strictly before* it. Writes `pit_snapshots.pkl`. |
+| `pit_fundamentals.py` | One snapshot per ticker per filing date (~2 min, fanned out over processes), metrics rebuilt only from facts filed by then; `metrics_at` prices any `(ticker, date)` from the latest filing *strictly before* it. Writes `pit_snapshots.pkl`. |
 | `pit_validate.py` | Today's snapshot vs the live `Fundamentals` sheet: per-test agreement 90-100%, score within 1 on 20/20 names, `>=4` agreement 95%. D/E runs low where Yahoo counts leases. |
 | `pit_study.py` | A: monthly cross-section, `>=4` minus `<4`, sector-neutral, Newey-West. B: the gate's plan trades split by entry-date score, vs the random-entry null (5 reps). Output in `pit_study.log`. |
 
@@ -82,6 +82,7 @@ per side. 2006-2026, of which 2006-2015 the earlier pass never saw.
 |---|---|
 | `mom_fetch.py` | Point-in-time membership from fja05680/sp500 (daily reconstruction since 1996) + yfinance total-return closes for all 973 tickers ever in the index since 2005, plus RSP. ~3 min, network. |
 | `mom_study.py` | Coverage, benchmark check vs RSP, primary result, grid, long-short. Seconds. Output in `mom_study.log`. |
+| `stats.py` | The Newey-West mean and period windows both `pit_study.py` and `mom_study.py` use. |
 
 **Result: no edge; the 2022-26 number is a regime, and today's list doubled it.**
 

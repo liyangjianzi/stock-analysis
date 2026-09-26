@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from mom_fetch import BENCHMARK_ETF, MEMBERS_PKL, PRICES_PKL, yahoo
+from stats import by_period, nw, window
 
 HERE = Path(__file__).resolve().parent
 COST_BPS = 10.0
@@ -45,22 +46,6 @@ GRID_LOOK = ((6, 1), (9, 1), (12, 1), (12, 0))
 
 
 # --- stats -------------------------------------------------------------------
-
-def nw(x, lags: int = 3) -> dict:
-    x = pd.Series(x, dtype=float).dropna().to_numpy()
-    T = len(x)
-    if T < 6:
-        return dict(mean=np.nan, se=np.nan, lo=np.nan, hi=np.nan, p=np.nan, T=T, ir=np.nan)
-    mu, e = x.mean(), x - x.mean()
-    var = e @ e / T
-    for k in range(1, lags + 1):
-        var += 2 * (1 - k / (lags + 1)) * (e[k:] @ e[:-k]) / T
-    se = math.sqrt(var / T)
-    p = math.erfc(abs(mu / se) / math.sqrt(2)) if se > 0 else np.nan
-    sd = x.std(ddof=1)
-    return dict(mean=mu, se=se, lo=mu - 1.96 * se, hi=mu + 1.96 * se, p=p, T=T,
-                ir=mu / sd * math.sqrt(12) if sd > 0 else np.nan)
-
 
 def ann(r: dict) -> str:
     """Monthly stats shown annualized (x12), as % a year."""
@@ -139,13 +124,6 @@ def run(close, fwd, elig, look: int, skip: int, top: float, bottom: bool = False
     return df
 
 
-def by_period(s: pd.Series) -> dict:
-    out = {"all": nw(s)}
-    for name, lo, hi in PERIODS:
-        out[name] = nw(s[(s.index >= lo) & (s.index < hi)])
-    return out
-
-
 # --- report ------------------------------------------------------------------
 
 def main():
@@ -183,7 +161,7 @@ def main():
                   f"(RSP charges ~0.2-0.4%/yr), tracking error {d.std() * math.sqrt(12):.2%}, "
                   f"corr {b.corr(rsp_m.reindex(b.index)):.3f}")
             for name, lo, hi in PERIODS:
-                dd = d[(d.index >= lo) & (d.index < hi)]
+                dd = d[window(d.index, lo, hi)]
                 print(f"         {name}: {dd.mean() * 1200:+.2f}%/yr")
 
     for u, title in (("pit", "POINT-IN-TIME membership (primary)"),
@@ -193,7 +171,7 @@ def main():
         print(f"  avg names held {df['n_pick'].mean():.0f} of {df['n_univ'].mean():.0f}; "
               f"one-way turnover {df['turnover'].iloc[1:].mean():.0%}/month; "
               f"cost {df['cost'].mean() * 1200:.2f}%/yr")
-        g, n = by_period(df["excess_gross"]), by_period(df["excess"])
+        g, n = by_period(df["excess_gross"], PERIODS), by_period(df["excess"], PERIODS)
         for k in n:
             print(f"  {k:8s} gross {g[k]['mean'] * 1200:+6.2f}%/yr | net {ann(n[k])}")
         yr = df["excess"].groupby(df.index.year).sum()
@@ -208,7 +186,7 @@ def main():
     for look, skip in GRID_LOOK:
         for top in GRID_TOP:
             df = run(close, fwd, elig["pit"], look, skip, top)
-            p = by_period(df["excess"])
+            p = by_period(df["excess"], PERIODS)
             mark = "  <- primary" if (look, skip, top) == PRIMARY else ""
             print(f"  {look:2d}-{skip} top {top:4.0%}: {ann(p['all'])} | "
                   + " | ".join(f"{p[k]['mean'] * 1200:+6.2f}" for k, *_ in PERIODS) + mark)
@@ -217,7 +195,7 @@ def main():
     top_df = res["pit"]
     bot_df = run(close, fwd, elig["pit"], L, S, TOP, bottom=True)
     ls = (top_df["port"] - bot_df["port"] - top_df["cost"] - bot_df["cost"]).dropna()
-    for k, r in by_period(ls).items():
+    for k, r in by_period(ls, PERIODS).items():
         print(f"  {k:8s} {ann(r)}")
 
     res["pit"].to_pickle(HERE / "mom_primary.pkl")

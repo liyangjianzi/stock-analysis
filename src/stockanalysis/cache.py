@@ -240,8 +240,9 @@ def refresh(conn: sqlite3.Connection, tickers, *, period: str = "10y",
         windows = ingest.fetch_bulk_prices(topup, period=refresh_period, chunk=chunk)
         rebase = sorted(t for t, df in windows.items() if drifted(conn, t, df))
         if rebase:
-            log.info("Rebuilding %d ticker(s) whose top-up didn't match the cache "
-                     "over %s: %s", len(rebase), period, ", ".join(rebase))
+            log.info("Rebuilding %d ticker(s) over %s whose top-up didn't match the "
+                     "cache (dividend/split re-adjustment or a refresh gap): %s",
+                     len(rebase), period, ", ".join(rebase))
             windows = {t: df for t, df in windows.items() if t not in rebase}
             rebuilt = ingest.fetch_bulk_prices(rebase, period=period, chunk=chunk)
 

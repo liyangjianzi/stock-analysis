@@ -25,16 +25,18 @@ the share count's date, i.e. price and share count on the same basis.
 from __future__ import annotations
 
 import pickle
-import sys
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "src"))
-from pit_fetch import FACTS_PKL, PRICES_PKL, TAGS  # noqa: E402
+from pit_fetch import FACTS_PKL, PRICES_PKL, TAGS
 
+HERE = Path(__file__).resolve().parent
+#: The six screen metrics metrics_at produces, and screen_fundamentals' pass flags.
+COLS = ["PE", "EPS_Growth", "Rev_Growth", "Debt_Equity", "Div_Yield", "FCF"]
+PASSES = ["Pass_PE", "Pass_EPS", "Pass_Rev", "Pass_DE", "Pass_Div", "Pass_FCF"]
 SNAP_PKL = HERE / "pit_snapshots.pkl"
 SNAP_FROM = pd.Timestamp("2015-06-01")   # enough lead-in for 2016 formation dates
 TOL = pd.Timedelta(days=10)              # 52/53-week fiscal calendars drift a few days
@@ -138,27 +140,22 @@ def total_debt(facts, asof, end) -> tuple[float, bool]:
     Returns ``(debt, tagged)`` -- ``tagged`` False means no debt tag at all, which
     is read as zero debt (a debt-free filer has nothing to tag).
     """
-    g = lambda t: _instant(facts, t, asof, end)
-    ltd = next((v for v in (g(t) for t in TAGS["LTD"]) if np.isfinite(v)), np.nan)
-    nc = [g(t) for t in TAGS["LTD_NC"]]
-    cur = [g(t) for t in TAGS["LTD_C"]]
-    stb = next((v for v in (g("ShortTermBorrowings"), g("CommercialPaper")) if np.isfinite(v)), np.nan)
-    debt_current = g("DebtCurrent")
-    parts = [ltd, *nc, *cur, stb, debt_current]
-    if not any(np.isfinite(parts)):
+    first = lambda fam: next((v for v in (_instant(facts, t, asof, end) for t in TAGS[fam])
+                              if np.isfinite(v)), np.nan)
+    ltd, nc, cur, stb, dc = (first(f) for f in ("LTD", "LTD_NC", "LTD_C", "STB", "DEBT_C"))
+    if not np.isfinite([ltd, nc, cur, stb, dc]).any():
         return 0.0, False
-    z = lambda v: v if np.isfinite(v) else 0.0
-    if np.isfinite(ltd):
+    z = np.nan_to_num
+    if np.isfinite(ltd):                     # LongTermDebt already includes current maturities
         return ltd + z(stb), True
-    nc_v = next((v for v in nc if np.isfinite(v)), 0.0)
-    if np.isfinite(debt_current):
-        return nc_v + debt_current, True
-    return nc_v + z(next((v for v in cur if np.isfinite(v)), np.nan)) + z(stb), True
+    if np.isfinite(dc):                      # DebtCurrent already includes short-term borrowings
+        return z(nc) + dc, True
+    return z(nc) + z(cur) + z(stb), True
 
 
 def _shares(facts, asof) -> tuple[float, pd.Timestamp | None]:
     """Cover-page shares outstanding (summed across share classes) and its date."""
-    for tag in ("EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding"):
+    for tag in (*TAGS["SHARES_DEI"], *TAGS["SHARES_GAAP"]):
         df = facts.get(tag)
         if df is None or df.empty:
             continue
@@ -193,8 +190,8 @@ def snapshot(facts: dict, asof: pd.Timestamp) -> dict:
 
     ocf_ttm = _flow_ttm(ocf)
     capex_end = _latest_end(ocf)
-    capex_ttm = _flow_ttm(capex, capex_end) if capex is not None and capex_end is not None else np.nan
-    div_ttm = _flow_ttm(div, _latest_end(div)) if div is not None else np.nan
+    capex_ttm = _flow_ttm(capex, capex_end) if capex_end is not None else np.nan
+    div_ttm = _flow_ttm(div) if div is not None else 0.0
     # A dividend tag that stopped being filed means the dividend stopped.
     if div is not None and ni is not None and _latest_end(div) < _latest_end(ni) - pd.Timedelta(days=200):
         div_ttm = 0.0
@@ -204,20 +201,29 @@ def snapshot(facts: dict, asof: pd.Timestamp) -> dict:
         "eps_growth": _yoy(ni), "rev_growth": _yoy(rev),
         "equity": equity, "debt": debt, "debt_tagged": tagged,
         "fcf": ocf_ttm - (capex_ttm if np.isfinite(capex_ttm) else 0.0),
-        "div_ttm": div_ttm if div is not None else 0.0,
+        "div_ttm": div_ttm,
         "shares": shares, "shares_end": shares_end,
     }
 
 
+def _ticker_snapshots(facts: dict) -> pd.DataFrame | None:
+    filed = sorted({f for df in facts.values() for f in df["filed"] if f >= SNAP_FROM})
+    rows = [{"filed": f, **snapshot(facts, f)} for f in filed]
+    return pd.DataFrame(rows).sort_values("filed").reset_index(drop=True) if rows else None
+
+
 def build_snapshots(facts_all: dict) -> dict[str, pd.DataFrame]:
+    """One snapshot frame per ticker. Tickers are independent, so they fan out
+    over processes (~8 min serial, ~2 min in parallel)."""
+    items = sorted(facts_all.items())
     out = {}
-    for i, (tk, facts) in enumerate(sorted(facts_all.items()), 1):
-        filed = sorted({f for df in facts.values() for f in df["filed"] if f >= SNAP_FROM})
-        rows = [{"filed": f, **snapshot(facts, f)} for f in filed]
-        if rows:
-            out[tk] = pd.DataFrame(rows).sort_values("filed").reset_index(drop=True)
-        if i % 50 == 0:
-            print(f"  snapshots {i}/{len(facts_all)}")
+    with ProcessPoolExecutor() as ex:
+        frames = ex.map(_ticker_snapshots, (f for _, f in items), chunksize=4)
+        for i, ((tk, _), frame) in enumerate(zip(items, frames), 1):
+            if frame is not None:
+                out[tk] = frame
+            if i % 50 == 0:
+                print(f"  snapshots {i}/{len(items)}")
     return out
 
 
@@ -263,17 +269,16 @@ def metrics_at(queries: pd.DataFrame, snaps: dict, prices: dict) -> pd.DataFrame
 
 
 def load():
-    facts = pickle.loads(FACTS_PKL.read_bytes())
     prices = pickle.loads(PRICES_PKL.read_bytes())
     if SNAP_PKL.exists():
         snaps = pickle.loads(SNAP_PKL.read_bytes())
     else:
-        snaps = build_snapshots(facts)
+        snaps = build_snapshots(pickle.loads(FACTS_PKL.read_bytes()))
         SNAP_PKL.write_bytes(pickle.dumps(snaps))
-    return facts, snaps, prices
+    return snaps, prices
 
 
 if __name__ == "__main__":
-    facts, snaps, prices = load()
+    snaps, prices = load()
     print(f"snapshots for {len(snaps)} tickers, "
           f"{sum(len(v) for v in snaps.values())} filing dates")

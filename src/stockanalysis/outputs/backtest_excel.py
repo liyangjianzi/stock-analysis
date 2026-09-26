@@ -42,11 +42,12 @@ def write_backtest_workbook(results, path) -> str:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # exits="plan": the gate's own trades are the whole result, so the summary row
-    # is their aggregate alone -- no posture-label sim beside it to misread.
-    if results.config.get("exits") == "plan":
+    # Like every sheet below, the summary renders whichever result was built:
+    # plan exits fill trade_stats (the gate's own trades, nothing beside them to
+    # misread), horizon exits fill the posture-label portfolio sim.
+    if results.trade_stats:
         summary_df = pd.DataFrame([{"entries": "gate", "exits": "plan",
-                                    **(results.trade_stats or {})}])
+                                    **results.trade_stats}])
     else:
         summary_df = pd.DataFrame([{"mode": results.mode,
                                     **(results.portfolio_summary or {})}])

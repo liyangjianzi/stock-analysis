@@ -63,7 +63,8 @@ TAGS = {
     "LTD": ["LongTermDebt", "LongTermDebtAndCapitalLeaseObligations"],
     "LTD_NC": ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligationsNoncurrent"],
     "LTD_C": ["LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"],
-    "STD": ["ShortTermBorrowings", "CommercialPaper", "DebtCurrent"],
+    "STB": ["ShortTermBorrowings", "CommercialPaper"],
+    "DEBT_C": ["DebtCurrent"],
     "SHARES_DEI": ["EntityCommonStockSharesOutstanding"],
     "SHARES_GAAP": ["CommonStockSharesOutstanding"],
     # Multi-class filers (META, ABNB, LEN, ...) tag the cover-page count per class,
@@ -126,8 +127,7 @@ def _extract(facts: dict) -> dict[str, pd.DataFrame]:
                 df = df[df["form"].isin(FORMS)] if "form" in df else df
                 if df.empty:
                     continue
-                cols = [c for c in ("start", "end", "val", "filed", "form", "fp", "accn")
-                        if c in df]
+                cols = [c for c in ("start", "end", "val", "filed") if c in df]
                 df = df[cols].copy()
                 for c in ("start", "end", "filed"):
                     if c in df:
