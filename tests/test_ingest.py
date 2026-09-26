@@ -6,6 +6,7 @@ yfinance returns), so the unit-normalization logic is tested in isolation.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from stockanalysis.ingest import _safe, fetch_fundamentals
 
@@ -32,11 +33,12 @@ def test_debt_to_equity_normalized_from_percent():
     assert out["Debt_Equity"] == 85.3 / 100.0  # -> 0.853
 
 
-def test_dividend_yield_percent_is_normalized_but_fraction_is_kept():
-    # > 1 looks like a percent -> /100
-    assert fetch_fundamentals("X", {"dividendYield": 1.6})["Div_Yield"] == 0.016
-    # already fractional -> untouched
-    assert fetch_fundamentals("Y", {"dividendYield": 0.016})["Div_Yield"] == 0.016
+def test_dividend_yield_is_always_a_percent():
+    # Yahoo serves dividendYield in percent on both sides of 1%: AAPL's 0.32%
+    # arrives as 0.32 and KO's 2.41% as 2.41. A ">1 means percent" guess read
+    # every sub-1% payer as a 32%-style yield that cleared the 1.5% screen.
+    assert fetch_fundamentals("AAPL", {"dividendYield": 0.32})["Div_Yield"] == pytest.approx(0.0032)
+    assert fetch_fundamentals("KO", {"dividendYield": 2.41})["Div_Yield"] == pytest.approx(0.0241)
 
 
 def test_growth_fields_pass_through_unchanged():

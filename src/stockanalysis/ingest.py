@@ -63,7 +63,7 @@ def fetch_fundamentals(ticker: str, info: dict, watchlist: dict | None = None) -
     fractions where relevant so thresholds compare cleanly:
       - earningsGrowth / revenueGrowth : already fractional (0.10 == 10%)
       - debtToEquity : yfinance reports as a PERCENT (e.g. 85.3) -> /100
-      - dividendYield : usually fractional; defensively normalise >1 values
+      - dividendYield : also a PERCENT (e.g. 0.32 for 0.32%) -> /100
 
     ``watchlist`` supplies the sector label (falls back to the watchlist CSV).
     """
@@ -73,16 +73,18 @@ def fetch_fundamentals(ticker: str, info: dict, watchlist: dict | None = None) -
     eps_growth  = _safe(info, "earningsGrowth")     # YoY, fractional
     rev_growth  = _safe(info, "revenueGrowth")      # YoY, fractional
     de_raw      = _safe(info, "debtToEquity")       # reported as percent
-    div_yield   = _safe(info, "dividendYield")
+    div_raw     = _safe(info, "dividendYield")      # reported as percent
     fcf         = _safe(info, "freeCashflow")       # absolute currency amount
 
     # Normalise debt/equity from percent (85.3) to ratio (0.853)
     de_ratio = de_raw / 100.0 if np.isfinite(de_raw) else np.nan
 
-    # Some yfinance versions return dividendYield as a percent (e.g. 1.6 for 1.6%).
-    # If the value looks like a percent (>1), convert to a fraction.
-    if np.isfinite(div_yield) and div_yield > 1:
-        div_yield = div_yield / 100.0
+    # dividendYield is a percent on both sides of 1% (AAPL 0.32, KO 2.41), so it
+    # is always divided -- a ">1 means percent" guess read every sub-1% payer as
+    # a 32%-style yield that cleared the screen. trailingAnnualDividendYield is
+    # not a safe substitute: it divides a home-currency dividend by the US
+    # price for ADRs (TSM comes out at 5.8% instead of 0.9%).
+    div_yield = div_raw / 100.0 if np.isfinite(div_raw) else np.nan
 
     return {
         "Ticker": ticker,
