@@ -63,6 +63,14 @@ def test_cli_plan_backtest_prints_the_error_bar_and_the_null(capsys):
     assert "not distinguishable from random entry" in out
 
 
+def test_cli_plan_backtest_says_why_there_is_no_html_report(capsys):
+    with mock.patch("stockanalysis.backtest.run_backtest", return_value=_plan_results()):
+        cli.main(["backtest", "--exits", "plan", "--no-excel"])
+    out = capsys.readouterr().out
+    assert "no HTML report for --exits plan" in out
+    assert "Total return" not in out
+
+
 def test_cli_passes_null_reps_and_split_through():
     with mock.patch("stockanalysis.backtest.run_backtest",
                     return_value=_plan_results()) as m:

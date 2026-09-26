@@ -311,6 +311,9 @@ def main(argv=None) -> int:
             print(f"  Workbook: {results.excel_path}")
         if results.report_path:
             print(f"  Report:   {results.report_path}")
+        elif results.config.get("exits") == "plan" and not args.no_report:
+            print("  Report:   no HTML report for --exits plan (it charts the "
+                  "posture-label sim, not these trades)")
         return 0
 
     if args.command == "thesis":

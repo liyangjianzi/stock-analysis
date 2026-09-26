@@ -92,9 +92,12 @@ zero, nor from a random entry (edge −0.05R, CI [−0.14, +0.04]). Positive
 it records the variants already tested and the hold-out discipline required.
 
 Outputs land in `output/backtest/<timestamp>/`:
-- `backtest.xlsx` — *Backtest Summary* + *Event Study*, plus *Planned Trades*,
-  *Robustness* and *Yearly R* for `--exits plan`
-- `backtest_report.html` — equity curve vs SPY + hit-rate by horizon
+- `backtest.xlsx` — `--exits plan`: *Backtest Summary* (the gate's trade stats),
+  *Planned Trades*, *Robustness* and *Yearly R*. `--exits horizon`: *Backtest
+  Summary* (the posture-label portfolio sim) + *Event Study*.
+- `backtest_report.html` — `--exits horizon` only: that sim's equity curve vs
+  SPY + hit-rate by horizon. Plan mode writes none — the sim enters on the
+  posture label and exits when it fades, a different rule from the plan trades.
 
 **Scopes.** `technical` replays only the price/volume technical posture — it is
 recomputed point-in-time (each date sees only past bars), so it is free of

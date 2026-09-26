@@ -292,6 +292,20 @@ def test_plan_exits_report_halves_and_the_random_null(uptrend_ohlcv):
     assert r.config["split_at"] == rb["split_at"]
 
 
+def test_plan_exits_skip_the_posture_label_sim_and_event_study(uptrend_ohlcv):
+    # Both describe a different rule (enter on Bullish, exit when it fades); plan
+    # mode reports the gate's own trades only. Horizon mode keeps them.
+    plan = build_results_from_prices({"UP": uptrend_ohlcv}, exits="plan", max_hold="1m")
+    assert plan.portfolio_curve.empty
+    assert plan.portfolio_summary == {}
+    assert plan.event_stats == {}
+
+    horizon = build_results_from_prices({"UP": uptrend_ohlcv}, max_hold="1m")
+    assert not horizon.portfolio_curve.empty
+    assert "max_drawdown" in horizon.portfolio_summary
+    assert "Bullish" in horizon.event_stats
+
+
 def test_plan_exits_honour_an_explicit_split_and_a_skipped_null(uptrend_ohlcv):
     r = build_results_from_prices({"UP": uptrend_ohlcv}, exits="plan",
                                   max_hold="1m", null_reps=0, split_at="2023-06-01")

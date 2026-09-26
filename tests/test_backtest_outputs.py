@@ -8,7 +8,7 @@ import openpyxl
 import pandas as pd
 
 from stockanalysis import charts
-from stockanalysis.backtest import build_results_from_prices
+from stockanalysis.backtest import build_results_from_prices, run_backtest
 from stockanalysis.outputs.backtest_excel import write_backtest_workbook
 
 
@@ -50,6 +50,28 @@ def test_plan_workbook_carries_the_robustness_and_yearly_sheets(tmp_path, uptren
     assert {"exp_r", "ci_lo", "ci_hi", "p", "verdict"} <= set(header)
     rows = {(r[0], r[1]) for r in ws.iter_rows(min_row=2, values_only=True)}
     assert {("Gate", "All"), ("Null", "Second half"), ("Edge", "First half")} <= rows
+
+
+def test_plan_workbook_summary_is_the_gate_and_its_plan(tmp_path, uptrend_ohlcv):
+    res = build_results_from_prices({"UP": uptrend_ohlcv}, exits="plan", max_hold="1m")
+    wb = openpyxl.load_workbook(write_backtest_workbook(res, tmp_path / "bt.xlsx"))
+    assert "Event Study" not in wb.sheetnames
+
+    ws = wb["Backtest Summary"]
+    row = dict(zip([c.value for c in ws[1]], [c.value for c in ws[2]]))
+    assert row["entries"] == "gate" and row["exits"] == "plan"
+    assert "expectancy_r" in row
+    assert not {"total_return", "max_drawdown", "cagr"} & set(row)
+
+
+def test_plan_run_writes_no_html_report(tmp_path, uptrend_ohlcv):
+    run_backtest(prices={"UP": uptrend_ohlcv}, exits="plan", max_hold="1m",
+                 null_reps=0, benchmark=None, out_dir=tmp_path / "plan")
+    assert not list((tmp_path / "plan").rglob("backtest_report.html"))
+
+    run_backtest(prices={"UP": uptrend_ohlcv}, max_hold="1m",
+                 benchmark=None, out_dir=tmp_path / "horizon")
+    assert list((tmp_path / "horizon").rglob("backtest_report.html"))
 
 
 def test_horizon_workbook_has_no_robustness_sheet(tmp_path, uptrend_ohlcv):

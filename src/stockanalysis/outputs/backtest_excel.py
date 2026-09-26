@@ -42,7 +42,14 @@ def write_backtest_workbook(results, path) -> str:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    summary_df = pd.DataFrame([{"mode": results.mode, **(results.portfolio_summary or {})}])
+    # exits="plan": the gate's own trades are the whole result, so the summary row
+    # is their aggregate alone -- no posture-label sim beside it to misread.
+    if results.config.get("exits") == "plan":
+        summary_df = pd.DataFrame([{"entries": "gate", "exits": "plan",
+                                    **(results.trade_stats or {})}])
+    else:
+        summary_df = pd.DataFrame([{"mode": results.mode,
+                                    **(results.portfolio_summary or {})}])
 
     rows = []
     for bucket, hstats in results.event_stats.items():
@@ -50,16 +57,13 @@ def write_backtest_workbook(results, path) -> str:
             rows.append({"Bucket": bucket, "Horizon": horizon, **d})
     event_df = pd.DataFrame(rows)
 
-    # exits="plan": one row per walked trade, plus its aggregate as a summary row.
+    # exits="plan": one row per walked trade.
     trades_df = pd.DataFrame([{
         "Ticker": t.ticker, "Entry Date": t.entry_date, "Entry": t.entry,
         "Stop": t.stop, "Target": t.target, "Exit Date": t.exit_date,
         "Exit": t.exit_price, "Exit Reason": t.exit_reason,
         "R": t.r_multiple, "Bars Held": t.bars_held,
     } for t in results.trades])
-    if results.trade_stats:
-        summary_df = pd.concat(
-            [summary_df, pd.DataFrame([results.trade_stats])], axis=1)
 
     with pd.ExcelWriter(path, engine="openpyxl") as xl:
         summary_df.to_excel(xl, sheet_name="Backtest Summary", index=False)

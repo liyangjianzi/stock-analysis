@@ -458,11 +458,17 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
     for the whole run and each side of ``split_at`` (default: the calendar midpoint
     of ``prices``), yearly R, and the edge over :func:`random_entry_trades` drawn
     ``null_reps`` times per trade with ``null_seed`` (``null_reps=0`` skips it).
+
+    The posture-label event study and portfolio sim run in ``horizon`` mode only.
+    They enter on the label and exit when it fades — a different rule from the
+    gate's plan trades — so beside them they read as the plan's result (a
+    −79% equity curve next to a +0.03R expectancy) rather than as context.
     """
     fundamental_scores = fundamental_scores or {}
     horizons = list(horizons)
     entry_labels = ("Buy",) if mode == "composite" else ("Bullish",)
     bucket = entry_labels[0]
+    label_study = exits != "plan"
 
     timeline_map, ev_returns, base_returns, per_ticker = {}, [], [], {}
     for tk, hist in prices.items():
@@ -471,6 +477,8 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
         if tl.empty:
             continue
         timeline_map[tk] = tl
+        if not label_study:
+            continue
         ev = forward_returns(hist, entry_events(tl, entry_labels), horizons)
         per_ticker[tk] = ev
         if not ev.empty:
@@ -480,9 +488,10 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
     ev_all = pd.concat(ev_returns) if ev_returns else pd.DataFrame(columns=horizons)
     base_all = pd.concat(base_returns) if base_returns else pd.DataFrame(columns=horizons)
 
-    port = simulate_portfolio(prices, timeline_map, entry_labels=entry_labels,
-                              max_positions=max_positions, max_hold_bars=_bars(max_hold),
-                              cost_bps=cost_bps, slippage_mult=slippage_mult)
+    port = (simulate_portfolio(prices, timeline_map, entry_labels=entry_labels,
+                               max_positions=max_positions, max_hold_bars=_bars(max_hold),
+                               cost_bps=cost_bps, slippage_mult=slippage_mult)
+            if label_study else {"curve": pd.Series(dtype=float), "summary": {}})
 
     trades: list = []
     evaluation: dict = {}
@@ -506,7 +515,7 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
 
     return BacktestResults(
         mode=mode,
-        event_stats={bucket: aggregate_event_stats(ev_all, base_all)},
+        event_stats={bucket: aggregate_event_stats(ev_all, base_all)} if label_study else {},
         yearly=yearly_means(ev_all),
         portfolio_curve=port["curve"],
         portfolio_summary=port["summary"],
