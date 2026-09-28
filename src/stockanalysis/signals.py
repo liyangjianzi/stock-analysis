@@ -270,6 +270,26 @@ def rank_score(fund_score: int, tech_score: int, *, components=None,
     return w_fund * (fund_score / 6.0) + w_tech * (tech_score / len(_components(components)))
 
 
+#: Columns :func:`generate_signals` adds beside the trade plan. Shown, never
+#: decided on: a report inside a typical trade is a gap risk the trader should
+#: see, but skipping those entries is an entry rule (see tuning-signals).
+EARNINGS_COLUMNS = ("Next Earnings", "Days to Earnings", "Earnings Soon")
+
+
+def _earnings_columns(next_earnings, df_t, plan: dict, *,
+                      warn_days: int = config.EARNINGS_WARN_DAYS) -> dict:
+    """Next earnings date, business days to it from the last bar, and whether a
+    *planned* row reports within ``warn_days`` (None when unknown or unplanned)."""
+    date = next_earnings if isinstance(next_earnings, str) else None
+    days = soon = None
+    if date and isinstance(df_t, pd.DataFrame) and isinstance(df_t.index, pd.DatetimeIndex) \
+            and not df_t.empty:
+        days = int(np.busday_count(df_t.index[-1].date(), pd.Timestamp(date).date()))
+    if days is not None and plan["exit_by"]:
+        soon = 0 <= days <= warn_days
+    return dict(zip(EARNINGS_COLUMNS, (date, days, soon)))
+
+
 def generate_signals(screened: pd.DataFrame, tech_data: dict, *,
                      fund_min: int = DEFAULT_FUND_MIN,
                      components=None,
@@ -281,7 +301,9 @@ def generate_signals(screened: pd.DataFrame, tech_data: dict, *,
     The action comes from :func:`decide_action` (quality test + technical gate);
     ``Composite`` is carried as the ranking key only. Each row also gets the
     :mod:`stockanalysis.tradeplan` columns — Entry / Stop / Target / R:R /
-    Shares / Risk $ — sized against ``account_size`` and ``risk_pct``.
+    Shares / Risk $ / ADV $ / Exit By — sized against ``account_size`` and
+    ``risk_pct``, then the :data:`EARNINGS_COLUMNS` (read from a
+    ``Next_Earnings`` column in ``screened`` when present).
 
     Returns a tidy DataFrame ranked Buy > Hold > Watch, then by Composite.
     """
@@ -313,6 +335,7 @@ def generate_signals(screened: pd.DataFrame, tech_data: dict, *,
             "Composite": round(composite, 3),
             "Final Action Signal": action,
             **{col: plan[key] for key, col in MATRIX_COLUMNS.items()},
+            **_earnings_columns(row.get("Next_Earnings"), df_t, plan),
         })
 
     result = pd.DataFrame(rows)

@@ -127,6 +127,21 @@ def pullback_ohlcv(n: int = 260, slide_bars: int = 5, slide_pct: float = 0.075,
     return _make_ohlcv(closes)
 
 
+def waypoint_ohlcv(waypoints, bars_per_leg: int = 10, lead_bars: int = 20) -> pd.DataFrame:
+    """Indicator-enriched OHLCV drawn through hand-placed turning points: a flat
+    lead-in (so ATR14 is warm), then straight legs, with a fixed ±0.3 wick on
+    every bar. The swing pivots — and any chart pattern they form — are known
+    in advance. A plain helper, like :func:`pullback_ohlcv`."""
+    from stockanalysis.indicators import add_indicators
+    closes = [waypoints[0]] * lead_bars
+    for a, b in zip(waypoints, waypoints[1:]):
+        closes += list(np.linspace(a, b, bars_per_leg + 1)[1:])
+    close = pd.Series(closes, index=pd.bdate_range("2025-01-01", periods=len(closes)))
+    df = pd.DataFrame({"Open": close.shift(1).fillna(close.iloc[0]), "High": close + 0.3,
+                       "Low": close - 0.3, "Close": close, "Volume": 1_000_000.0})
+    return add_indicators(df)
+
+
 @pytest.fixture
 def setup_frame() -> pd.DataFrame:
     """An indicator-enriched :func:`pullback_ohlcv` — the shared frame that fires

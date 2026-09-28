@@ -33,8 +33,9 @@ from .profile import _fmt_val  # cross-module private helper: same number
 # formatting the ASCII profile report already uses, kept consistent rather
 # than re-implemented.
 from .screener import screen_fundamentals
+from .patterns import detect_patterns
 from .signals import TECHNICAL_COMPONENTS, compute_technical_posture
-from .tradeplan import MATRIX_COLUMNS
+from .tradeplan import MATRIX_COLUMNS, order_ticket
 
 # Solid dark-theme palette for the signal matrix, mirroring the notebook's
 # local style_signals() ac/pc dicts (notebooks/stock_analysis.ipynb) rather
@@ -61,6 +62,7 @@ _NUMBER_FORMATS = {
     MATRIX_COLUMNS["entry"]: "{:,.2f}", MATRIX_COLUMNS["stop"]: "{:,.2f}",
     MATRIX_COLUMNS["target"]: "{:,.2f}", MATRIX_COLUMNS["rr"]: "{:.2f}",
     MATRIX_COLUMNS["shares"]: "{:,.0f}", MATRIX_COLUMNS["risk_amount"]: "{:,.0f}",
+    MATRIX_COLUMNS["adv_dollar"]: "{:,.0f}",
 }
 
 _SCREENER_COLUMNS = ["Ticker", "Sector", "PE", "EPS_Growth", "Rev_Growth",
@@ -224,13 +226,14 @@ def _screener_cell(value, col: str, row) -> str:
     return f"<td>{text}</td>"
 
 
-def _rr_cell(min_rr: float):
-    """Reward:risk cell, coloured when it falls below ``min_rr`` — flagged rather
-    than hidden, so the trader still sees the levels and decides."""
+def _floor_cell(floor: float):
+    """A cell coloured when its value falls below ``floor`` (a thin R:R, a thin
+    dollar volume) — flagged rather than hidden, so the trader still sees the
+    plan and decides."""
     def cell(value, col: str, row) -> str:
-        if _is_missing(value) or value >= min_rr:
+        if _is_missing(value) or value >= floor:
             return f"<td>{_fmt_cell(col, value)}</td>"
-        return (f'<td style="color:{_RR_WARN_COLOR};font-weight:600;'
+        return (f'<td style="color:{_WARN_COLOR};font-weight:600;'
                 f'text-align:right">{_fmt_cell(col, value)}</td>')
     return cell
 
@@ -284,7 +287,7 @@ def _render_technical_screener_section(tech: dict) -> str:
 
     headers = (["Ticker"]
                + [html.escape(_tech_header(c.name, c.predicate)) for c in TECHNICAL_COMPONENTS]
-               + ["Tech Score", "Technical Posture"])
+               + ["Tech Score", "Technical Posture", "Patterns"])
 
     rows = []
     for ticker, posture, score, detail in entries:
@@ -298,23 +301,38 @@ def _render_technical_screener_section(tech: dict) -> str:
                 cells.append('<td style="text-align:center">—</td>')
         cells.append(_heatmap_cell(score, tech_max, _GREENS))
         cells.append(_posture_cell(posture))
+        # Display only — a chart reading, not part of the score or the gate.
+        patterns = ", ".join(f"{p['name']} ({p['status']})" for p in detect_patterns(tech[ticker]))
+        cells.append(f"<td>{_esc(patterns or None)}</td>")
         rows.append(cells)
     return _table_raw(headers, rows)
 
 
 #: Columns of the Trade Plan table, in display order: the plan columns (derived
 #: from tradeplan.MATRIX_COLUMNS, so they follow a rename) plus the identifying
-#: Ticker/Action. Like _SIGNAL_COLUMNS this is an allow-list — the renderer
-#: intersects it with the frame's actual columns.
-_PLAN_COLUMNS = ["Ticker", "Final Action Signal"] + list(MATRIX_COLUMNS.values())
+#: Ticker/Action and the order ticket built from them. Like _SIGNAL_COLUMNS this
+#: is an allow-list — the renderer intersects it with the frame's actual columns.
+_PLAN_COLUMNS = (["Ticker", "Final Action Signal"] + list(MATRIX_COLUMNS.values())
+                 + ["Next Earnings", "Earnings Soon", "Order"])
 
-#: Colour for an R:R below the configured minimum — a plan worth flagging, not
-#: suppressing: the trader still sees the levels and decides.
-_RR_WARN_COLOR = "#f85149"
+#: Colour for a plan value below its configured floor (R:R, dollar volume) — a
+#: plan worth flagging, not suppressing: the trader still sees it and decides.
+_WARN_COLOR = "#f85149"
+
+
+def _earnings_soon_cell(value, col: str, row) -> str:
+    """Warn when a report lands inside a typical trade — a gap the stop can't cap.
+    Shown, not acted on: skipping those entries is an untested rule."""
+    if not _is_missing(value) and bool(value):
+        days = row.get("Days to Earnings")
+        when = f"in {int(days)} sessions" if not _is_missing(days) else "soon"
+        return f'<td style="color:{_WARN_COLOR};font-weight:600">earnings {when}</td>'
+    return f"<td>{'—' if _is_missing(value) else 'no'}</td>"
 
 
 def _render_trade_plan_section(signal_matrix: pd.DataFrame, *, account_size: float,
-                               risk_pct: float, min_rr: float) -> str:
+                               risk_pct: float, min_rr: float,
+                               min_dollar_volume: float) -> str:
     """The executable half of the report: entry, stop, target, R:R and size.
 
     Only Buy and Hold rows appear — a Watch name failed the quality test and
@@ -329,14 +347,25 @@ def _render_trade_plan_section(signal_matrix: pd.DataFrame, *, account_size: flo
     df = signal_matrix[signal_matrix["Final Action Signal"].isin(("Buy", "Hold"))]
     if df.empty:
         return '<p class="empty">Nothing passed the quality screen.</p>'
+    df = df.assign(Order=[order_ticket({key: row.get(col) for key, col in MATRIX_COLUMNS.items()})
+                          for _, row in df.iterrows()])
 
     note = (f'<p class="note">Sized for an account of '
             f'<strong>{account_size:,.0f}</strong> risking '
             f'<strong>{risk_pct:.2%}</strong> per trade. Entry is the last close; '
-            f'fills are assumed at the next open. R:R below {min_rr:.1f} is '
-            f'flagged in red.</p>')
-    return note + _render_frame(df, _PLAN_COLUMNS,
-                                cells={**_CELLS, MATRIX_COLUMNS["rr"]: _rr_cell(min_rr)})
+            f'fills are assumed at the next open. R:R below {min_rr:.1f} and '
+            f'average daily dollar volume (ADV) below {min_dollar_volume:,.0f} '
+            f'are flagged in red. Each order is the type whose fill the backtest '
+            f'assumes: market-on-open entry, a one-cancels-other stop-market / '
+            f'limit bracket, and a market-on-close exit on the Exit By date. '
+            f'Earnings within {config.EARNINGS_WARN_DAYS} sessions are flagged: '
+            f'a gap on the report can open beyond the stop.</p>')
+    return note + _render_frame(df, _PLAN_COLUMNS, cells={
+        **_CELLS,
+        MATRIX_COLUMNS["rr"]: _floor_cell(min_rr),
+        MATRIX_COLUMNS["adv_dollar"]: _floor_cell(min_dollar_volume),
+        "Earnings Soon": _earnings_soon_cell,
+    })
 
 
 def _render_signal_matrix_section(signal_matrix: pd.DataFrame) -> str:
@@ -432,6 +461,12 @@ def _render_profile_card(profile_dict: dict) -> str:
             (rv("shortPercentOfFloat", "pct"), "Short % Float"),
         ]),
     ]
+    earnings = profile_dict.get("earnings") or []
+    if earnings:
+        groups.append(_group_html("Earnings Surprise", [
+            (_esc(f"{q['surprise']:+.1%}" if pd.notna(q.get("surprise")) else None),
+             _esc(q.get("date"))) for q in earnings
+        ]))
 
     return (f'<div class="profile-card">{header}<div class="scores">{score_badges}</div>'
            f'<div class="profile-groups">{"".join(groups)}</div></div>')
@@ -441,6 +476,39 @@ def _render_profiles_section(profiles: list[dict]) -> str:
     if not profiles:
         return '<p class="empty">No profiles selected.</p>'
     return "".join(_render_profile_card(p) for p in profiles)
+
+
+def _signed(value, fmt: str, suffix: str = "") -> str:
+    return "—" if _is_missing(value) else f"{value:{fmt}}{suffix}"
+
+
+def _render_macro(macro: dict) -> str:
+    """Rates / markets / economy panel — context for a human, not a signal input
+    (FRED is revised data, and regime filters are already tested dead)."""
+    rates, curve, economy = (macro.get("rates") or [], macro.get("curve"),
+                             macro.get("economy") or [])
+    parts = ["<h3>Rates &amp; Macro</h3>"]
+    if not (rates or economy):
+        return parts[0] + '<p class="empty">Macro data unavailable.</p>'
+    if rates:
+        def chg(r, key):
+            return (_signed(r[key], "+.0f", " bps") if r["Unit"] == "bps"
+                    else _signed(r[key], "+.2f", "%"))
+        parts.append(_table(["Series", "Last", "1W", "1M"],
+                            [[_esc(r["Name"]), _esc(f'{r["Last"]:,.2f}'),
+                              _esc(chg(r, "1W")), _esc(chg(r, "1M"))] for r in rates]))
+    if curve:
+        state = "inverted" if curve["inverted"] else "normal"
+        parts.append(f'<p><b>Yield curve</b> 10Y − 3M: {curve["slope_bps"]:+.0f} bps ({state})</p>')
+    if economy:
+        parts.append(_table(["Indicator", "Latest", "Change", "As of"], [
+            [_esc(r["Indicator"]),
+             _esc(f'{r["Value"]:,.2f}{r["Unit"]}' if r["Unit"] != "k" else f'{r["Value"]:+,.0f}k'),
+             _esc(f'{_signed(r["Change"], "+.2f")} {r["Change Label"]}'),
+             _esc(r["As of"])] for r in economy]))
+        parts.append('<p class="note">Economic data from FRED (latest revised '
+                     'values), shown for context only.</p>')
+    return "".join(parts)
 
 
 def _render_overview_section(overview_data: dict) -> str:
@@ -470,6 +538,8 @@ def _render_overview_section(overview_data: dict) -> str:
         parts.append(_table(cols, rows))
     else:
         parts.append('<p class="empty">No index stats available.</p>')
+
+    parts.append(_render_macro(overview_data.get("macro") or {}))
 
     headlines = overview_data.get("headlines") or []
     if headlines:
@@ -526,6 +596,7 @@ def build_full_report(
     account_size: float = config.DEFAULT_ACCOUNT_SIZE,
     risk_pct: float = config.DEFAULT_RISK_PCT,
     min_rr: float = config.MIN_RR,
+    min_dollar_volume: float = config.MIN_DOLLAR_VOLUME,
 ) -> str:
     """Render the full combined report as one self-contained HTML string.
 
@@ -536,10 +607,11 @@ def build_full_report(
     for ``selected``, in the same order; ``overview_data`` is
     :func:`stockanalysis.overview.daily_overview`'s return dict.
 
-    ``account_size``/``risk_pct``/``min_rr`` are presentation-only here: the
-    share counts were already computed upstream by
+    ``account_size``/``risk_pct``/``min_rr``/``min_dollar_volume`` are
+    presentation-only here: the share counts were already computed upstream by
     :func:`stockanalysis.signals.generate_signals`. They are passed so the Trade
-    Plan section can state the assumptions it is reporting and flag thin R:R.
+    Plan section can state the assumptions it is reporting and flag a thin R:R
+    or a thinly traded name.
     """
     # One list, so anchor / title / body can't drift apart. They used to be two
     # lists joined by zip(), which silently dropped a section if you added to one
@@ -553,7 +625,8 @@ def build_full_report(
          _render_signal_matrix_section(signal_matrix)),
         ("trade_plan", "Trade Plan",
          _render_trade_plan_section(signal_matrix, account_size=account_size,
-                                    risk_pct=risk_pct, min_rr=min_rr)),
+                                    risk_pct=risk_pct, min_rr=min_rr,
+                                    min_dollar_volume=min_dollar_volume)),
         ("dashboards", "Top Technical Dashboards",
          _render_dashboards_section(tech, selected)),
         ("profiles", "Fundamental Profiles",

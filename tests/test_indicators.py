@@ -9,12 +9,13 @@ from stockanalysis.indicators import (
     add_indicators,
     find_support_resistance,
     fit_regression_channel,
+    swing_pivots,
 )
 
 CONTRACT_COLS = [
     "EMA20", "EMA50", "EMA200", "ENV_UP", "ENV_DOWN",
     "MACD", "MACD_SIG", "MACD_HIST", "RSI", "VOL_SMA20", "OBV",
-    "ATR14", "RSI3", "VOL_SMA5",
+    "ATR14", "RSI3", "VOL_SMA5", "DVOL20",
 ]
 
 
@@ -88,6 +89,7 @@ def test_volume_columns_degrade_when_volume_missing(uptrend_ohlcv):
     assert out["VOL_SMA20"].isna().all()
     assert out["OBV"].isna().all()
     assert out["VOL_SMA5"].isna().all()
+    assert out["DVOL20"].isna().all()
 
 
 def test_regression_slope_sign_matches_trend(uptrend_ohlcv, downtrend_ohlcv):
@@ -120,3 +122,28 @@ def test_support_resistance_empty_when_insufficient_rows():
         "High": [1.0, 2.0, 3.0], "Low": [0.5, 1.5, 2.5], "Close": [1.0, 2.0, 3.0],
     })  # n < 2*pivot_window + 1
     assert find_support_resistance(tiny) == []
+
+
+def test_dvol20_is_rolling_mean_dollar_volume(uptrend_ohlcv):
+    out = add_indicators(uptrend_ohlcv)
+    expected = (uptrend_ohlcv["Close"] * uptrend_ohlcv["Volume"]).rolling(20).mean()
+    pd.testing.assert_series_equal(out["DVOL20"], expected, check_names=False)
+
+
+def _pivot_frame():
+    """Two swing highs (bars 5 and 15) around one swing low (bar 10)."""
+    high = np.array([1, 2, 3, 4, 5, 9, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1], float)
+    idx = pd.bdate_range("2024-01-01", periods=len(high))
+    return pd.DataFrame({"High": high, "Low": high - 0.5, "Close": high - 0.25}, index=idx)
+
+
+def test_swing_pivots_finds_highs_and_lows_in_bar_order():
+    df = _pivot_frame()
+    pivots = swing_pivots(df, pivot_window=5)
+    assert [(p["i"], p["kind"], p["price"]) for p in pivots] == [
+        (5, "high", 9.0), (10, "low", 0.5), (15, "high", 6.0)]
+    assert pivots[0]["date"] == df.index[5]
+
+
+def test_swing_pivots_needs_a_full_window_either_side():
+    assert swing_pivots(_pivot_frame().iloc[:10], pivot_window=5) == []

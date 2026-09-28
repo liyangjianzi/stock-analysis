@@ -1,7 +1,8 @@
 """Stage-0 daily market overview — data gathering only (no printing/plotting).
 
 Builds the raw data the morning briefing needs: index stats, the VIX risk
-gauge, recent headlines, and a discovery scan of candidate tickers.
+gauge, a rates / markets / economy panel, recent headlines, and a discovery scan
+of candidate tickers.
 :func:`daily_overview` returns a structured dict; rendering it (text or chart)
 is the caller's job (see :mod:`stockanalysis.charts` for the index figure).
 """
@@ -22,17 +23,9 @@ from .signals import compute_technical_posture
 log = logging.getLogger(__name__)
 
 
-def fetch_index_data(indices: dict | None = None, vix_ticker: str | None = None,
-                     lookback: int = config.OVERVIEW_LOOKBACK) -> dict:
-    """Fetch ~1y of OHLCV for the major indices + VIX.
-
-    Returns dict: name -> {"full": DataFrame, "chart": DataFrame(tail lookback)}.
-    """
-    indices = config.OVERVIEW_INDICES if indices is None else indices
-    vix_ticker = config.VIX_TICKER if vix_ticker is None else vix_ticker
-
+def _fetch_daily(fetch_map: dict) -> dict:
+    """~1y of daily OHLCV per ``name -> ticker``; names that fail are skipped."""
     result = {}
-    fetch_map = {**indices, "VIX": vix_ticker}
     for name, ticker in fetch_map.items():
         try:
             df = yf.download(ticker, period="1y", interval="1d",
@@ -42,10 +35,130 @@ def fetch_index_data(indices: dict | None = None, vix_ticker: str | None = None,
             df.index = pd.to_datetime(df.index).tz_localize(None)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            result[name] = {"full": df, "chart": df.tail(lookback)}
+            result[name] = df
         except Exception as e:
             log.warning("%s (%s): %s", name, ticker, e)
     return result
+
+
+def fetch_index_data(indices: dict | None = None, vix_ticker: str | None = None,
+                     lookback: int = config.OVERVIEW_LOOKBACK) -> dict:
+    """Fetch ~1y of OHLCV for the major indices + VIX.
+
+    Returns dict: name -> {"full": DataFrame, "chart": DataFrame(tail lookback)}.
+    """
+    indices = config.OVERVIEW_INDICES if indices is None else indices
+    vix_ticker = config.VIX_TICKER if vix_ticker is None else vix_ticker
+    frames = _fetch_daily({**indices, "VIX": vix_ticker})
+    return {name: {"full": df, "chart": df.tail(lookback)} for name, df in frames.items()}
+
+
+def fetch_macro_data() -> dict:
+    """~1y of daily bars for :data:`config.MACRO_YIELDS` + :data:`config.MACRO_MARKETS`."""
+    return _fetch_daily({**config.MACRO_YIELDS, **config.MACRO_MARKETS})
+
+
+def _change(close: pd.Series, bars: int, in_bps: bool) -> float:
+    if len(close) <= bars:
+        return np.nan
+    last, then = close.iloc[-1], close.iloc[-1 - bars]
+    return (last - then) * 100 if in_bps else (last / then - 1) * 100
+
+
+def macro_stats(frames: dict) -> dict:
+    """Last value and 1-week / 1-month change per series, plus the curve slope.
+
+    Yields change in **bps** (their levels are already percents, and are passed
+    through unscaled); everything else in **%**. ``curve`` is 10Y minus 3M in
+    bps with an ``inverted`` flag, or None if either leg is missing.
+    """
+    rates = []
+    for name, df in frames.items():
+        close = df["Close"].dropna() if isinstance(df, pd.DataFrame) and "Close" in df else None
+        if close is None or close.empty:
+            continue
+        is_yield = name in config.MACRO_YIELDS
+        rates.append({"Name": name, "Last": float(close.iloc[-1]),
+                      "1W": _change(close, 5, is_yield), "1M": _change(close, 21, is_yield),
+                      "Unit": "bps" if is_yield else "%"})
+    last = {r["Name"]: r["Last"] for r in rates}
+    curve = None
+    if "10Y Treasury" in last and "3M T-Bill" in last:
+        slope = (last["10Y Treasury"] - last["3M T-Bill"]) * 100
+        curve = {"slope_bps": slope, "inverted": bool(slope < 0)}
+    return {"rates": rates, "curve": curve}
+
+
+FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={}"
+
+
+def _read_fred_series(series_id: str) -> pd.Series:
+    df = pd.read_csv(FRED_CSV_URL.format(series_id), index_col=0, parse_dates=True)
+    return pd.to_numeric(df.iloc[:, 0], errors="coerce").dropna()
+
+
+def fetch_fred(series: dict | None = None) -> dict:
+    """``name -> Series`` for each FRED series (default :data:`config.FRED_SERIES`),
+    via FRED's keyless CSV endpoint. A series that fails is logged and skipped.
+
+    This is the latest vintage — revised data, not what was known at the time —
+    so it is context for a human, never an input to a backtest.
+    """
+    series = config.FRED_SERIES if series is None else series
+    out = {}
+    for name, series_id in series.items():
+        try:
+            s = _read_fred_series(series_id)
+            if not s.empty:
+                out[name] = s
+        except Exception as e:
+            log.warning("FRED %s (%s): %s", name, series_id, e)
+    return out
+
+
+def _level(s: pd.Series):
+    then = s[:s.index[-1] - pd.DateOffset(months=3)]
+    change = s.iloc[-1] - then.iloc[-1] if not then.empty else np.nan
+    return s.iloc[-1], change, "3m chg", "%"
+
+
+def _yoy(s: pd.Series):
+    if len(s) < 14:
+        return None
+    now = (s.iloc[-1] / s.iloc[-13] - 1) * 100
+    prior = (s.iloc[-2] / s.iloc[-14] - 1) * 100
+    return now, now - prior, "vs prior month", "% y/y"
+
+
+def _monthly_change(s: pd.Series):
+    if len(s) < 3:
+        return None
+    now, prior = s.iloc[-1] - s.iloc[-2], s.iloc[-2] - s.iloc[-3]
+    return now, now - prior, "vs prior month", "k"
+
+
+#: How each FRED series is read: a level (rates), year-over-year (a price
+#: index), or the monthly change (a stock, like payroll employment).
+_FRED_TRANSFORMS = {"Fed Funds": _level, "CPI": _yoy,
+                    "Unemployment": _level, "Payrolls": _monthly_change}
+
+
+def fred_summary(series: dict) -> list[dict]:
+    """One row per FRED series: ``Indicator``, ``Value``, ``Unit``, ``Change``
+    (with its ``Change Label``) and ``As of`` — the latest observation's date,
+    so a monthly release's lag is visible. Series too short to transform are
+    skipped."""
+    rows = []
+    for name, s in series.items():
+        transform = _FRED_TRANSFORMS.get(name, _level)
+        result = transform(s) if len(s) else None
+        if result is None:
+            continue
+        value, change, label, unit = result
+        rows.append({"Indicator": name, "Value": float(value), "Unit": unit,
+                     "Change": float(change), "Change Label": label,
+                     "As of": s.index[-1].date().isoformat()})
+    return rows
 
 
 def index_stats(df) -> dict:
@@ -176,7 +289,8 @@ def daily_overview(watchlist: dict | None = None, signal_matrix=None,
 
     Returns a dict with keys: ``index_data`` (raw frames for charting),
     ``indices`` (per-index stats list), ``vix`` ({value, label} or None),
-    ``headlines`` (list), ``candidates`` (DataFrame), and ``action_plan``
+    ``macro`` (``rates``/``curve`` from :func:`macro_stats` + ``economy`` from
+    :func:`fred_summary`), ``headlines`` (list), ``candidates`` (DataFrame), and ``action_plan``
     (breakdown + top buys / discoveries). Pass ``signal_matrix``/``tech`` from a
     completed pipeline run for an enriched action plan.
     """
@@ -202,6 +316,8 @@ def daily_overview(watchlist: dict | None = None, signal_matrix=None,
     if vix_df is not None and not vix_df.empty:
         vix_now = float(vix_df["Close"].dropna().iloc[-1])
         vix = {"value": vix_now, "label": _vix_label(vix_now)}
+
+    macro = {**macro_stats(fetch_macro_data()), "economy": fred_summary(fetch_fred())}
 
     # Headlines across indices + top discovered tickers.
     news_tickers = list(config.OVERVIEW_INDICES.values())
@@ -236,6 +352,7 @@ def daily_overview(watchlist: dict | None = None, signal_matrix=None,
         "index_data": index_data,
         "indices": indices,
         "vix": vix,
+        "macro": macro,
         "headlines": headlines,
         "candidates": candidates_df,
         "action_plan": action_plan,

@@ -12,17 +12,19 @@ from conftest import pullback_ohlcv
 from stockanalysis.indicators import add_indicators
 from stockanalysis.signals import (compute_technical_posture, decide_action,
                                     generate_signals, top_tickers, DEFAULT_BEAR_FRAC,
+                                    EARNINGS_COLUMNS,
                                     DEFAULT_BULL_FRAC, DEFAULT_FUND_MIN,
                                     GATE_COMPONENTS, TECHNICAL_COMPONENTS,
                                     _dip_deep, _pullback_zone, _trend_up,
                                     _turn_confirm, _vol_pattern, _posture)
+from stockanalysis.config import EARNINGS_WARN_DAYS
 from stockanalysis.tradeplan import MATRIX_COLUMNS
 
 DETAIL_KEYS = {c.name for c in TECHNICAL_COMPONENTS} | {"nearest_level"}
 MAX_TECH = len(TECHNICAL_COMPONENTS)
 OUTPUT_COLS = (["Ticker", "Sector", "Fundamental Score", "Technical Posture",
                 "Tech Score", "Composite", "Final Action Signal"]
-               + list(MATRIX_COLUMNS.values()))
+               + list(MATRIX_COLUMNS.values()) + list(EARNINGS_COLUMNS))
 
 GATE_PASSES = dict.fromkeys(GATE_COMPONENTS, True)
 GATE_FAILS = {**GATE_PASSES, GATE_COMPONENTS[-1]: False}
@@ -312,3 +314,51 @@ def test_posture_bands_rescale_with_the_component_count():
 def test_posture_of_an_empty_registry_is_bearish():
     """No components -> nothing can confirm; must not divide by zero."""
     assert _posture(0, 0) == "Bearish"
+
+
+# --- Earnings: shown beside the plan, never part of the decision ----------------
+
+def _with_earnings(make_screened, scores, dates):
+    screened = make_screened(scores)
+    screened["Next_Earnings"] = dates
+    return screened
+
+
+def test_earnings_within_the_warning_window_are_flagged(make_screened, setup_frame):
+    soon = (setup_frame.index[-1] + pd.offsets.BDay(EARNINGS_WARN_DAYS)).date().isoformat()
+    row = generate_signals(_with_earnings(make_screened, {"SETUP": 6}, [soon]),
+                           {"SETUP": setup_frame}).iloc[0]
+    assert row["Final Action Signal"] == "Buy"
+    assert row["Next Earnings"] == soon
+    assert row["Days to Earnings"] == EARNINGS_WARN_DAYS
+    assert row["Earnings Soon"] == True  # noqa: E712
+
+
+def test_earnings_past_the_warning_window_are_not_flagged(make_screened, setup_frame):
+    """Not "before the time stop": a 63-bar hold spans a whole quarter, so nearly
+    every plan would carry that flag (18 of 19 live, 2026-09-27)."""
+    later = (setup_frame.index[-1] + pd.offsets.BDay(EARNINGS_WARN_DAYS + 1)).date().isoformat()
+    row = generate_signals(_with_earnings(make_screened, {"SETUP": 6}, [later]),
+                           {"SETUP": setup_frame}).iloc[0]
+    assert row["Earnings Soon"] == False  # noqa: E712
+
+
+def test_earnings_never_change_the_action(make_screened, setup_frame):
+    soon = (setup_frame.index[-1] + pd.offsets.BDay(1)).date().isoformat()
+    tech = {"SETUP": setup_frame}
+    with_date = generate_signals(_with_earnings(make_screened, {"SETUP": 6}, [soon]), tech)
+    without = generate_signals(make_screened({"SETUP": 6}), tech)
+    assert with_date["Final Action Signal"].tolist() == without["Final Action Signal"].tolist()
+
+
+def test_earnings_columns_are_blank_when_unknown_or_unplanned(make_screened, setup_frame):
+    soon = (setup_frame.index[-1] + pd.offsets.BDay(5)).date().isoformat()
+    out = generate_signals(_with_earnings(make_screened, {"WATCH": 2, "NODATE": 6},
+                                          [soon, None]),
+                           {"WATCH": setup_frame, "NODATE": setup_frame})
+    rows = out.set_index("Ticker")
+    assert rows.loc["WATCH", "Days to Earnings"] == 5           # the date is still shown
+    # pd.isna, not `is None`: pandas 3 stores a string column's None as NaN.
+    assert pd.isna(rows.loc["WATCH", "Earnings Soon"])          # but a Watch has no trade
+    assert pd.isna(rows.loc["NODATE", "Next Earnings"])
+    assert pd.isna(rows.loc["NODATE", "Earnings Soon"])

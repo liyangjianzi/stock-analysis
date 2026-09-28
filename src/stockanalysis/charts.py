@@ -14,6 +14,7 @@ from plotly.subplots import make_subplots
 
 from . import config
 from .indicators import fit_regression_channel, find_support_resistance
+from .patterns import detect_patterns
 
 # Dark chrome shared by build_technical_dashboard/build_index_overview — mirrors
 # report.py's _STYLE palette so embedded charts blend into the report's cards.
@@ -145,6 +146,24 @@ def build_technical_dashboard(ticker: str, tech: dict, lookback: int = 252) -> g
             annotation_font=dict(size=sr_font, color=lcolor),
             row=1, col=1,
         )
+
+    # ---------- Panel 1 overlay: chart patterns (display only) ----------
+    # The swings that form each pattern, plus its breakout level carried from the
+    # last swing to today. Context for the eye — patterns.py explains why they
+    # are not an entry rule.
+    for pat in detect_patterns(d):
+        pcolor = "#3fb950" if pat["bias"] == "bullish" else "#f85149"
+        dates, prices = zip(*pat["points"])
+        fig.add_trace(go.Scatter(
+            x=list(dates), y=list(prices), name=f"{pat['name']} ({pat['status']})",
+            mode="lines+markers", line=dict(color=pcolor, width=2),
+            marker=dict(size=7, symbol="circle-open"),
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=[dates[-1], d.index[-1]], y=[pat["level"], pat["level"]],
+            name=f"{pat['name']} level", mode="lines", showlegend=False,
+            line=dict(color=pcolor, width=1.2, dash="dot"),
+        ), row=1, col=1)
 
     # ---------- Panel 2: MACD line, signal, color-coded histogram ----------
     hist_colors = np.where(d["MACD_HIST"] >= 0, "#26a69a", "#ef5350")  # green/red

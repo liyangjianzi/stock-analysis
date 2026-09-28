@@ -110,3 +110,28 @@ time universe misses 44% of members in 2006, falling to 1% by 2026 (printed per
 year). Missing names are mostly failed or acquired firms; the RSP gap bounds their
 effect on the benchmark at ~1%/yr, too small to rescue the result. Delisting returns
 are unavailable (a name marks at its last close).
+
+## Earnings blackout (2026-09-27) — `earn_*.py`
+
+Would skipping gate entries just before an earnings report help? It's a natural
+follow-on to the live report's `Earnings Soon` flag. Needs network once.
+
+| File | What it does |
+|---|---|
+| `earn_fetch.py` | `get_earnings_dates(limit=60)` for the 503 names (~2 min, 503/503 covered) → `earn_dates.pkl`, each report mapped to its **reaction day** (same session if before noon New York time, else the next). |
+| `earn_study.py` | Pre-declared primary test: Blackout(10) = skip an entry when a reaction day falls in (signal day, +10 sessions]. It ships only if the filtered gate beats the identically filtered ticker-matched random null (5 reps) in **both** halves (split 2022-01-01). Plateau over K = 3/5/10/15/20. ~6 min. Output in `earn_study.log`. |
+
+Run order: `python earn_fetch.py` → `python earn_study.py | tee earn_study.log`.
+
+**Result: doesn't ship. The filter moves nothing.** 7,211 of 7,266 gate trades were in scope.
+
+| | Gate | Random null | Edge vs null |
+|---|---|---|---|
+| No blackout | +0.029R [−0.039, +0.098] | +0.073R | −0.043R [−0.129, +0.043] |
+| **Blackout(10), primary** | **+0.027R [−0.046, +0.100]** | +0.078R | **−0.051R [−0.142, +0.040]** |
+| halves (K=10) | +0.084R / −0.031R | +0.134R / +0.021R | −0.049R / −0.052R |
+
+- Flat across the plateau: the edge is −0.041R to −0.051R at every K from 3 to 20, and not distinguishable from random at any of them.
+- The gap risk is real but doesn't cost expectancy. `stop_gap` exits land on a report day **21%** of the time, against 7% of all exits (the null shows the same, 23% vs 8%). Those gaps are already priced into the average.
+- **Don't read the "crossed a report" split as "hold through earnings".** Gate trades whose walk crossed a report averaged +0.233R [+0.112, +0.354], against +0.000R for those that didn't (the null shows +0.336R vs +0.020R). That conditions on the outcome: only trades that *survived* until the report could cross it, and fast stop-outs never get there. It measures trade duration, not earnings.
+- Lookahead caveat: these are the dates reports actually landed, not the dates announced beforehand. The cache is today's S&P 500 (survivorship, as above).

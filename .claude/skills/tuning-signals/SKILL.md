@@ -316,6 +316,13 @@ sub-1% payers on `Pass_Div`, so live scores dropped a point for 16 of the 31
 watchlist names. A Buy/Hold/Watch count that shifted that day shifted because of
 the fix, not the market.
 
+### Earnings blackout — tested, no effect (2026-09-27)
+
+`research/earn_*.py`. The pre-declared rule was to skip a gate entry when an earnings report gaps within 10 sessions. The primary edge vs the equally filtered random null was **−0.051R [−0.142, +0.040]**, with halves −0.049R / −0.052R. That's the same as without the filter (−0.043R), and flat at every K from 3 to 20 (−0.041R to −0.051R). Report days *are* 3× over-represented among `stop_gap` exits (21% vs 7% of all exits), but the average already includes those gaps. Specifically, do not re-propose:
+
+- **An earnings blackout at another K**, or keying it on `Earnings Soon`. That column in the live report is a warning, not a rule.
+- **"Hold through earnings" from the crossed-a-report split.** Gate trades that crossed a report averaged +0.23R against 0.00R for those that didn't. Only trades that outlived their stop *can* cross a report, so that split measures duration, not earnings.
+
 ### Structural facts found along the way
 
 - **`config.ATR_STOP_MULT` is unreachable.** Sweeping it 1.0 → 3.0 returns

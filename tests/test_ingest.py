@@ -6,9 +6,10 @@ yfinance returns), so the unit-normalization logic is tested in isolation.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from stockanalysis.ingest import _safe, fetch_fundamentals
+from stockanalysis.ingest import _safe, earnings_surprises, fetch_fundamentals
 
 
 # --- _safe ---------------------------------------------------------------------
@@ -70,3 +71,60 @@ def test_sector_lookup_precedence():
 
 def test_ticker_is_echoed():
     assert fetch_fundamentals("NVDA", {})["Ticker"] == "NVDA"
+
+
+# --- Next earnings date ---------------------------------------------------------
+
+# 2100-01-01 16:00 New York (21:00 UTC) — after the close, like most reports.
+_FUTURE_TS = 4102520400
+_PAST_TS = 946684800                                  # 2000-01-01
+
+
+def test_next_earnings_is_the_upcoming_date_in_new_york_time():
+    out = fetch_fundamentals("AAPL", {"earningsTimestampStart": _FUTURE_TS})
+    assert out["Next_Earnings"] == "2100-01-01"
+
+
+def test_next_earnings_ignores_a_date_already_past():
+    """Yahoo can lag a report by days — a stale date is not the next one."""
+    assert fetch_fundamentals("AAPL", {"earningsTimestampStart": _PAST_TS})["Next_Earnings"] is None
+
+
+def test_next_earnings_missing_is_none():
+    out = fetch_fundamentals("AAPL", {})
+    assert out["Next_Earnings"] is None
+    assert out["Earnings_Est"] is None
+
+
+def test_earnings_estimate_flag_passes_through():
+    info = {"earningsTimestampStart": _FUTURE_TS, "isEarningsDateEstimate": True}
+    assert fetch_fundamentals("AAPL", info)["Earnings_Est"] is True
+
+
+# --- Earnings surprise history (the shape yfinance's get_earnings_dates returns) --
+
+def _earnings_frame():
+    idx = pd.DatetimeIndex(["2026-10-29 16:00", "2026-07-30 16:00", "2026-04-30 16:00",
+                            "2026-01-29 16:00", "2025-10-30 16:00", "2025-07-31 16:00"],
+                           tz="America/New_York", name="Earnings Date")
+    return pd.DataFrame({"EPS Estimate": [1.98, 1.89, 1.94, 2.35, 1.77, 1.43],
+                         "Reported EPS": [np.nan, 2.02, 2.01, 2.40, 1.85, 1.57],
+                         "Surprise(%)": [np.nan, 6.74, 3.46, 2.13, 4.52, 9.79]}, index=idx)
+
+
+def test_earnings_surprises_are_the_latest_reported_quarters_newest_first():
+    out = earnings_surprises(_earnings_frame(), quarters=4)
+    assert [q["date"] for q in out] == ["2026-07-30", "2026-04-30", "2026-01-29", "2025-10-30"]
+    assert out[0]["eps_estimate"] == pytest.approx(1.89)
+    assert out[0]["eps_reported"] == pytest.approx(2.02)
+
+
+def test_earnings_surprise_is_normalised_from_percent_to_a_fraction():
+    """Yahoo's Surprise(%) is a percent (6.74 = 6.74%); the package's growth
+    fields are fractions, so this one is too."""
+    assert earnings_surprises(_earnings_frame())[0]["surprise"] == pytest.approx(0.0674)
+
+
+@pytest.mark.parametrize("frame", [None, pd.DataFrame()], ids=["none", "empty"])
+def test_earnings_surprises_of_nothing_is_an_empty_list(frame):
+    assert earnings_surprises(frame) == []

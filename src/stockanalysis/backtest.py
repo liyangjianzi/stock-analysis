@@ -151,7 +151,8 @@ class PlannedTrade:
 
 
 def simulate_planned_trades(hist, entry_dates, *, ticker: str = "",
-                            max_hold_bars: int = 63, cost_bps: float = 10.0,
+                            max_hold_bars: int = config.MAX_HOLD_BARS,
+                            cost_bps: float = 10.0,
                             slippage_mult: float = 1.0) -> list[PlannedTrade]:
     """Walk each entry to its plan's stop or target, bar by bar.
 
@@ -341,7 +342,8 @@ def _portfolio_summary(equity, trades) -> dict:
 
 
 def simulate_portfolio(prices, timeline_map, *, entry_labels=("Bullish",),
-                       max_positions=10, max_hold_bars=63, cost_bps=10.0,
+                       max_positions=10, max_hold_bars=config.MAX_HOLD_BARS,
+                       cost_bps=10.0,
                        slippage_mult=1.0, start_cash=100_000.0) -> dict:
     """Equal-slot long-only simulation over the union calendar of all tickers.
 

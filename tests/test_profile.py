@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from stockanalysis import profile as profile_mod
 from stockanalysis.profile import build_profile, save_report
@@ -23,6 +24,36 @@ _FAKE_RAW = {
     "heldPercentInsiders": 0.1, "heldPercentInstitutions": 0.5,
     "shortPercentOfFloat": 0.02,
 }
+
+
+_FAKE_EARNINGS = [
+    {"date": "2026-07-30", "eps_estimate": 1.89, "eps_reported": 2.02, "surprise": 0.0674},
+    {"date": "2026-04-30", "eps_estimate": 1.94, "eps_reported": 1.90, "surprise": -0.0206},
+]
+
+
+@pytest.fixture(autouse=True)
+def _no_earnings_fetch(monkeypatch):
+    """build_profile also fetches earnings history; keep every test offline."""
+    monkeypatch.setattr(profile_mod, "fetch_earnings_history", lambda ticker: [])
+
+
+def test_build_profile_carries_the_earnings_history(monkeypatch):
+    monkeypatch.setattr(profile_mod, "fetch_profile", lambda ticker: _FAKE_RAW)
+    monkeypatch.setattr(profile_mod, "fetch_earnings_history", lambda ticker: _FAKE_EARNINGS)
+    result = build_profile("ACME")
+    assert result["earnings"] == _FAKE_EARNINGS
+    assert "SECTION 6 · EARNINGS" in result["report"]
+    assert "+6.7%" in result["report"] and "beat" in result["report"]
+    assert "-2.1%" in result["report"] and "miss" in result["report"]
+    assert "Beat 1 of 2" in result["report"]
+
+
+def test_build_profile_says_so_when_there_is_no_earnings_history(monkeypatch):
+    monkeypatch.setattr(profile_mod, "fetch_profile", lambda ticker: _FAKE_RAW)
+    result = build_profile("ACME")
+    assert result["earnings"] == []
+    assert "No earnings history available." in result["report"]
 
 
 def test_build_profile_fundamentals_prefer_screened_df_over_raw(monkeypatch):

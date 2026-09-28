@@ -3,9 +3,14 @@
 ``add_indicators`` writes a fixed set of per-bar columns that the dashboard and
 signal engine read by exact name (the column contract):
 ``EMA20/EMA50/EMA200``, ``ENV_UP/ENV_DOWN``, ``MACD/MACD_SIG/MACD_HIST``,
-``RSI``, ``RSI3``, ``ATR14``, ``VOL_SMA5``, ``VOL_SMA20``, ``OBV``. The envelope
-is a *data-driven* asymmetric band around EMA20 sized so ~``envelope_coverage``
-of closes fall inside it.
+``RSI``, ``RSI3``, ``ATR14``, ``VOL_SMA5``, ``VOL_SMA20``, ``OBV``, ``DVOL20``
+(20-day average dollar volume, the liquidity measure). The envelope is a
+*data-driven* asymmetric band around EMA20 sized so ~``envelope_coverage`` of
+closes fall inside it.
+
+There is deliberately no spread column: a close-high-low estimator (Abdi &
+Ranaldo 2017) was tried and on S&P 500 bars it reads intraday volatility, not
+the bid-ask bounce (MSFT ~60 bps, NCLH 0 bps, against real spreads of a few).
 
 Trend channels and support/resistance are *window-dependent overlays* (not
 per-bar columns), so they are computed on demand by ``fit_regression_channel``
@@ -93,10 +98,12 @@ def add_indicators(df: pd.DataFrame, envelope_coverage: float = 0.95,
         out["VOL_SMA5"] = out["Volume"].rolling(5).mean()
         out["VOL_SMA20"] = out["Volume"].rolling(20).mean()
         out["OBV"] = OnBalanceVolumeIndicator(close, out["Volume"]).on_balance_volume()
+        out["DVOL20"] = (close * out["Volume"]).rolling(20).mean()
     else:
         out["VOL_SMA5"] = np.nan
         out["VOL_SMA20"] = np.nan
         out["OBV"] = np.nan
+        out["DVOL20"] = np.nan
 
     return out
 
@@ -133,6 +140,27 @@ def fit_regression_channel(close: pd.Series, window: int = 90, k: float = 2.0):
     }
 
 
+def swing_pivots(df: pd.DataFrame, pivot_window: int = 5) -> list[dict]:
+    """Swing highs and lows, in bar order: ``{i, date, price, kind}``.
+
+    A swing high is a bar whose High is the max within ±``pivot_window`` bars; a
+    swing low is the symmetric min on Low (a bar can be both). The last
+    ``pivot_window`` bars can't be pivots yet — their right side hasn't
+    printed. Shared by :func:`find_support_resistance` and the pattern detector.
+    """
+    if df is None or df.empty or "High" not in df or "Low" not in df:
+        return []
+    w, n = pivot_window, len(df)
+    hv, lv = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float)
+    pivots = []
+    for i in range(w, n - w):
+        if np.isfinite(hv[i]) and hv[i] == np.nanmax(hv[i - w:i + w + 1]):
+            pivots.append({"i": i, "date": df.index[i], "price": float(hv[i]), "kind": "high"})
+        if np.isfinite(lv[i]) and lv[i] == np.nanmin(lv[i - w:i + w + 1]):
+            pivots.append({"i": i, "date": df.index[i], "price": float(lv[i]), "kind": "low"})
+    return pivots
+
+
 def find_support_resistance(df: pd.DataFrame, pivot_window: int = 5,
                             cluster_tol: float = 0.015, max_levels: int = 6,
                             lookback: int = 252):
@@ -156,22 +184,15 @@ def find_support_resistance(df: pd.DataFrame, pivot_window: int = 5,
     if n < 2 * w + 1:
         return []
 
-    hv, lv = d["High"].to_numpy(), d["Low"].to_numpy()
-    pivots = []  # (price, kind)
-    for i in range(w, n - w):
-        win_hi = hv[i - w:i + w + 1]
-        win_lo = lv[i - w:i + w + 1]
-        if np.isfinite(hv[i]) and hv[i] == np.nanmax(win_hi):
-            pivots.append((float(hv[i]), "resistance"))
-        if np.isfinite(lv[i]) and lv[i] == np.nanmin(win_lo):
-            pivots.append((float(lv[i]), "support"))
-    if not pivots:
+    # Only prices matter here: a level's kind is set by where it sits relative to
+    # the last close, not by whether its pivots were highs or lows.
+    prices = sorted(p["price"] for p in swing_pivots(d, pivot_window=w))
+    if not prices:
         return []
 
     # Cluster pivots within cluster_tol of the running cluster mean.
-    pivots.sort(key=lambda p: p[0])
     clusters = []  # list of dict(prices=[], mean=float)
-    for price, _kind in pivots:
+    for price in prices:
         if clusters and abs(price - clusters[-1]["mean"]) / clusters[-1]["mean"] <= cluster_tol:
             c = clusters[-1]
             c["prices"].append(price)

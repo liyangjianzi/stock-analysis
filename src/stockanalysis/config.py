@@ -85,6 +85,20 @@ STOP_BUFFER_ATR = 0.25             # ATRs of slack placed under a structural lev
 # out; if none qualifies, the ATR stop / 2R target take over.
 MIN_STOP_ATR = 0.5
 MIN_TARGET_ATR = 1.0
+# Time stop, in bars after the signal: the backtest's time exit and the live
+# plan's "Exit By" date, so the two can't describe different trades.
+MAX_HOLD_BARS = 63
+# Flag a plan whose next earnings report is this many sessions away or fewer.
+# Not "before Exit By": a 63-bar hold spans a whole quarter, so nearly every
+# plan crosses a report. Gate trades average ~8 bars (baseline, 2026-09-27), so
+# 10 sessions covers the typical trade. A warning only — nothing decides on it.
+EARNINGS_WARN_DAYS = 10
+# Liquidity. The participation cap limits an order to a fraction of the name's
+# 20-day average share volume, so a fill doesn't move the price it assumed. The
+# dollar-volume floor only flags a thin name in the report (like MIN_RR, nothing
+# else reads it). DVOL20 is in the listing's currency, so a .TO name is in CAD.
+MAX_ADV_PARTICIPATION = 0.01       # max order size as a fraction of VOL_SMA20
+MIN_DOLLAR_VOLUME = 5_000_000.0    # DVOL20 below which a plan is flagged
 
 # -----------------------------------------------------------------------------
 # Stage-0 (daily market overview) configuration.
@@ -114,3 +128,15 @@ CANDIDATE_UNIVERSE = {
 OVERVIEW_INDICES = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "TSX": "^GSPTSE"}
 VIX_TICKER = "^VIX"
 OVERVIEW_LOOKBACK = 60  # trading days for the index chart
+
+# Macro panel (display only — never an input to a signal). Yahoo quotes the
+# Treasury yields in percent already (^TNX 5.18 = 5.18%, checked 2026-09-27), so
+# changes are reported in bps and levels are never rescaled. The curve slope is
+# "10Y Treasury" minus "3M T-Bill", so keep those two names.
+MACRO_YIELDS = {"3M T-Bill": "^IRX", "5Y Treasury": "^FVX",
+                "10Y Treasury": "^TNX", "30Y Treasury": "^TYX"}
+MACRO_MARKETS = {"US Dollar (DXY)": "DX-Y.NYB", "WTI Crude": "CL=F", "Gold": "GC=F"}
+# FRED series, fetched as CSV without an API key. Latest vintage, i.e. revised
+# data — fine for context, never point-in-time, so never feed it to a backtest.
+FRED_SERIES = {"Fed Funds": "DFF", "CPI": "CPIAUCSL",
+               "Unemployment": "UNRATE", "Payrolls": "PAYEMS"}

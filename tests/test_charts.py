@@ -6,7 +6,7 @@ them ("RES 950.12" renders as "RES 9").
 """
 from __future__ import annotations
 
-from conftest import wandering_ohlcv as _wandering_ohlcv
+from conftest import wandering_ohlcv as _wandering_ohlcv, waypoint_ohlcv
 
 from stockanalysis.charts import _right_margin, build_technical_dashboard
 from stockanalysis.indicators import add_indicators
@@ -49,3 +49,16 @@ def test_dashboard_margin_scales_with_price_magnitude():
 
     assert len(max(pricey_labels, key=len)) > len(max(cheap_labels, key=len))
     assert pricey_fig.layout.margin.r > cheap_fig.layout.margin.r
+
+
+def test_dashboard_draws_detected_patterns():
+    tech = {"DB": waypoint_ohlcv([110, 90, 100, 90.2, 97])}
+    names = [tr.name for tr in build_technical_dashboard("DB", tech).data]
+    assert "Double Bottom (forming)" in names
+    assert "Double Bottom level" in names
+
+
+def test_dashboard_without_patterns_draws_none():
+    tech = {"UP": waypoint_ohlcv([100, 160], bars_per_leg=120)}
+    names = [tr.name or "" for tr in build_technical_dashboard("UP", tech).data]
+    assert not any("level" in n for n in names)

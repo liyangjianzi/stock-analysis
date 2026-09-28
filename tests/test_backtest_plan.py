@@ -356,3 +356,12 @@ def test_trade_plans_from_one_indicator_pass_match_per_slice_plans():
     assert any(p["stop_basis"] == "structure" for p, _ in plans), "no S/R-based plan"
     for per_slice, sliced in plans:
         assert per_slice == pytest.approx(sliced, nan_ok=True)
+
+
+def test_time_stop_is_shared_with_the_live_trade_plan():
+    """The plan's Exit By and the backtest's time exit must be one number."""
+    import inspect
+
+    from stockanalysis import backtest, config
+    for fn in (backtest.simulate_planned_trades, backtest.simulate_portfolio):
+        assert inspect.signature(fn).parameters["max_hold_bars"].default == config.MAX_HOLD_BARS

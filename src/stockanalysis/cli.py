@@ -33,7 +33,10 @@ def _add_run_parser(sub) -> None:
     p.add_argument("--fund-min", type=int, default=signals.DEFAULT_FUND_MIN,
                    metavar="N",
                    help="Minimum fundamental score (of 6) for a name to be ownable; "
-                        "below it the action is Watch (default: %(default)s).")
+                        "below it the action is Watch (default: %(default)s). 0 turns "
+                        "the quality test off, so the technical gate alone decides "
+                        "Buy vs Hold -- the technicals-only mode that "
+                        "'backtest --scope technical' measures.")
     p.add_argument("--account", type=float, default=config.DEFAULT_ACCOUNT_SIZE,
                    metavar="USD",
                    help="Account equity the position sizing is measured against "
@@ -109,7 +112,8 @@ def _add_backtest_parser(sub) -> None:
     p.add_argument("--horizon", choices=["1m", "3m", "6m"], action="append", default=None,
                    help="Forward-return horizon(s); repeatable (default: 1m 3m 6m).")
     p.add_argument("--max-hold", choices=["1m", "3m", "6m"], default="3m",
-                   help="Max holding period for the portfolio sim (default: 3m).")
+                   help="Max holding period: the time stop for --exits plan and "
+                        "the portfolio sim (default: 3m, the live plan's Exit By).")
     p.add_argument("--max-positions", type=int, default=10,
                    help="Max concurrent positions (default: 10).")
     p.add_argument("--cost-bps", type=float, default=10.0,

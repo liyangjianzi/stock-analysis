@@ -1,0 +1,40 @@
+503 names with earnings dates; 503 cached names
+gate trades 7266 -> 7211 in scope; null 35724 in scope (5 reps)  [374s]
+
+Baseline (no blackout):
+  unfiltered     n= 7211
+    all    gate +0.029R [-0.039, +0.098]   null +0.073R [+0.021, +0.124]   edge -0.043R [-0.129, +0.043]  not distinguishable from random entry
+    first  gate +0.091R [-0.005, +0.187]   null +0.120R [+0.050, +0.190]   edge -0.029R [-0.147, +0.090]  not distinguishable from random entry
+    second gate -0.032R [-0.126, +0.063]   null +0.025R [-0.050, +0.100]   edge -0.056R [-0.177, +0.064]  not distinguishable from random entry
+
+Blackout(K) — primary K=10; gate and null filtered alike:
+  K=3            n= 6902
+    all    gate +0.028R [-0.043, +0.098]   null +0.076R [+0.023, +0.128]   edge -0.048R [-0.136, +0.040]  not distinguishable from random entry
+    first  gate +0.084R [-0.015, +0.183]   null +0.125R [+0.053, +0.197]   edge -0.041R [-0.163, +0.082]  not distinguishable from random entry
+    second gate -0.028R [-0.126, +0.070]   null +0.026R [-0.051, +0.102]   edge -0.054R [-0.178, +0.070]  not distinguishable from random entry
+  K=5            n= 6718
+    all    gate +0.029R [-0.042, +0.100]   null +0.075R [+0.022, +0.128]   edge -0.046R [-0.135, +0.043]  not distinguishable from random entry
+    first  gate +0.086R [-0.014, +0.185]   null +0.125R [+0.053, +0.197]   edge -0.039R [-0.162, +0.084]  not distinguishable from random entry
+    second gate -0.028R [-0.128, +0.071]   null +0.024R [-0.053, +0.101]   edge -0.052R [-0.178, +0.073]  not distinguishable from random entry
+  K=10 *         n= 6241
+    all    gate +0.027R [-0.046, +0.100]   null +0.078R [+0.023, +0.132]   edge -0.051R [-0.142, +0.040]  not distinguishable from random entry
+    first  gate +0.084R [-0.013, +0.182]   null +0.134R [+0.060, +0.208]   edge -0.049R [-0.172, +0.073]  not distinguishable from random entry
+    second gate -0.031R [-0.138, +0.076]   null +0.021R [-0.058, +0.100]   edge -0.052R [-0.185, +0.081]  not distinguishable from random entry
+  K=15           n= 5756
+    all    gate +0.034R [-0.042, +0.109]   null +0.075R [+0.019, +0.132]   edge -0.042R [-0.136, +0.053]  not distinguishable from random entry
+    first  gate +0.091R [-0.011, +0.193]   null +0.131R [+0.055, +0.208]   edge -0.041R [-0.168, +0.087]  not distinguishable from random entry
+    second gate -0.023R [-0.134, +0.087]   null +0.018R [-0.064, +0.100]   edge -0.041R [-0.179, +0.096]  not distinguishable from random entry
+  K=20           n= 5233
+    all    gate +0.019R [-0.058, +0.095]   null +0.069R [+0.010, +0.127]   edge -0.050R [-0.146, +0.046]  not distinguishable from random entry
+    first  gate +0.073R [-0.032, +0.177]   null +0.123R [+0.045, +0.202]   edge -0.051R [-0.181, +0.080]  not distinguishable from random entry
+    second gate -0.034R [-0.146, +0.079]   null +0.013R [-0.071, +0.098]   edge -0.047R [-0.188, +0.093]  not distinguishable from random entry
+
+PRIMARY (K=10): does not ship — first half: not distinguishable from random entry; second half: not distinguishable from random entry
+
+Diagnostics:
+  gate: walk crossed a report   901 trades +0.233R [+0.112, +0.354]   did not  6310 +0.000R [-0.072, +0.073]
+  gate: stop_gap exits on a report day 21.1% (all exits: 7.0%; n stop_gap=446)
+  null: walk crossed a report  5982 trades +0.336R [+0.267, +0.405]   did not 29742 +0.020R [-0.035, +0.074]
+  null: stop_gap exits on a report day 22.9% (all exits: 7.8%; n stop_gap=2247)
+
+[377s]

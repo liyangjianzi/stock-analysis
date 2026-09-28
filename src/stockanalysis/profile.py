@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .ingest import fetch_profile
+from .ingest import fetch_earnings_history, fetch_profile
 
 
 def save_report(profile: dict, path) -> str:
@@ -53,7 +53,7 @@ def _fmt_val(val, fmt="pct"):
 
 
 def build_profile(ticker: str, screened_df: pd.DataFrame | None = None) -> dict:
-    """Build a 5-section deep fundamental profile for ``ticker``.
+    """Build a 6-section deep fundamental profile for ``ticker``.
 
     Returns a dict with the raw profile, derived sub-scores (management, moat,
     long-term potential), the resolved ``fundamentals`` (PE/growth/FCF/debt —
@@ -63,9 +63,11 @@ def build_profile(ticker: str, screened_df: pd.DataFrame | None = None) -> dict:
     those already-resolved values (``screened_df`` preferred, falling back to
     the raw yfinance fields), so other renderers (e.g. ``report.py``'s HTML
     profile card) can reuse this module's preference logic instead of
-    re-deriving it from ``screened_df`` themselves.
+    re-deriving it from ``screened_df`` themselves. ``earnings`` is the last
+    four reported EPS surprises (:func:`stockanalysis.ingest.fetch_earnings_history`).
     """
     p = fetch_profile(ticker)
+    earnings = fetch_earnings_history(ticker)
     W = 70
     HDBL = "=" * W
     SEP = "-" * W
@@ -239,6 +241,23 @@ def build_profile(ticker: str, screened_df: pd.DataFrame | None = None) -> dict:
     out.append(f"  EPS Growth:      {eg_pct:>7}  →  {eg_lbl}")
     out.append(f"  FCF:             {fcf_s:>7}  →  {fcf_lbl}")
     out.append(f"  Long-Term Score: {lt_score}/4  [{lt_lbl}]")
+
+    # -- Section 6: Earnings --
+    out.append(f"\n{SEP}")
+    out.append("SECTION 6 · EARNINGS (last reported quarters)")
+    if earnings:
+        for q in earnings:
+            surprise = q["surprise"]
+            verdict = ("beat" if surprise > 0 else "miss" if surprise < 0 else "in line"
+                       ) if pd.notna(surprise) else "—"
+            surprise_s = f"{surprise:+.1%}" if pd.notna(surprise) else "—"
+            out.append(f"  {q['date']}   est {_fmt_val(q['eps_estimate'], 'ratio'):>6}"
+                       f"   actual {_fmt_val(q['eps_reported'], 'ratio'):>6}"
+                       f"   surprise {surprise_s:>7}  {verdict}")
+        beats = sum(1 for q in earnings if pd.notna(q["surprise"]) and q["surprise"] > 0)
+        out.append(f"  Beat {beats} of {len(earnings)}")
+    else:
+        out.append("  No earnings history available.")
     out.append(HDBL)
 
     return {
@@ -252,5 +271,6 @@ def build_profile(ticker: str, screened_df: pd.DataFrame | None = None) -> dict:
         "fundamentals": {"pe": pe_val, "eps_growth": eps_growth, "rev_growth": rev_growth,
                          "fcf": fcf_val, "debt_equity": debt_eq},
         "raw": p,
+        "earnings": earnings,
         "report": "\n".join(out),
     }

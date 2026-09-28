@@ -56,6 +56,17 @@ def _safe(info: dict, key: str):
         return np.nan
 
 
+def _next_earnings(info: dict) -> str | None:
+    """The upcoming earnings date as an ISO string (New York calendar day), or
+    None when Yahoo has none — or only a date already past, which it can carry
+    for days after a report."""
+    ts = _safe(info, "earningsTimestampStart")
+    if not np.isfinite(ts):
+        return None
+    when = pd.Timestamp(ts, unit="s", tz="UTC").tz_convert("America/New_York")
+    return when.date().isoformat() if when >= pd.Timestamp.now(tz="UTC") else None
+
+
 def fetch_fundamentals(ticker: str, info: dict, watchlist: dict | None = None) -> dict:
     """Extract a normalised set of foundational metrics from a yfinance info dict.
 
@@ -66,6 +77,9 @@ def fetch_fundamentals(ticker: str, info: dict, watchlist: dict | None = None) -
       - dividendYield : also a PERCENT (e.g. 0.32 for 0.32%) -> /100
 
     ``watchlist`` supplies the sector label (falls back to the watchlist CSV).
+    ``Next_Earnings`` (ISO date or None) and ``Earnings_Est`` (Yahoo's "this date
+    is an estimate" flag, or None) ride along for the signal matrix; the
+    screener never reads them.
     """
     watchlist = config.load_watchlist_csv() if watchlist is None else watchlist
 
@@ -96,6 +110,10 @@ def fetch_fundamentals(ticker: str, info: dict, watchlist: dict | None = None) -
         "Debt_Equity": de_ratio,
         "Div_Yield": div_yield,
         "FCF": fcf,
+        "Next_Earnings": _next_earnings(info) if isinstance(info, dict) else None,
+        "Earnings_Est": (bool(info["isEarningsDateEstimate"])
+                         if isinstance(info, dict) and info.get("isEarningsDateEstimate") is not None
+                         else None),
     }
 
 
@@ -141,6 +159,37 @@ def fetch_profile(ticker: str) -> dict:
         return result
     except Exception:
         return dict(_EMPTY)
+
+
+def earnings_surprises(frame, quarters: int = 4) -> list[dict]:
+    """The latest ``quarters`` *reported* quarters from a
+    ``yf.Ticker.get_earnings_dates()`` frame, newest first, as
+    ``{date, eps_estimate, eps_reported, surprise}``.
+
+    Yahoo's ``Surprise(%)`` is a percent (6.74 = 6.74%) and is divided by 100
+    here, so ``surprise`` is a fraction like the package's growth fields.
+    Upcoming dates (no reported EPS yet) are skipped. Never raises.
+    """
+    if not isinstance(frame, pd.DataFrame) or frame.empty or "Reported EPS" not in frame:
+        return []
+    reported = frame[frame["Reported EPS"].notna()].sort_index(ascending=False).head(quarters)
+    return [{
+        "date": ts.date().isoformat(),
+        "eps_estimate": _safe(row, "EPS Estimate"),
+        "eps_reported": _safe(row, "Reported EPS"),
+        "surprise": _safe(row, "Surprise(%)") / 100.0,
+    } for ts, row in ((ts, row.to_dict()) for ts, row in reported.iterrows())]
+
+
+def fetch_earnings_history(ticker: str, quarters: int = 4) -> list[dict]:
+    """Fetch the last ``quarters`` reported EPS surprises (see
+    :func:`earnings_surprises`); ``[]`` on any failure."""
+    try:
+        return earnings_surprises(yf.Ticker(ticker).get_earnings_dates(limit=quarters + 4),
+                                  quarters)
+    except Exception as e:
+        log.warning("%s: earnings history unavailable (%s).", ticker, e)
+        return []
 
 
 def load_watchlist(watchlist: dict | None = None, period: str = config.HISTORY_PERIOD):

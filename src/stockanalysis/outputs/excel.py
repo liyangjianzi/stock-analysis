@@ -48,6 +48,7 @@ NUMBER_FORMATS = {
     "Composite": "0.000",
     _PLAN["entry"]: "#,##0.00", _PLAN["stop"]: "#,##0.00", _PLAN["target"]: "#,##0.00",
     _PLAN["rr"]: "0.00", _PLAN["shares"]: "#,##0", _PLAN["risk_amount"]: "#,##0",
+    _PLAN["adv_dollar"]: "#,##0", "Days to Earnings": "0",
 }
 
 _MAX_COL_WIDTH = 40  # cap so a long sector name doesn't blow out the layout

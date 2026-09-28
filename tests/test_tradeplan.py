@@ -15,10 +15,11 @@ from conftest import wandering_ohlcv as _wandering_ohlcv
 
 from stockanalysis.config import (ATR_STOP_MULT, DEFAULT_ACCOUNT_SIZE,
                                   DEFAULT_MAX_WEIGHT, DEFAULT_RISK_PCT,
+                                  MAX_ADV_PARTICIPATION, MAX_HOLD_BARS,
                                   MIN_STOP_ATR, MIN_TARGET_ATR, STOP_BUFFER_ATR)
 from stockanalysis.indicators import add_indicators, find_support_resistance
 from stockanalysis.tradeplan import (MATRIX_COLUMNS, _SR_MAX_LEVELS,
-                                     build_trade_plan, empty_plan)
+                                     build_trade_plan, empty_plan, order_ticket)
 
 # The shipped defaults, not copies of them — a config change must reach the tests.
 ACCOUNT = DEFAULT_ACCOUNT_SIZE
@@ -139,6 +140,76 @@ def test_shares_are_zero_when_one_share_exceeds_the_budget(uptrend_ohlcv):
     assert np.isfinite(plan["stop"]) and np.isfinite(plan["target"])
 
 
+# --- Liquidity -----------------------------------------------------------------
+
+def test_plan_reports_average_dollar_volume(uptrend_ohlcv):
+    df = add_indicators(uptrend_ohlcv)
+    assert _plan(df)["adv_dollar"] == pytest.approx(df["DVOL20"].iloc[-1])
+
+
+def test_liquidity_cap_binds_on_a_thin_name(uptrend_ohlcv):
+    thin = uptrend_ohlcv.assign(Volume=500.0)    # 500 shares a day
+    df = add_indicators(thin)
+    plan = _plan(df, max_weight=1.0)
+    assert plan["shares"] == math.floor(MAX_ADV_PARTICIPATION * 500.0)
+    assert plan["risk_amount"] == pytest.approx(plan["shares"] * (plan["entry"] - plan["stop"]))
+
+
+def test_liquidity_cap_leaves_a_liquid_name_alone(uptrend_ohlcv):
+    df = add_indicators(uptrend_ohlcv)            # ~1M shares a day
+    assert _plan(df)["shares"] == _plan(df, max_adv_participation=1.0)["shares"]
+
+
+def test_liquidity_cap_is_skipped_when_volume_is_unknown(uptrend_ohlcv):
+    """Missing volume is no information, not an illiquid name — size as usual."""
+    df = add_indicators(uptrend_ohlcv.drop(columns=["Volume"]))
+    plan = _plan(df, max_weight=1.0)
+    assert plan["shares"] == math.floor(ACCOUNT * RISK_PCT / (plan["entry"] - plan["stop"]))
+    assert np.isnan(plan["adv_dollar"])
+
+
+# --- Time stop and order ticket ------------------------------------------------
+
+def test_exit_by_is_the_backtests_time_stop(uptrend_ohlcv):
+    df = add_indicators(uptrend_ohlcv)
+    expected = (df.index[-1] + pd.offsets.BDay(MAX_HOLD_BARS)).date().isoformat()
+    assert _plan(df)["exit_by"] == expected
+
+
+def test_exit_by_follows_max_hold_bars(uptrend_ohlcv):
+    df = add_indicators(uptrend_ohlcv)
+    expected = (df.index[-1] + pd.offsets.BDay(10)).date().isoformat()
+    assert _plan(df, max_hold_bars=10)["exit_by"] == expected
+
+
+def test_exit_by_is_none_without_a_date_index(uptrend_ohlcv):
+    df = add_indicators(uptrend_ohlcv).reset_index(drop=True)
+    plan = _plan(df)
+    assert plan["exit_by"] is None
+    assert np.isfinite(plan["stop"])              # the levels still stand
+
+
+def test_order_ticket_spells_out_the_bracket():
+    plan = {**empty_plan(), "entry": 168.0, "stop": 158.0, "target": 192.0,
+            "shares": 140, "exit_by": "2026-12-24"}
+    assert order_ticket(plan) == ("BUY 140 MOO · OCO GTC: SELL 140 STP 158.00 / "
+                                  "SELL 140 LMT 192.00 · MOC by 2026-12-24")
+
+
+def test_order_ticket_omits_the_time_stop_when_unknown():
+    plan = {**empty_plan(), "entry": 10.0, "stop": 9.0, "target": 12.0, "shares": 5}
+    assert order_ticket(plan) == "BUY 5 MOO · OCO GTC: SELL 5 STP 9.00 / SELL 5 LMT 12.00"
+
+
+@pytest.mark.parametrize("plan", [
+    empty_plan(),
+    {**empty_plan(), "entry": 10.0, "stop": 9.0, "target": 12.0, "shares": 0},
+    {"shares": None, "stop": None},
+], ids=["empty", "zero-shares", "partial-row"])
+def test_order_ticket_is_blank_when_there_is_nothing_to_place(plan):
+    assert order_ticket(plan) == ""
+
+
 # --- Degenerate input: NaN means fail, never crash ---------------------------
 
 @pytest.mark.parametrize("df", [
@@ -153,7 +224,8 @@ def test_degenerate_input_returns_an_empty_plan(df):
     assert set(plan) == set(empty_plan())
     assert (plan["shares"], plan["risk_amount"]) == (0, 0.0)
     assert plan["stop_basis"] is None and plan["target_basis"] is None
-    assert all(np.isnan(plan[k]) for k in ("entry", "stop", "target", "rr"))
+    assert plan["exit_by"] is None
+    assert all(np.isnan(plan[k]) for k in ("entry", "stop", "target", "rr", "adv_dollar"))
 
 
 def test_zero_atr_returns_an_empty_plan():

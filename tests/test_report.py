@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from conftest import wandering_ohlcv as _wandering_ohlcv
+from conftest import wandering_ohlcv as _wandering_ohlcv, waypoint_ohlcv
 
 from stockanalysis import report
 from stockanalysis.config import MIN_RR
@@ -169,6 +169,17 @@ def test_build_full_report_no_tech_data_for_selected_ticker():
     assert "No chart data for AAA." in out
 
 
+def test_technical_screener_lists_detected_patterns():
+    tech = {"DB": waypoint_ohlcv([110, 90, 100, 90.2, 97])}
+    out = report.build_full_report(
+        _screened_df(["DB"]), _signal_matrix(["DB"]), tech, [], _overview_data(),
+        selected=[], generated_at="now",
+    )
+    section = out[out.index('id="tech_screener"'):out.index('id="signals"')]
+    assert "<th>Patterns</th>" in section
+    assert "Double Bottom (forming)" in section
+
+
 def test_build_full_report_overview_vix_none():
     out = report.build_full_report(
         _screened_df(["AAA"]), _signal_matrix(["AAA"]), {}, [],
@@ -190,6 +201,37 @@ def test_build_full_report_empty_overview():
     assert "VIX: unavailable" in out
     assert "No index stats available." in out
     assert "No recent headlines." in out
+
+
+def _macro():
+    return {
+        "rates": [{"Name": "10Y Treasury", "Last": 5.18, "1W": 18.0, "1M": 28.0, "Unit": "bps"},
+                  {"Name": "WTI Crude", "Last": 93.36, "1W": -2.5, "1M": np.nan, "Unit": "%"}],
+        "curve": {"slope_bps": -140.0, "inverted": True},
+        "economy": [{"Indicator": "CPI", "Value": 3.04, "Unit": "% y/y", "Change": 0.12,
+                     "Change Label": "vs prior month", "As of": "2026-08-01"}],
+    }
+
+
+def test_overview_renders_the_macro_panel():
+    out = report.build_full_report(
+        _screened_df(["AAA"]), _signal_matrix(["AAA"]), {}, [],
+        {**_overview_data(), "macro": _macro()}, selected=[], generated_at="now",
+    )
+    assert "Rates &amp; Macro" in out
+    assert "10Y Treasury" in out and "+18 bps" in out
+    assert "-2.50%" in out
+    assert "10Y − 3M: -140 bps (inverted)" in out
+    assert "3.04% y/y" in out and "2026-08-01" in out
+
+
+def test_overview_says_so_when_macro_is_unavailable():
+    out = report.build_full_report(
+        _screened_df(["AAA"]), _signal_matrix(["AAA"]), {}, [],
+        {**_overview_data(), "macro": {"rates": [], "curve": None, "economy": []}},
+        selected=[], generated_at="now",
+    )
+    assert "Macro data unavailable." in out
 
 
 def test_build_full_report_profile_card_uses_structured_fields_not_raw_report_text():
@@ -219,6 +261,18 @@ def test_build_full_report_profile_card_renders_resolved_fundamentals():
     assert "18.50" in out
 
 
+def test_profile_card_shows_the_earnings_surprises():
+    prof = {**_profile("AAA"), "earnings": [
+        {"date": "2026-07-30", "eps_estimate": 1.89, "eps_reported": 2.02, "surprise": 0.0674},
+    ]}
+    out = report.build_full_report(
+        _screened_df(["AAA"]), _signal_matrix(["AAA"]), {}, [prof], _overview_data(),
+        selected=["AAA"], generated_at="now",
+    )
+    assert "Earnings Surprise" in out
+    assert "2026-07-30" in out and "+6.7%" in out
+
+
 def test_save_report_writes_utf8_and_creates_parent_dirs(tmp_path):
     html_doc = "<html><body>hello — ✓</body></html>"
     path = report.save_report(html_doc, tmp_path / "run" / "nested" / "report.html")
@@ -245,6 +299,11 @@ def _planned_matrix():
         MATRIX_COLUMNS["rr"]: [MIN_RR * 2, MIN_RR / 2, np.nan],   # HOLD's is thin
         MATRIX_COLUMNS["shares"]: [200, 33, 0],
         MATRIX_COLUMNS["risk_amount"]: [1000.0, 99.0, 0.0],
+        MATRIX_COLUMNS["adv_dollar"]: [2.5e9, 1.0e6, np.nan],       # HOLD's is thin
+        MATRIX_COLUMNS["exit_by"]: ["2026-12-24", "2026-12-24", None],
+        "Next Earnings": ["2026-10-29", "2027-02-01", None],
+        "Days to Earnings": [23, 90, np.nan],   # BUY's is flagged soon for the test
+        "Earnings Soon": [True, False, None],
     }
     for col, values in plan.items():
         m[col] = values
@@ -269,9 +328,39 @@ def test_trade_plan_section_lists_buy_and_hold_only():
     assert "structure" in plan_html          # the basis is shown, not just the level
 
 
+def test_trade_plan_carries_an_order_ticket_per_row():
+    _, plan_html = _plan_html()
+    assert "BUY 200 MOO" in plan_html
+    assert "SELL 200 STP 95.00 / SELL 200 LMT 115.00" in plan_html
+    assert "MOC by 2026-12-24" in plan_html
+
+
+def test_trade_plan_warns_when_earnings_are_near():
+    _, plan_html = _plan_html()
+    assert "2026-10-29" in plan_html
+    rows = plan_html.split("<tr>")
+    buy_row = next(r for r in rows if "BUY 200 MOO" in r)
+    hold_row = next(r for r in rows if "SELL 33 STP" in r)
+    assert "earnings in 23 sessions" in buy_row
+    assert "earnings in" not in hold_row
+
+
 def test_trade_plan_flags_thin_rr():
     _, plan_html = _plan_html(min_rr=MIN_RR)
     assert "#f85149" in plan_html            # R:R 1.0 < 1.5 is coloured
+
+
+def test_trade_plan_flags_thin_dollar_volume():
+    _, plan_html = _plan_html(min_dollar_volume=5e6)
+    assert "2,500,000,000" in plan_html                  # ADV $, formatted
+    thin = plan_html[plan_html.index("1,000,000") - 80:plan_html.index("1,000,000")]
+    assert "#f85149" in thin                             # $1M/day < $5M is coloured
+
+
+def test_trade_plan_does_not_flag_liquid_names():
+    _, plan_html = _plan_html(min_dollar_volume=5e6)
+    liquid = plan_html[plan_html.index("2,500,000,000") - 80:plan_html.index("2,500,000,000")]
+    assert "#f85149" not in liquid
 
 
 def test_trade_plan_states_its_sizing_assumptions():
