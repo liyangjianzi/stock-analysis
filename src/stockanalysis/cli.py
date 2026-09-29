@@ -49,6 +49,11 @@ def _add_run_parser(sub) -> None:
                    metavar="PCT",
                    help="Cap on one position's notional, as a percent of the "
                         "account (default: %(default)s).")
+    p.add_argument("--risk", action="store_true",
+                   help="Also write the household risk report (risk_report.html) into this "
+                        "run's folder, checking its Buys against cash. Never fails the run.")
+    p.add_argument("--holdings", default=None, metavar="PATH",
+                   help="--risk: the holdings export (default: as for `stock-analysis risk`).")
     p.add_argument("--top", type=int, default=5, metavar="N",
                    help="Limit the report's technical-dashboard and fundamental-"
                         "profile sections to the N strongest names (the screener/"
@@ -214,20 +219,38 @@ def _add_risk_parser(sub) -> None:
                    help="Holdings export: .xlsx of the whole sheet (adds the account "
                         "drawdown) or .csv of the Details tab. Default: $HOLDINGS_FILE, "
                         "else data/holdings_workbook.xlsx, else data/holdings_snapshot.csv.")
-    p.add_argument("--signals", default=None, metavar="XLSX",
-                   help="A run's signal_matrix.xlsx, to check today's Buys against cash.")
-    p.add_argument("--period", default="10y", help="Price history to fetch (default: 10y).")
-    p.add_argument("--out", default="output/risk", help="Output base directory.")
+    p.add_argument("--from-run", default=None, metavar="DIR",
+                   help="Join a pipeline run folder: check its signal_matrix.xlsx Buys "
+                        "against cash and write the report beside its report.html.")
+    p.add_argument("--period", default="10y", help="Price history to fetch (default: %(default)s).")
+    p.add_argument("--out", default="output/risk",
+                   help="Output base directory without --from-run (default: %(default)s).")
+
+
+_NO_HOLDINGS_HINT = ("Export the sheet there, point $HOLDINGS_FILE at it, or ask Claude "
+                     "to refresh the holdings snapshot.")
 
 
 def _run_risk(args) -> int:
+    import pandas as pd
+
+    from .outputs.base import SIGNAL_MATRIX_SHEET
+
+    matrix = None
+    if args.from_run and (Path(args.from_run) / "signal_matrix.xlsx").exists():
+        matrix = pd.read_excel(Path(args.from_run) / "signal_matrix.xlsx",
+                               sheet_name=SIGNAL_MATRIX_SHEET)
     try:
-        res = pipeline.run_risk(args.holdings, signals=args.signals, out=args.out,
-                                period=args.period)
+        res = pipeline.run_risk(args.holdings, signal_matrix=matrix, run_dir=args.from_run,
+                                out=args.out, period=args.period)
     except FileNotFoundError as e:
-        print(f"{e}. Export the sheet there, point $HOLDINGS_FILE at it, or ask Claude "
-              "to refresh the holdings snapshot.", file=sys.stderr)
+        print(f"{e}. {_NO_HOLDINGS_HINT}", file=sys.stderr)
         return 1
+    _print_risk(res)
+    return 0
+
+
+def _print_risk(res: dict) -> None:
     risk = res["risk"]
     ex, mr, dd, st = risk["exposure"], risk["market"], risk["drawdown"], risk["stops"]
     worst = min(risk["stress"], key=lambda r: r["return"], default=None)
@@ -243,7 +266,6 @@ def _run_risk(args) -> int:
     for flag in ex["flags"] + risk["funding"]["flags"]:
         print(f"  ! {flag}")
     print(f"  Report: {res['report_path']}")
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -303,6 +325,17 @@ def main(argv=None) -> int:
                 results.signal_matrix["Final Action Signal"] == "Buy"
             ]["Ticker"].tolist()
             print(f"Buys: {buys or 'none'}")
+        if args.risk:
+            # In-process, from the run's own folder and matrix. Non-fatal: the
+            # pipeline's output above is already written.
+            try:
+                _print_risk(pipeline.run_risk(args.holdings, signal_matrix=results.signal_matrix,
+                                              run_dir=results.run_dir))
+            except FileNotFoundError as e:
+                print(f"WARN: no risk report — {e}. {_NO_HOLDINGS_HINT}", file=sys.stderr)
+            except Exception as e:
+                print(f"WARN: risk report failed ({e}); the run above is unaffected.",
+                      file=sys.stderr)
         return 0
 
     if args.command == "universe":

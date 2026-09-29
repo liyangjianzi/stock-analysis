@@ -28,10 +28,11 @@ results = run(top_n=10)                            # widen the dashboards/profil
 
 ### Household risk (`stock-analysis risk`)
 ```bash
-stock-analysis risk                       # data/holdings_workbook.xlsx (else the Details CSV)
-stock-analysis risk --signals output/<ts>/signal_matrix.xlsx   # + can today's Buys be funded
+stock-analysis run --risk                 # the pipeline, plus risk_report.html in its run folder
+stock-analysis risk                       # standalone -> output/risk/<ts>/
+stock-analysis risk --from-run output/<ts>   # join an earlier run: check its Buys, write beside its report.html
 ```
-Reads the owner's holdings (never committed — see Conventions; `--holdings PATH` or `$HOLDINGS_FILE` to point elsewhere) and writes `output/risk/<ts>/risk_report.html` (library: `pipeline.run_risk`): exposure, market risk, stress tests, the real account's drawdown, loss to stops, and cash vs Buys. There is **no service account** (the owner ruled out Google Cloud): Claude refreshes `data/holdings_workbook.xlsx` / `data/holdings_snapshot.csv` through the Google Drive connector on request, and the report prints the file's age. Drive for Desktop syncs only a `.gsheet` pointer (the sheet id), never the data.
+Reads the owner's holdings (never committed — see Conventions; `--holdings PATH` or `$HOLDINGS_FILE` to point elsewhere) and writes `risk_report.html` (library: `pipeline.run_risk`; pass `run_dir` + `signal_matrix` from `Results` to join a run — never infer the folder): exposure, market risk, stress tests, the real account's drawdown, loss to stops, and cash vs Buys. There is **no service account** (the owner ruled out Google Cloud): Claude refreshes `data/holdings_workbook.xlsx` / `data/holdings_snapshot.csv` through the Google Drive connector on request, and the report prints the file's age. Drive for Desktop syncs only a `.gsheet` pointer (the sheet id), never the data.
 
 ### Broad-universe research (offline after one fetch)
 ```bash
@@ -45,7 +46,7 @@ stock-analysis backtest --exits plan --universe data/universe_sp500.csv  # no ne
 `--period` history; the rest get a short `--refresh-period` (default `1mo`) window,
 which the `(ticker, date)` upsert folds in without duplicating. A nightly refresh
 is ~10k bars, not 1.23M. `--full` forces a complete refetch after a data
-correction. `scripts/run_daily.sh` runs this after the pipeline, non-fatally.
+correction. `scripts/run_daily.sh` runs this after the pipeline (and its `--risk` report), non-fatally; `SKIP_RISK` / `SKIP_CACHE` skip them.
 
 The cache (`data/cache/prices.db`) is gitignored — a rebuildable artifact. Its bars
 **must** come from the same `auto_adjust=True`, tz-naive path as `fetch_stock_data`

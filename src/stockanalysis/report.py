@@ -760,18 +760,21 @@ def _render_stops(st: dict) -> str:
             f"{_signed(st['heat'])} of the portfolio.</p>{table}{missing}")
 
 
-def _render_funding(fund: dict) -> str:
+def _render_funding(fund: dict, signals_source: str | None) -> str:
     cash = _table(["Account", "Currency", "Cash"], [
         [_esc(r.account), _esc(r.currency), f"{r.cash:,.0f}"] for r in fund["cash"].itertuples()])
     margin = (f'<p class="note">Margin account(s): {_esc(", ".join(fund["margin_accounts"]))}. '
               "The registered accounts (RRSP, TFSA, RESP) can't borrow.</p>"
               if fund["margin_accounts"] else "")
     buys = fund["buys"]
-    if buys.empty:
-        plan = ('<p class="empty">No Buy signals passed in (add <code>--signals</code> with a '
-                "run's signal_matrix.xlsx).</p>")
+    if signals_source is None:
+        plan = ('<p class="empty">No signal matrix checked: run the pipeline with '
+                "<code>--risk</code>, or <code>stock-analysis risk --from-run "
+                "&lt;run folder&gt;</code>.</p>")
+    elif buys.empty:
+        plan = f'<p class="empty">No Buy signals in {_esc(signals_source)}.</p>'
     else:
-        plan = "<h3>Today's Buys</h3>" + _table(
+        plan = f"<h3>Buys in {_esc(signals_source)}</h3>" + _table(
             ["Ticker", "Shares", "Entry", "Cost", "Cost (CAD)", "Accounts with the cash"],
             [[_esc(r.Ticker), f"{r.Shares:,.0f}", f"{r.Entry:,.2f}",
               f"{r.currency} {r.notional:,.0f}", _cad(r.notional_cad),
@@ -779,11 +782,13 @@ def _render_funding(fund: dict) -> str:
     return f"{cash}{margin}{plan}"
 
 
-def build_risk_report(risk: dict, *, generated_at: str, source: str) -> str:
+def build_risk_report(risk: dict, *, generated_at: str, source: str,
+                      signals_source: str | None = None) -> str:
     """Self-contained HTML for :func:`stockanalysis.portfolio.build_risk`'s result.
 
     Pure, like :func:`build_full_report`. ``source`` names where the holdings
-    came from (and when), so a stale snapshot is visible.
+    came from (and when), so a stale snapshot is visible; ``signals_source``
+    names the run whose Buys were checked against cash (None: none were).
     """
     ex = risk["exposure"]
     flags = ex["flags"] + risk["funding"]["flags"]
@@ -801,7 +806,7 @@ def build_risk_report(risk: dict, *, generated_at: str, source: str) -> str:
         ("stress", "Stress Tests", _render_stress(risk["stress"])),
         ("drawdown", "Account Drawdown", _render_drawdown(risk["drawdown"])),
         ("stops", "Loss to Stops", _render_stops(risk["stops"])),
-        ("funding", "Cash & Funding", _render_funding(risk["funding"])),
+        ("funding", "Cash & Funding", _render_funding(risk["funding"], signals_source)),
     ]
     return _page("Portfolio Risk", sections, generated_at=generated_at, header_extra=summary)
 

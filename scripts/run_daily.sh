@@ -3,13 +3,19 @@
 #
 # Two steps, in priority order:
 #   1. the signal pipeline  -> output/<timestamp>/{signal_matrix.xlsx,report.html}
+#      and, with it (`run --risk`), the household risk report -> risk_report.html
+#      in the same folder, checking the run's Buys against each account's cash
 #   2. a research-cache top-up so `backtest --universe` stays current
 #
+# The risk report and the cache top-up are non-fatal: a missing holdings file or
+# a failed fetch warns, and never masks the pipeline's output.
+#
 # Usage:
-#   scripts/run_daily.sh                  # both steps
+#   scripts/run_daily.sh                  # all steps
 #   scripts/run_daily.sh --top 10         # extra args go to `stock-analysis run`
 #   ACCOUNT=50000 scripts/run_daily.sh    # size this run against a 50k account
-#   SKIP_CACHE=1 scripts/run_daily.sh     # pipeline only
+#   SKIP_RISK=1 scripts/run_daily.sh      # no risk report
+#   SKIP_CACHE=1 scripts/run_daily.sh     # no cache top-up
 #
 # Cron example (weekdays 5pm):
 #   0 17 * * 1-5 /Users/liyanglu/PycharmProjects/StockAnalysis/scripts/run_daily.sh
@@ -20,9 +26,13 @@ cd "$PROJECT_DIR"
 
 # Optional local overrides, kept out of git so a real account size never gets
 # committed. Create scripts/run_daily.env with lines like: ACCOUNT=50000
+# Exported (set -a), so settings the CLI itself reads — HOLDINGS_FILE for the
+# risk report — reach it too.
 if [[ -f scripts/run_daily.env ]]; then
+  set -a
   # shellcheck disable=SC1091
   source scripts/run_daily.env
+  set +a
 fi
 
 UNIVERSE_CSV="${UNIVERSE_CSV:-data/universe_sp500.csv}"
@@ -39,6 +49,10 @@ args=()
 [[ -n "${RISK_PCT:-}" ]]    && args+=(--risk-pct "$RISK_PCT")
 [[ -n "${MAX_WEIGHT:-}" ]]  && args+=(--max-weight "$MAX_WEIGHT")
 [[ -n "${FUND_MIN:-}" ]]    && args+=(--fund-min "$FUND_MIN")
+# The risk report reads a local copy of the owner's holdings sheet that this job
+# can't refresh (no service account — ask Claude to "refresh holdings" after
+# trading); the report prints the copy's age and flags it once it's stale.
+[[ -z "${SKIP_RISK:-}" ]]   && args+=(--risk)
 
 source venv/bin/activate
 
@@ -59,8 +73,6 @@ stock-analysis run \
 
 # 2) Research cache. Incremental by default — already-cached tickers get a short
 #    top-up window, so this is seconds rather than a re-download of the universe.
-#    Non-fatal on purpose: a failed refresh must not mask a successful pipeline
-#    run, which is the output that is actually time-sensitive.
 if [[ -n "${SKIP_CACHE:-}" ]]; then
   echo "--- cache refresh skipped (SKIP_CACHE set) ---"
 elif [[ ! -f "$UNIVERSE_CSV" ]]; then

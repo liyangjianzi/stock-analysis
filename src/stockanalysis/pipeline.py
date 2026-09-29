@@ -145,28 +145,34 @@ def run(watchlist: dict | None = None,
     return results
 
 
-def run_risk(path=None, *, signals=None, out: str = "output/risk", period: str = "10y") -> dict:
-    """The household risk report — the library entry point behind
-    ``stock-analysis risk``. Loads the holdings file (:func:`holdings.load`),
+def run_risk(path=None, *, signal_matrix: pd.DataFrame | None = None, run_dir=None,
+             out: str = "output/risk", period: str = "10y") -> dict:
+    """The household risk report — the library entry point behind ``stock-analysis
+    risk`` and ``run --risk``. Loads the holdings file (:func:`holdings.load`),
     fetches market data, builds every section (:func:`portfolio.build_risk`) and
-    writes ``<out>/<timestamp>/risk_report.html``. ``signals`` is a run's
-    signal_matrix.xlsx, to check today's Buys against cash. Raises
-    ``FileNotFoundError`` when there is no holdings file.
+    writes ``risk_report.html``.
 
-    Returns ``{risk, report_path, source}``; ``source`` names the file and its
-    age, flagged when older than ``config.HOLDINGS_STALE_DAYS``.
+    To join a pipeline run, pass its ``run_dir`` (``Results.run_dir``) and
+    ``signal_matrix``: the report lands beside that run's report.html and checks
+    its Buys against the cash in each account. Otherwise it goes to a fresh
+    ``<out>/<timestamp>/``. Raises ``FileNotFoundError`` when there is no
+    holdings file.
+
+    Returns ``{risk, report_path, source}``; ``source`` names the holdings file
+    and its age, flagged when older than ``config.HOLDINGS_STALE_DAYS``.
     """
-    from .outputs.base import SIGNAL_MATRIX_SHEET
-
     book = holdings.load(path)
-    signal_matrix = pd.read_excel(signals, sheet_name=SIGNAL_MATRIX_SHEET) if signals else None
     risk = portfolio.build_risk(book["holdings"], portfolio.fetch_market(book["holdings"], period=period),
                                 history=book["history"], contributions=book["contributions"],
                                 signal_matrix=signal_matrix)
     age = (datetime.now() - book["saved_at"]).days
     source = (f"{book['path'].name}, saved {book['saved_at']:%Y-%m-%d %H:%M}"
               + (f" ({age} days old)" if age > config.HOLDINGS_STALE_DAYS else ""))
+    checked = None
+    if signal_matrix is not None:
+        checked = f"run {Path(run_dir).name}" if run_dir else "the signal matrix passed in"
     html = report.build_risk_report(risk, generated_at=f"{datetime.now():%Y-%m-%d %H:%M}",
-                                    source=source)
+                                    source=source, signals_source=checked)
+    folder = Path(run_dir) if run_dir else run_output_dir(out)
     return {"risk": risk, "source": source,
-            "report_path": report.save_report(html, run_output_dir(out) / "risk_report.html")}
+            "report_path": report.save_report(html, folder / "risk_report.html")}

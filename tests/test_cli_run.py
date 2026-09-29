@@ -65,3 +65,32 @@ def test_cli_run_risk_defaults_match_config():
     assert kwargs["risk_pct"] == config.DEFAULT_RISK_PCT
     assert kwargs["max_weight"] == config.DEFAULT_MAX_WEIGHT
     assert kwargs["fund_min"] == signals.DEFAULT_FUND_MIN
+
+
+# --- run --risk: the household risk report, in the run's own folder ----------------
+
+def test_run_risk_joins_the_run_with_its_in_memory_signal_matrix():
+    results = Results(report_path="out/report.html", run_dir="out/2026-09-28_170000")
+    with mock.patch("stockanalysis.pipeline.run", return_value=results), \
+            mock.patch("stockanalysis.pipeline.run_risk") as risk, \
+            mock.patch("stockanalysis.cli._print_risk"):
+        rc = cli.main(["run", "--target", "none", "--risk", "--holdings", "h.xlsx"])
+    assert rc == 0
+    assert risk.call_args.args == ("h.xlsx",)
+    assert risk.call_args.kwargs["run_dir"] == "out/2026-09-28_170000"
+    assert risk.call_args.kwargs["signal_matrix"] is results.signal_matrix
+
+
+def test_a_failed_risk_report_never_fails_the_run(capsys):
+    with mock.patch("stockanalysis.pipeline.run", return_value=Results(run_dir="out")), \
+            mock.patch("stockanalysis.pipeline.run_risk", side_effect=FileNotFoundError("no file")):
+        rc = cli.main(["run", "--target", "none", "--risk"])
+    assert rc == 0
+    assert "risk report" in capsys.readouterr().err.lower()
+
+
+def test_run_without_risk_builds_no_risk_report():
+    with mock.patch("stockanalysis.pipeline.run", return_value=Results(run_dir="out")), \
+            mock.patch("stockanalysis.pipeline.run_risk") as risk:
+        cli.main(["run", "--target", "none"])
+    assert not risk.called
