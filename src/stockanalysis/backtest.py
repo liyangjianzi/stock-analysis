@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from . import config, robustness
+from .account import summarize as summarize_account
 from .indicators import add_indicators
 from .tradeplan import build_trade_plan
 from .signals import (TECHNICAL_COMPONENTS, _components,
@@ -148,6 +149,7 @@ class PlannedTrade:
     exit_reason: str             # stop | stop_gap | target | target_gap | time
     r_multiple: float            # (exit - entry) / (entry - stop)
     bars_held: int
+    fill_date: object = None     # the bar the entry filled on (the one after entry_date)
 
 
 def simulate_planned_trades(hist, entry_dates, *, ticker: str = "",
@@ -216,6 +218,7 @@ def simulate_planned_trades(hist, entry_dates, *, ticker: str = "",
             ticker=ticker, entry_date=ts, entry=entry, stop=stop, target=target,
             exit_date=hist.index[exit_at], exit_price=net, exit_reason=exit_reason,
             r_multiple=(net - entry) / risk, bars_held=exit_at - i,
+            fill_date=hist.index[i + 1],
         ))
     return trades
 
@@ -434,6 +437,7 @@ class BacktestResults:
     trades: list = field(default_factory=list)               # PlannedTrade, exits="plan"
     trade_stats: dict = field(default_factory=dict)          # aggregate_trade_stats
     robustness: dict = field(default_factory=dict)           # robustness.evaluate, exits="plan"
+    account: dict = field(default_factory=dict)              # account.summarize, when asked
     config: dict = field(default_factory=dict)
     report_path: "str | None" = None
     excel_path: "str | None" = None
@@ -444,7 +448,7 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
                               max_positions=10, cost_bps=10.0,
                               slippage_mult=1.0, exits="horizon",
                               fast=True, null_reps=1, null_seed=0,
-                              split_at=None) -> BacktestResults:
+                              split_at=None, account=None) -> BacktestResults:
     """Assemble a BacktestResults from an in-memory price dict (no network).
 
     This is the offline-testable core of :func:`run_backtest`.
@@ -500,9 +504,12 @@ def build_results_from_prices(prices, *, mode="technical", fundamental_scores=No
             split_at = robustness.midpoint(spans) if spans else None
         evaluation = robustness.evaluate(trades, null, split_at) if split_at is not None else {}
         cfg["split_at"] = evaluation.get("split_at")
+        # ``account`` (params for account.simulate_account) replays the same
+        # trades, and the null's, through one account — see account.summarize.
+        acct = summarize_account(trades, null, account) if account is not None else {}
         return BacktestResults(mode=mode, trades=trades,
                                trade_stats=aggregate_trade_stats(trades),
-                               robustness=evaluation, config=cfg)
+                               robustness=evaluation, config=cfg, account=acct)
 
     ev_returns, base_returns, per_ticker = [], [], {}
     for tk, tl in timeline_map.items():
@@ -545,7 +552,8 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
                  cost_bps=10.0, slippage_mult=1.0, benchmark="SPY",
                  out_dir="output/backtest", export_excel=True,
                  save_report=True, exits="horizon", prices=None,
-                 null_reps=1, null_seed=0, split_at=None) -> BacktestResults:
+                 null_reps=1, null_seed=0, split_at=None,
+                 account=None) -> BacktestResults:
     """Network-driven entry point: fetch history, build results, write outputs.
 
     ``prices`` short-circuits the fetch with an already-loaded ``{ticker: frame}``
@@ -572,6 +580,7 @@ def run_backtest(watchlist=None, period="5y", *, mode="technical",
         max_hold=max_hold, max_positions=max_positions, cost_bps=cost_bps,
         slippage_mult=slippage_mult, exits=exits,
         null_reps=null_reps, null_seed=null_seed, split_at=split_at,
+        account=account,
     )
     results.config["period"] = period
 

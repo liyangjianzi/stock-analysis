@@ -133,6 +133,16 @@ def test_neither_level_hit_exits_on_the_time_stop(prelude):
     assert t.exit_price == pytest.approx(hist["Close"].iloc[PRELUDE + 3 - 1 + 1])
 
 
+def test_a_trade_records_the_bar_it_filled_on(prelude):
+    """The account simulation commits cash on the fill, the bar after the signal."""
+    p = _plan_for(prelude)
+    entry = p["entry"]
+    hist = _append(prelude, [(entry, entry + 0.2, entry - 0.2, entry)] * 3)
+    t = _one(hist, prelude.index[-1], max_hold_bars=2)
+    assert t.fill_date == hist.index[PRELUDE]
+    assert t.entry_date == prelude.index[-1]
+
+
 def test_target_gap_fills_better_than_the_target(prelude):
     p = _plan_for(prelude)
     entry, gap = p["entry"], p["target"] + 4.0

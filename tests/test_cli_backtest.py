@@ -87,3 +87,53 @@ def test_cli_rejects_a_malformed_split_before_running(capsys):
     assert exc.value.code == 2
     assert not m.called
     assert "YYYY-MM-DD" in capsys.readouterr().err
+
+
+def _with_account(res):
+    sim = {"n_signals": 100, "n_taken": 40, "skipped": {"cash": 60, "heat": 0, "size": 0},
+           "cagr": 0.041, "total_return": 0.5, "max_drawdown": -0.183,
+           "peak_date": pd.Timestamp("2021-11-01"), "trough_date": pd.Timestamp("2022-10-01"),
+           "longest_losing_streak": 9, "max_open_positions": 5, "max_heat": 0.05, "max_gross": 1.0}
+    odds = pd.DataFrame([{"risk_pct": r, "dd_median": 0.1, "dd_p95": 0.25, "p_dd_20": 0.3, "p_dd_30": 0.1}
+                         for r in (0.005, 0.01, 0.02)])
+    spread = {"seeds": 20, "cagr": (0.039, 0.055, 0.07), "max_drawdown": (-0.29, -0.24, -0.19),
+              "longest_losing_streak": (11.0, 14.0, 18.0)}
+    from stockanalysis.account import DEFAULT_RULES
+    res.account = {"params": {**DEFAULT_RULES, "risk_pct": 0.01}, "gate": sim,
+                   "null": dict(sim, cagr=0.05),
+                   "odds": odds, "spread": spread}
+    return res
+
+
+def test_cli_passes_account_flags_through():
+    with mock.patch("stockanalysis.backtest.run_backtest",
+                    return_value=_with_account(_plan_results())) as m:
+        cli.main(["backtest", "--exits", "plan", "--account-sim", "--risk-pct", "0.5",
+                  "--heat-cap", "6", "--no-report", "--no-excel"])
+    assert m.call_args.kwargs["account"] == {"risk_pct": 0.005, "heat_cap": 0.06}
+
+
+def test_cli_prints_the_account_simulation(capsys):
+    with mock.patch("stockanalysis.backtest.run_backtest",
+                    return_value=_with_account(_plan_results())):
+        cli.main(["backtest", "--exits", "plan", "--account-sim", "--no-report", "--no-excel"])
+    out = capsys.readouterr().out
+    assert "took 40 of 100" in out and "-18.3%" in out
+    assert "longest losing streak 9" in out
+    assert "random entries" in out
+    assert "20%+ drawdown" in out
+    assert "across 20 orderings" in out and "CAGR +3.9% to +7.0%" in out
+    assert "worst drawdown -29.0% to -19.0%" in out
+
+
+def test_cli_without_account_sim_passes_none():
+    with mock.patch("stockanalysis.backtest.run_backtest", return_value=_plan_results()) as m:
+        cli.main(["backtest", "--exits", "plan", "--no-report", "--no-excel"])
+    assert m.call_args.kwargs["account"] is None
+
+
+def test_cli_account_sim_needs_plan_exits(capsys):
+    with mock.patch("stockanalysis.backtest.run_backtest") as m:
+        rc = cli.main(["backtest", "--account-sim", "--no-report", "--no-excel"])
+    assert rc == 2 and not m.called
+    assert "--exits plan" in capsys.readouterr().err

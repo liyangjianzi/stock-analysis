@@ -78,3 +78,24 @@ def test_horizon_workbook_has_no_robustness_sheet(tmp_path, uptrend_ohlcv):
     res = build_results_from_prices({"UP": uptrend_ohlcv}, horizons=("1m",), max_hold="1m")
     wb = openpyxl.load_workbook(write_backtest_workbook(res, tmp_path / "bt.xlsx"))
     assert "Robustness" not in wb.sheetnames
+
+
+def test_plan_results_carry_an_account_simulation_when_asked(uptrend_ohlcv, downtrend_ohlcv):
+    prices = {"UP": uptrend_ohlcv, "DOWN": downtrend_ohlcv}
+    plain = build_results_from_prices(prices, exits="plan", max_hold="1m", null_reps=0)
+    assert plain.account == {}
+    res = build_results_from_prices(prices, exits="plan", max_hold="1m", null_reps=1,
+                                    account={"risk_pct": 0.01})
+    # (no synthetic fixture fires the gate in a full replay, so this pins the
+    # wiring; account.summarize's own test covers the gate/null simulation)
+    assert res.account["gate"]["n_signals"] == len(res.trades)
+    assert res.account["params"]["risk_pct"] == 0.01
+
+
+def test_plan_workbook_gains_an_account_sheet(tmp_path, uptrend_ohlcv):
+    res = build_results_from_prices({"UP": uptrend_ohlcv}, exits="plan", max_hold="1m",
+                                    account={"risk_pct": 0.01})
+    wb = openpyxl.load_workbook(write_backtest_workbook(res, tmp_path / "bt.xlsx"))
+    assert "Account" in wb.sheetnames
+    header = [c.value for c in wb["Account"][1]]
+    assert {"series", "taken", "cagr", "max_drawdown", "longest_losing_streak"} <= set(header)

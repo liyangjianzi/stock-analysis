@@ -1,0 +1,69 @@
+gate 7,266 trades, null 36,077 (5 reps)  [0s]
+
+Whole period, 1% risk (the CLI's --account-sim), and the drawdown odds of the
+trades the gate's account took (realized per-trade returns, month-block bootstrap):
+  gate CAGR +5.6%  worst DD -25.4%  streak 14  took 1,625 of 7,266
+  null CAGR +16.8%  worst DD -42.4%  streak 17  took 1,641 of 36,077
+  gate across 20 orderings (5th/median/95th): CAGR +0.9% / +6.1% / +10.2%  worst DD -36.3% / -24.7% / -19.3%  streak 14 / 15 / 16
+ risk_pct  dd_median  dd_p95  p_dd_20  p_dd_30
+    0.005      0.171   0.299    0.338    0.049
+    0.010      0.318   0.515    0.946    0.570
+    0.020      0.549   0.779    1.000    0.995 
+
+No rule (1% risk, 20% max position, no margin):
+  gate first: CAGR +12.6%, worst DD -15.4%, took 738  second: CAGR +7.5%, worst DD -14.5%, took 882
+  null first: CAGR +18.6%, worst DD -42.4%, took 794  second: CAGR +22.5%, worst DD -29.6%, took 834
+Just risking less (0.5%, no rule) — the trade-off any rule must beat:
+  gate first: CAGR +8.1%, worst DD -15.0%, took 1,156  second: CAGR +1.9%, worst DD -18.5%, took 1,324
+  null first: CAGR +18.1%, worst DD -42.7%, took 1,412  second: CAGR +17.1%, worst DD -33.6%, took 1,615
+
+heat cap 2%:
+  gate first: CAGR +2.6%, worst DD -16.4%, took 414  second: CAGR -1.6%, worst DD -12.5%, took 487  -> does not dominate in both  [heat blocked 85.4% of signals]
+  null first: CAGR -4.3%, worst DD -35.0%, took 696  second: CAGR -3.8%, worst DD -26.3%, took 675  -> does not dominate in both  [heat blocked 87.8% of signals]
+
+heat cap 3%:
+  gate first: CAGR +6.5%, worst DD -20.9%, took 591  second: CAGR -2.0%, worst DD -15.1%, took 666  -> does not dominate in both  [heat blocked 68.5% of signals]
+  null first: CAGR -3.4%, worst DD -42.6%, took 799  second: CAGR -2.2%, worst DD -33.4%, took 846  -> does not dominate in both  [heat blocked 68.2% of signals]
+
+heat cap 4%:
+  gate first: CAGR +7.4%, worst DD -20.5%, took 669  second: CAGR +0.8%, worst DD -16.9%, took 789  -> does not dominate in both  [heat blocked 32.8% of signals]
+  null first: CAGR +0.6%, worst DD -37.8%, took 798  second: CAGR -4.2%, worst DD -36.7%, took 930  -> does not dominate in both  [heat blocked 40.7% of signals]
+
+heat cap 5%:
+  gate first: CAGR +11.9%, worst DD -16.0%, took 732  second: CAGR +3.7%, worst DD -16.1%, took 834  -> does not dominate in both  [heat blocked 15.1% of signals]
+  null first: CAGR +3.6%, worst DD -39.7%, took 791  second: CAGR +0.9%, worst DD -35.2%, took 958  -> does not dominate in both  [heat blocked 23.9% of signals]
+
+throttle 5%:
+  gate first: CAGR +10.0%, worst DD -14.6%, took 921  second: CAGR +2.9%, worst DD -21.7%, took 1,204  -> does not dominate in both
+  null first: CAGR +17.3%, worst DD -39.6%, took 1,101  second: CAGR +15.5%, worst DD -29.4%, took 1,291  -> does not dominate in both
+
+throttle 10%:
+  gate first: CAGR +11.7%, worst DD -15.7%, took 781  second: CAGR +0.3%, worst DD -21.7%, took 1,130  -> does not dominate in both
+  null first: CAGR +17.2%, worst DD -40.8%, took 977  second: CAGR +17.2%, worst DD -36.2%, took 1,293  -> does not dominate in both
+
+throttle 15%:
+  gate first: CAGR +13.5%, worst DD -15.4%, took 740  second: CAGR +7.5%, worst DD -14.5%, took 882  -> does not dominate in both
+  null first: CAGR +18.4%, worst DD -43.0%, took 923  second: CAGR +19.3%, worst DD -34.3%, took 1,145  -> does not dominate in both
+
+VERDICTS (passes = dominates the no-rule account in both halves, on gate AND random entries):
+  heat cap  2%  : fails
+  heat cap  3%  : fails
+  heat cap  4%  : fails
+  heat cap  5%  : fails
+  throttle  5%  : fails
+  throttle  10% : fails
+  throttle  15% : fails
+  heat cap: does not ship (0 of 4 settings pass)
+  throttle: does not ship (0 of 3 settings pass)
+
+SECONDARY (post-hoc): the same test on the median of 20 orderings
+  heat cap  2%  : fails   gate first: CAGR +4.4%, worst DD -12.2%, took 414  second: CAGR -0.1%, worst DD -15.6%, took 487
+  heat cap  3%  : fails   gate first: CAGR +5.7%, worst DD -15.9%, took 591  second: CAGR -0.7%, worst DD -19.8%, took 666
+  heat cap  4%  : fails   gate first: CAGR +7.1%, worst DD -17.4%, took 669  second: CAGR +0.2%, worst DD -22.2%, took 789
+  heat cap  5%  : fails   gate first: CAGR +8.0%, worst DD -17.9%, took 732  second: CAGR +1.8%, worst DD -20.0%, took 834
+  throttle  5%  : fails   gate first: CAGR +7.9%, worst DD -14.9%, took 921  second: CAGR -0.0%, worst DD -21.8%, took 1,204
+  throttle  10% : fails   gate first: CAGR +8.0%, worst DD -16.5%, took 781  second: CAGR -0.3%, worst DD -22.3%, took 1,130
+  throttle  15% : fails   gate first: CAGR +8.1%, worst DD -17.2%, took 740  second: CAGR +1.6%, worst DD -22.7%, took 882
+  (no rule, median)   gate first: CAGR +10.4%, worst DD -17.2%, took 738  second: CAGR +2.5%, worst DD -20.7%, took 882
+
+[61s]

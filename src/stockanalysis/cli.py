@@ -88,6 +88,48 @@ def _print_robustness(rb: dict, null_reps) -> None:
         print(f"    edge vs random: {edge['exp_r']:+.2f}R {_ci(edge)} -> {edge['verdict']}")
 
 
+def _account_params(args):
+    """The --account-sim flags as account.simulate_account params (fractions)."""
+    if not args.account_sim:
+        return None
+    params = {"risk_pct": args.risk_pct / 100.0}
+    if args.heat_cap is not None:
+        params["heat_cap"] = args.heat_cap / 100.0
+    return params
+
+
+def _print_account(acct: dict) -> None:
+    p = acct["params"]                           # resolved: the rules that actually ran
+    rules = (f"{p['risk_pct']:.1%} risk per trade, {p['max_weight']:.0%} max position, "
+             + ("no margin" if p["gross_cap"] <= 1 else f"up to {p['gross_cap']:.0%} invested"))
+    if p["heat_cap"] is not None:
+        rules += f", {p['heat_cap']:.0%} heat cap"
+    print(f"  Account ({rules}; closed-trade equity, so a floor on drawdown):")
+
+    def line(label, s):
+        skipped = ", ".join(f"{v:,} {k}" for k, v in s["skipped"].items() if v)
+        print(f"    {label}: took {s['n_taken']:,} of {s['n_signals']:,}"
+              + (f" (skipped {skipped})" if skipped else "")
+              + f" · CAGR {s['cagr']:+.1%} · worst drawdown {s['max_drawdown']:.1%}"
+              + (f" ({s['peak_date']:%Y-%m} → {s['trough_date']:%Y-%m})" if s["peak_date"] is not None else "")
+              + f" · longest losing streak {s['longest_losing_streak']}"
+              + f" · up to {s['max_open_positions']} positions")
+    line("gate", acct["gate"])
+    sp = acct.get("spread")
+    if sp:
+        print(f"    same trades, across {sp['seeds']} orderings of same-day entries (5th–95th pct): "
+              f"CAGR {sp['cagr'][0]:+.1%} to {sp['cagr'][2]:+.1%} · worst drawdown "
+              f"{sp['max_drawdown'][0]:.1%} to {sp['max_drawdown'][2]:.1%} · losing streak "
+              f"{sp['longest_losing_streak'][0]:.0f} to {sp['longest_losing_streak'][2]:.0f}")
+    if acct.get("null"):
+        line("random entries, same rules", acct["null"])
+    odds = acct.get("odds")
+    if odds is not None and not odds.empty:
+        parts = [f"{r.risk_pct:.1%} risk: {r.p_dd_20:.0%} chance of a 20%+ drawdown, "
+                 f"1-in-20 worst {r.dd_p95:.0%}" for r in odds.itertuples()]
+        print("    drawdown odds (month-block bootstrap of the trades taken): " + " · ".join(parts))
+
+
 def _add_backtest_parser(sub) -> None:
     p = sub.add_parser("backtest", help="Backtest the signal engine over history.")
     p.add_argument("--scope", choices=["technical", "composite"], default="technical",
@@ -120,6 +162,16 @@ def _add_backtest_parser(sub) -> None:
                    help="Round-trip cost per side in basis points (default: 10).")
     p.add_argument("--slippage-mult", type=float, default=1.0,
                    help="Multiply costs to stress-test execution (e.g. 1.5, 2.0).")
+    p.add_argument("--account-sim", action="store_true",
+                   help="--exits plan: also replay the trades through one account (the "
+                        "trade plan's sizing, no margin) and print drawdown, losing streak "
+                        "and drawdown odds, beside random entries under the same rules.")
+    p.add_argument("--risk-pct", type=float, default=config.DEFAULT_RISK_PCT * 100,
+                   metavar="PCT", help="Account sim: percent of equity risked per trade "
+                                       "(default: %(default)s).")
+    p.add_argument("--heat-cap", type=float, default=None, metavar="PCT",
+                   help="Account sim: skip entries that would put more than PCT%% of "
+                        "equity at risk across open positions (default: no cap).")
     p.add_argument("--out", default="output/backtest", help="Output base directory.")
     p.add_argument("--no-excel", action="store_true", help="Skip the Excel workbook.")
     p.add_argument("--no-report", action="store_true", help="Skip the HTML report.")
@@ -156,6 +208,44 @@ def _add_cache_parser(sub) -> None:
                    help="Print cache coverage and exit without fetching.")
 
 
+def _add_risk_parser(sub) -> None:
+    p = sub.add_parser("risk", help="Household portfolio risk from the holdings sheet.")
+    p.add_argument("--holdings", default=None, metavar="PATH",
+                   help="Holdings export: .xlsx of the whole sheet (adds the account "
+                        "drawdown) or .csv of the Details tab. Default: $HOLDINGS_FILE, "
+                        "else data/holdings_workbook.xlsx, else data/holdings_snapshot.csv.")
+    p.add_argument("--signals", default=None, metavar="XLSX",
+                   help="A run's signal_matrix.xlsx, to check today's Buys against cash.")
+    p.add_argument("--period", default="10y", help="Price history to fetch (default: 10y).")
+    p.add_argument("--out", default="output/risk", help="Output base directory.")
+
+
+def _run_risk(args) -> int:
+    try:
+        res = pipeline.run_risk(args.holdings, signals=args.signals, out=args.out,
+                                period=args.period)
+    except FileNotFoundError as e:
+        print(f"{e}. Export the sheet there, point $HOLDINGS_FILE at it, or ask Claude "
+              "to refresh the holdings snapshot.", file=sys.stderr)
+        return 1
+    risk = res["risk"]
+    ex, mr, dd, st = risk["exposure"], risk["market"], risk["drawdown"], risk["stops"]
+    worst = min(risk["stress"], key=lambda r: r["return"], default=None)
+    print(f"Portfolio: C${ex['total_cad']:,.0f} (cash {ex['cash_weight']:.1%}) — holdings from {res['source']}")
+    if mr.get("n_days"):
+        print(f"  Volatility {mr['vol_ann']:.1%}/yr · 1-month VaR95 {mr['var_21d']:.1%} "
+              f"(C${mr['var_21d_cad']:,.0f})")
+    if worst:
+        print(f"  Worst stress: {worst['scenario']} {worst['return']:+.1%} (C${worst['loss_cad']:,.0f})")
+    if dd:
+        print(f"  Account: worst drawdown {dd['max_drawdown']:.1%}, now {dd['current_drawdown']:.1%}")
+    print(f"  Loss if every stop hit: C${st['total_cad']:,.0f} ({st['heat']:.1%})")
+    for flag in ex["flags"] + risk["funding"]["flags"]:
+        print(f"  ! {flag}")
+    print(f"  Report: {res['report_path']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stock-analysis", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose (DEBUG) logging.")
@@ -164,6 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_backtest_parser(sub)
     _add_universe_parser(sub)
     _add_cache_parser(sub)
+    _add_risk_parser(sub)
     from .thesis import cli as thesis_cli
     thesis_cli.add_parser(sub)
     return parser
@@ -261,6 +352,9 @@ def main(argv=None) -> int:
         from . import backtest as bt
 
         horizons = tuple(args.horizon) if args.horizon else ("1m", "3m", "6m")
+        if args.account_sim and args.exits != "plan":
+            print("--account-sim replays planned trades: add --exits plan.", file=sys.stderr)
+            return 2
         if args.scope == "composite":
             print("⚠ COMPOSITE SCOPE: fundamentals are frozen at TODAY's values, so "
                   "past composites are LOOKAHEAD-BIASED. Treat results as a sanity "
@@ -285,6 +379,7 @@ def main(argv=None) -> int:
                 out_dir=args.out, export_excel=not args.no_excel,
                 save_report=not args.no_report,
                 null_reps=args.null_reps, split_at=args.split,
+                account=_account_params(args),
             )
         except Exception as e:
             print(f"Backtest failed: {e}", file=sys.stderr)
@@ -302,6 +397,8 @@ def main(argv=None) -> int:
             print(f"    avg win {ts['avg_win_r']:+.2f}R   avg loss {ts['avg_loss_r']:+.2f}R"
                   f"   total {ts['total_r']:+.1f}R   avg hold {ts['avg_bars_held']:.0f} bars")
             print(f"    exits: {mix}")
+            if results.account:
+                _print_account(results.account)
         elif results.config.get("exits") == "plan":
             print("  Planned trades: none (no gate entries with a usable plan).")
         if s:
@@ -315,6 +412,9 @@ def main(argv=None) -> int:
             print("  Report:   no HTML report for --exits plan (it charts the "
                   "posture-label sim, not these trades)")
         return 0
+
+    if args.command == "risk":
+        return _run_risk(args)
 
     if args.command == "thesis":
         from .thesis import cli as thesis_cli

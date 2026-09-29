@@ -44,6 +44,15 @@ def fetch_stock_data(ticker: str, period: str = config.HISTORY_PERIOD):
         return None, None
 
 
+def fetch_info(ticker: str) -> dict:
+    """The ``.info`` dict alone (no price history); ``{}`` on any failure."""
+    try:
+        return yf.Ticker(ticker).info or {}
+    except Exception as e:
+        log.warning("%s: .info unavailable (%s).", ticker, e)
+        return {}
+
+
 def _safe(info: dict, key: str):
     """Return a numeric value from ``info`` or ``np.nan`` if missing/non-numeric."""
     val = info.get(key, None) if isinstance(info, dict) else None

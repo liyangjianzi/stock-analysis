@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import config, overview, profile, report, signals
+from . import config, holdings, overview, portfolio, profile, report, signals
 from .indicators import add_indicators
 from .ingest import load_watchlist
 from .outputs import get_exporter
@@ -143,3 +143,30 @@ def run(watchlist: dict | None = None,
         log.info("Saved combined report to '%s'.", results.report_path)
 
     return results
+
+
+def run_risk(path=None, *, signals=None, out: str = "output/risk", period: str = "10y") -> dict:
+    """The household risk report — the library entry point behind
+    ``stock-analysis risk``. Loads the holdings file (:func:`holdings.load`),
+    fetches market data, builds every section (:func:`portfolio.build_risk`) and
+    writes ``<out>/<timestamp>/risk_report.html``. ``signals`` is a run's
+    signal_matrix.xlsx, to check today's Buys against cash. Raises
+    ``FileNotFoundError`` when there is no holdings file.
+
+    Returns ``{risk, report_path, source}``; ``source`` names the file and its
+    age, flagged when older than ``config.HOLDINGS_STALE_DAYS``.
+    """
+    from .outputs.base import SIGNAL_MATRIX_SHEET
+
+    book = holdings.load(path)
+    signal_matrix = pd.read_excel(signals, sheet_name=SIGNAL_MATRIX_SHEET) if signals else None
+    risk = portfolio.build_risk(book["holdings"], portfolio.fetch_market(book["holdings"], period=period),
+                                history=book["history"], contributions=book["contributions"],
+                                signal_matrix=signal_matrix)
+    age = (datetime.now() - book["saved_at"]).days
+    source = (f"{book['path'].name}, saved {book['saved_at']:%Y-%m-%d %H:%M}"
+              + (f" ({age} days old)" if age > config.HOLDINGS_STALE_DAYS else ""))
+    html = report.build_risk_report(risk, generated_at=f"{datetime.now():%Y-%m-%d %H:%M}",
+                                    source=source)
+    return {"risk": risk, "source": source,
+            "report_path": report.save_report(html, run_output_dir(out) / "risk_report.html")}

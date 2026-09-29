@@ -129,6 +129,22 @@ OVERVIEW_INDICES = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "TSX": "^GSPTSE"}
 VIX_TICKER = "^VIX"
 OVERVIEW_LOOKBACK = 60  # trading days for the index chart
 
+# Household portfolio risk (stockanalysis.portfolio) — display only, never an
+# input to a signal. Weights are shares of the whole household in CAD, cash
+# included. Concentration flags fire above these; cash is never "concentrated".
+MAX_POSITION_WEIGHT = 0.10
+MAX_SECTOR_WEIGHT = 0.30
+RISK_LOOKBACK_BARS = 756          # ~3 years of daily returns for vol / VaR / beta
+RISK_BENCHMARKS = {"S&P 500": "^GSPC", "Nasdaq-100": "^NDX"}
+USDCAD_TICKER = "USDCAD=X"
+HOLDINGS_STALE_DAYS = 7           # the risk report flags a holdings file older than this
+# Crashes to replay the *current* portfolio through (first and last session).
+STRESS_WINDOWS = {
+    "Q4 2018 selloff": ("2018-09-20", "2018-12-24"),
+    "COVID crash": ("2020-02-19", "2020-03-23"),
+    "2022 bear market": ("2022-01-03", "2022-10-12"),
+}
+
 # Macro panel (display only — never an input to a signal). Yahoo quotes the
 # Treasury yields in percent already (^TNX 5.18 = 5.18%, checked 2026-09-27), so
 # changes are reported in bps and levels are never rescaled. The curve slope is

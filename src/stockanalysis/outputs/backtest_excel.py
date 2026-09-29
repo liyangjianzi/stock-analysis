@@ -37,6 +37,17 @@ def _robustness_frames(rb: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return table, yearly
 
 
+def _account_frame(acct: dict) -> pd.DataFrame:
+    """One row per series (gate / random entries) of the account simulation."""
+    keys = ("n_signals", "n_taken", "total_return", "cagr", "max_drawdown", "peak_date",
+            "trough_date", "longest_losing_streak", "max_open_positions", "max_heat", "max_gross")
+    rows = [{"series": series, **{k: sim[k] for k in keys},
+             **{f"skipped_{k}": v for k, v in sim["skipped"].items()}}
+            for label, series in (("gate", "Gate"), ("null", "Random entries"))
+            if (sim := acct.get(label))]
+    return pd.DataFrame(rows).rename(columns={"n_taken": "taken"})
+
+
 def write_backtest_workbook(results, path) -> str:
     """Write the styled backtest workbook and return its path."""
     path = Path(path)
@@ -76,6 +87,8 @@ def write_backtest_workbook(results, path) -> str:
             table, yearly = _robustness_frames(results.robustness)
             table.to_excel(xl, sheet_name="Robustness", index=False)
             yearly.to_excel(xl, sheet_name="Yearly R", index=False)
+        if results.account:
+            _account_frame(results.account).to_excel(xl, sheet_name="Account", index=False)
         for ws in xl.sheets.values():
             _style_base(ws)
 

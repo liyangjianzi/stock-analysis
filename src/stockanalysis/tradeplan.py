@@ -145,13 +145,9 @@ def build_trade_plan(df: pd.DataFrame, *,
 
     rr = (target - entry) / risk_per_share
 
-    # --- Size: risk budget, then the concentration and liquidity caps. ---
-    by_risk = math.floor(account_size * risk_pct / risk_per_share)
-    by_weight = math.floor(account_size * max_weight / entry)
-    shares = min(by_risk, by_weight)
-    avg_volume = value_at(df, "VOL_SMA20")
-    if np.isfinite(avg_volume):
-        shares = min(shares, math.floor(max_adv_participation * avg_volume))
+    shares = size_shares(account_size, entry, risk_per_share, risk_pct=risk_pct,
+                         max_weight=max_weight, avg_volume=value_at(df, "VOL_SMA20"),
+                         max_adv_participation=max_adv_participation)
 
     return {
         "entry": entry,
@@ -165,6 +161,20 @@ def build_trade_plan(df: pd.DataFrame, *,
         "adv_dollar": value_at(df, "DVOL20"),
         "exit_by": _exit_by(df.index, max_hold_bars),
     }
+
+
+def size_shares(equity: float, entry: float, risk_per_share: float, *, risk_pct: float,
+                max_weight: float, avg_volume: float = np.nan,
+                max_adv_participation: float = config.MAX_ADV_PARTICIPATION) -> int:
+    """Fixed-fractional size: risk ``risk_pct`` of ``equity`` on the stop
+    distance, then cap the position at ``max_weight`` of equity and — when volume
+    is known — at ``max_adv_participation`` of the average daily volume. The one
+    sizing rule, shared by the live plan and the account simulation."""
+    shares = min(math.floor(equity * risk_pct / risk_per_share),
+                 math.floor(equity * max_weight / entry))
+    if np.isfinite(avg_volume):
+        shares = min(shares, math.floor(max_adv_participation * avg_volume))
+    return shares
 
 
 def _exit_by(index, max_hold_bars: int) -> str | None:

@@ -135,3 +135,51 @@ Run order: `python earn_fetch.py` → `python earn_study.py | tee earn_study.log
 - The gap risk is real but doesn't cost expectancy. `stop_gap` exits land on a report day **21%** of the time, against 7% of all exits (the null shows the same, 23% vs 8%). Those gaps are already priced into the average.
 - **Don't read the "crossed a report" split as "hold through earnings".** Gate trades whose walk crossed a report averaged +0.233R [+0.112, +0.354], against +0.000R for those that didn't (the null shows +0.336R vs +0.020R). That conditions on the outcome: only trades that *survived* until the report could cross it, and fast stop-outs never get there. It measures trade duration, not earnings.
 - Lookahead caveat: these are the dates reports actually landed, not the dates announced beforehand. The cache is today's S&P 500 (survivorship, as above).
+
+## Account-level risk rules (2026-09-28) — `acct_study.py`
+
+Can a **heat cap** (a limit on total open risk) or a **drawdown throttle** (halve
+the risk per trade while the account is D% below its peak) improve what an
+account lives through? Offline (the research cache); the gate and null trades
+are pickled to `acct_trades.pkl` after the first ~6 min replay.
+
+Pre-declared: fresh accounts on each half (2016–21 / 2022–26); 1% risk, 20% max
+position, no margin. A rule passes only if it **dominates** the no-rule account
+(shallower worst drawdown *and* higher CAGR) in both halves, on the gate's
+trades and on the ticker-matched random entries, at every neighbouring setting.
+(CAGR ÷ |drawdown| was dropped before the first run: it flips meaning when CAGR
+is negative.)
+
+**Result: neither ships. 0 of 4 heat caps and 0 of 3 throttles pass.** A
+secondary check added afterwards (the median over 20 orderings of same-day
+entries, not just one) agrees on all 7 settings.
+
+| Gate, seed 0 | 2016–21 CAGR / worst DD | 2022–26 CAGR / worst DD |
+|---|---|---|
+| No rule | +12.6% / −15.4% | +7.5% / −14.5% |
+| Heat cap 3% (blocks 69% of signals) | +6.5% / −20.9% | −2.0% / −15.1% |
+| Heat cap 5% (blocks 15%) | +11.9% / −16.0% | +3.7% / −16.1% |
+| Throttle at −10% | +11.7% / −15.7% | +0.3% / −21.7% |
+| Just risking 0.5% | +8.1% / −15.0% | +1.9% / −18.5% |
+
+- **Heat caps cut return far more than drawdown.** In the 2022–26 half every
+  cap from 2% to 4% turned a positive CAGR negative.
+- **A throttle can deepen the drawdown.** After a loss it trades smaller, so
+  recovering takes longer (2022–26: −21.7% vs −14.5%).
+- **In a cash account, halving the risk doesn't halve the drawdown.** At 1% the
+  *cash* limit binds (about 1 trade in 4.5 fits), not the 1%. At 0.5% positions
+  are smaller, so more of them fit (1,324 vs 882 in 2022–26), and total exposure
+  barely falls.
+- **Which setups you take is largely luck.** Over the whole period, the gate
+  account's CAGR is +0.9% / +6.1% / +10.2% (5th / median / 95th percentile over
+  20 orderings of same-day entries), with the worst drawdown −36% / −25% / −19%
+  and the longest losing streak 14–16. The backtest's `--account-sim` prints
+  this spread.
+- **Drawdown odds** (month-block bootstrap of realized per-trade returns, whole
+  period): at 1% risk, median worst drawdown 32%, 1 in 20 worse than 52%, and a
+  95% chance of at least −20%. At 0.5%: 17%, 30% and 34%.
+
+The null here is 5 reps, so it has about 5 times the gate's signal density and
+keeps the account permanently full. Compare it only with itself, never with the
+gate's CAGR. Everything is on today's S&P 500 list (flattered), and equity is
+closed-trade, so the drawdowns are floors.

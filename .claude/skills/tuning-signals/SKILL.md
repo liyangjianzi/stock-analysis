@@ -323,6 +323,14 @@ the fix, not the market.
 - **An earnings blackout at another K**, or keying it on `Earnings Soon`. That column in the live report is a warning, not a rule.
 - **"Hold through earnings" from the crossed-a-report split.** Gate trades that crossed a report averaged +0.23R against 0.00R for those that didn't. Only trades that outlived their stop *can* cross a report, so that split measures duration, not earnings.
 
+### Account-level rules — heat cap and drawdown throttle, tested, dead (2026-09-28)
+
+`research/acct_study.py` ran each rule through `account.simulate_account` (1% risk, 20% max position, no margin) on each half. A rule had to **dominate** the no-rule account (shallower drawdown and higher CAGR) in both halves, on the gate and on random entries, at every neighbouring setting. **0 of 4 heat caps (2–5%) and 0 of 3 throttles (5–15%) pass.** A secondary check on the median over 20 orderings agrees. Heat caps turned 2022–26 CAGR negative (+7.5% becomes −2.0% at a 3% cap). A −10% throttle *deepened* the 2022–26 drawdown (−21.7% vs −14.5%). Specifically, do not re-propose:
+
+- **A heat cap or drawdown throttle at another setting**, and don't sell either as "risk management" on this signal. They trade return for nothing measurable.
+- **Reading one account path as the result.** Which ~1 in 4.5 simultaneous setups fit in the cash is luck: CAGR runs +0.9% to +10.2% (5th–95th) across 20 orderings of the same trades.
+- **Halving the risk to halve the drawdown.** In a cash account the cash limit binds, not the risk. At 0.5% more, smaller positions fit, and the 2022–26 drawdown got *deeper* (−18.5% vs −14.5%).
+
 ### Structural facts found along the way
 
 - **`config.ATR_STOP_MULT` is unreachable.** Sweeping it 1.0 → 3.0 returns

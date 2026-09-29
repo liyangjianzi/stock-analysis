@@ -478,7 +478,7 @@ def _render_profiles_section(profiles: list[dict]) -> str:
     return "".join(_render_profile_card(p) for p in profiles)
 
 
-def _signed(value, fmt: str, suffix: str = "") -> str:
+def _signed(value, fmt: str = ".1%", suffix: str = "") -> str:
     return "—" if _is_missing(value) else f"{value:{fmt}}{suffix}"
 
 
@@ -584,6 +584,18 @@ td.empty-cell{color:#8b949e;text-align:center}
 
 
 
+def _page(title: str, sections: list, *, generated_at: str, head_extra: str = "",
+          header_extra: str = "") -> str:
+    """A self-contained report page from ``(anchor, title, html)`` sections — one
+    list, so the nav and the sections can't drift apart."""
+    nav = "".join(f'<a href="#{a}">{t}</a>' for a, t, _ in sections)
+    body = "".join(f'<section id="{a}"><h2>{t}</h2>{c}</section>' for a, t, c in sections)
+    return ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            f"<title>{_esc(title)}</title>{head_extra}<style>{_STYLE}</style></head><body>"
+            f"<header><h1>{_esc(title)}</h1><p class='generated'>Generated "
+            f"{_esc(generated_at)}</p>{header_extra}</header><nav>{nav}</nav>{body}</body></html>")
+
+
 def build_full_report(
     screened_df: pd.DataFrame,
     signal_matrix: pd.DataFrame,
@@ -634,24 +646,164 @@ def build_full_report(
         ("overview", "Daily Market Overview",
          _render_overview_section(overview_data)),
     ]
-    nav = "".join(f'<a href="#{a}">{t}</a>' for a, t, _ in sections)
-    sections_html = "".join(
-        f'<section id="{a}"><h2>{t}</h2>{content}</section>'
-        for a, t, content in sections
-    )
-    return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<title>Stock Analysis Report</title>"
-        # plotly.js CDN versions track the bundled JS library, not the plotly.py
-        # package version (plotly.__version__) — using the latter 404s the script.
-        f'<script src="https://cdn.plot.ly/plotly-{get_plotlyjs_version()}.min.js"></script>'
-        f"<style>{_STYLE}</style></head><body>"
-        f"<header><h1>Stock Analysis Report</h1>"
-        f"<p class='generated'>Generated {_esc(generated_at)}</p></header>"
-        f"<nav>{nav}</nav>"
-        f"{sections_html}"
-        "</body></html>"
-    )
+    # plotly.js CDN versions track the bundled JS library, not the plotly.py
+    # package version (plotly.__version__) — using the latter 404s the script.
+    return _page("Stock Analysis Report", sections, generated_at=generated_at,
+                 head_extra=f'<script src="https://cdn.plot.ly/plotly-'
+                            f'{get_plotlyjs_version()}.min.js"></script>')
+
+
+# -----------------------------------------------------------------------------
+# Household risk report (stockanalysis.portfolio) — a separate document
+# -----------------------------------------------------------------------------
+
+def _cad(value) -> str:
+    text = _signed(value, ",.0f")
+    return text if _is_missing(value) else f"C${text}"
+
+
+def _weights_table(frame: pd.DataFrame, key: str, header: str) -> str:
+    """A ``key | Value | Weight`` table of an exposure breakdown."""
+    return _table([header, "Value", "Weight"], [
+        [_esc(getattr(r, key)), _cad(r.value_cad), _signed(r.weight)] for r in frame.itertuples()])
+
+
+def _render_exposure(ex: dict) -> str:
+    rows = ex["holdings"]
+    held = _table(["Holding", "Name", "Sector", "Value", "Weight", "Accounts"], [
+        [_esc(r.name), _esc(r.label), _esc(r.sector), _cad(r.value_cad), _signed(r.weight),
+         _esc(int(r.accounts))] for r in rows.itertuples()])
+    sectors = _weights_table(ex["sectors"], "sector", "Sector")
+    ccy = _weights_table(ex["currencies"], "currency", "Currency")
+    accounts = _table(["Account", "Value", "Weight", "Cash"], [
+        [_esc(r.account), _cad(r.value_cad), _signed(r.weight), _cad(r.cash_cad)]
+        for r in ex["accounts"].itertuples()])
+    note = ""
+    if (ex["sectors"]["sector"] == "Index fund").any():
+        note = ('<p class="note">Index fund rows (e.g. a Nasdaq-100 fund) hold many of the '
+                "same large caps you own directly, so the real overlap is larger than these "
+                "per-holding weights show; the risk shares under Market Risk capture it.</p>")
+    return (f"<p>Cash {_signed(ex['cash_weight'])} · top five holdings (excluding cash) "
+            f"{_signed(ex['top5_weight'])}</p>{held}{note}<h3>By sector</h3>{sectors}"
+            f"<h3>By currency</h3>{ccy}<h3>By account</h3>{accounts}")
+
+
+def _render_market(mr: dict) -> str:
+    if not mr.get("n_days"):
+        return '<p class="empty">Not enough price history to measure market risk.</p>'
+    rows = [["Volatility (annualised)", _signed(mr["vol_ann"]), ""]]
+    rows += [[f"Beta to the {_esc(k)} (in CAD)", f"{v:.2f}", ""] for k, v in mr["beta"].items()]
+    for label, key in (("1-day loss, 1 day in 20 (VaR 95%)", "var_1d"),
+                       ("1-day average loss beyond that (CVaR)", "cvar_1d"),
+                       ("1-month loss, 1 month in 20 (VaR 95%)", "var_21d"),
+                       ("1-month average loss beyond that (CVaR)", "cvar_21d")):
+        rows.append([label, _signed(mr[key], ".2%"), _cad(mr.get(f"{key}_cad"))])
+    rows.append(["Average correlation between holdings", _signed(mr["avg_corr"], ".2f"), ""])
+    contrib = _table(["Holding", "Share of value", "Share of risk"], [
+        [_esc(r.name), _signed(r.weight), _signed(r.risk_share)] for r in mr["contributions"].itertuples()])
+    short = (f'<p class="note">Less than 90% of the window priced (missing days counted '
+             f'flat): {_esc(", ".join(mr["short_history"]))}.</p>' if mr["short_history"] else "")
+    return (f'<p class="note">Today\'s portfolio replayed over {mr["n_days"]} trading days '
+            f'({_esc(mr["start"].date())} to {_esc(mr["end"].date())}), in CAD, so USD/CAD '
+            f"moves count. CAD cash and unpriced holdings are counted flat.</p>"
+            f"{_table(['Measure', 'Value', 'In CAD'], rows)}{short}"
+            f"<h3>Where the risk comes from</h3>{contrib}")
+
+
+def _render_stress(results: list) -> str:
+    if not results:
+        return '<p class="empty">No stress scenarios.</p>'
+    benches = list(dict.fromkeys(b for r in results for b in r["bench"]))
+    rows = []
+    for r in results:
+        notes = []
+        if r["proxied"]:
+            notes.append("stand-ins: " + ", ".join(f"{k} → {v}" for k, v in r["proxied"].items()))
+        if r["missing"]:
+            notes.append("not in the data: " + ", ".join(r["missing"]))
+        rows.append([_esc(r["scenario"]), f'{r["start"].date()} → {r["end"].date()}',
+                     _signed(r["return"], "+.1%"), _cad(r["loss_cad"]),
+                     *[_signed(r["bench"].get(b), "+.1%") for b in benches],
+                     _signed(r["covered_weight"]), _esc("; ".join(notes) or None)])
+    return ('<p class="note">Today\'s weights run through past crashes, in CAD. "Measured" is '
+            "the share of the portfolio with prices for that window; the rest counts as flat.</p>"
+            + _table(["Scenario", "Window", "Portfolio", "Change",
+                      *[f"{b} (CAD)" for b in benches], "Measured", "Notes"], rows))
+
+
+def _render_drawdown(dd) -> str:
+    if not dd:
+        return ('<p class="empty">No account history. Pass the sheet\'s .xlsx export '
+                "(History and Touzi tabs) to measure the real account.</p>")
+    rows = [
+        ["Period", f'{dd["start"].date()} → {dd["end"].date()}'],
+        ["Time-weighted return", _signed(dd["twr"], "+.1%")],
+        ["Worst drawdown", f'{_signed(dd["max_drawdown"])} ({dd["peak_date"].date()} → '
+                           f'{dd["trough_date"].date()})'],
+        ["Current drawdown", _signed(dd["current_drawdown"])],
+        ["Worst drawdown of the raw balance", _signed(dd["raw_max_drawdown"])],
+        ["New money added in the period", _cad(dd["contributions_cad"])],
+    ]
+    return ('<p class="note">From the sheet\'s daily History, with contributions removed: '
+            "new money lifts the balance without any gain, so the raw balance understates "
+            "losses.</p>" + _table(["Measure", "Value"], rows))
+
+
+def _render_stops(st: dict) -> str:
+    rows = st["rows"]
+    table = (_table(["Holding", "Last", "Stop", "Drop to stop", "Loss"], [
+        [_esc(r.name), f"{r.last:,.2f}", f"{r.stop:,.2f}", _signed(r.drop), _cad(r.loss_cad)]
+        for r in rows.itertuples()]) if not rows.empty else "")
+    missing = (f'<p class="note">No stop (no price data or no support level): '
+               f'{_esc(", ".join(st["no_stop"]))}.</p>' if st["no_stop"] else "")
+    return (f"<p>If every holding fell to its trade-plan stop: <b>{_cad(st['total_cad'])}</b>, "
+            f"{_signed(st['heat'])} of the portfolio.</p>{table}{missing}")
+
+
+def _render_funding(fund: dict) -> str:
+    cash = _table(["Account", "Currency", "Cash"], [
+        [_esc(r.account), _esc(r.currency), f"{r.cash:,.0f}"] for r in fund["cash"].itertuples()])
+    margin = (f'<p class="note">Margin account(s): {_esc(", ".join(fund["margin_accounts"]))}. '
+              "The registered accounts (RRSP, TFSA, RESP) can't borrow.</p>"
+              if fund["margin_accounts"] else "")
+    buys = fund["buys"]
+    if buys.empty:
+        plan = ('<p class="empty">No Buy signals passed in (add <code>--signals</code> with a '
+                "run's signal_matrix.xlsx).</p>")
+    else:
+        plan = "<h3>Today's Buys</h3>" + _table(
+            ["Ticker", "Shares", "Entry", "Cost", "Cost (CAD)", "Accounts with the cash"],
+            [[_esc(r.Ticker), f"{r.Shares:,.0f}", f"{r.Entry:,.2f}",
+              f"{r.currency} {r.notional:,.0f}", _cad(r.notional_cad),
+              _esc(", ".join(r.accounts) or None)] for r in buys.itertuples()])
+    return f"{cash}{margin}{plan}"
+
+
+def build_risk_report(risk: dict, *, generated_at: str, source: str) -> str:
+    """Self-contained HTML for :func:`stockanalysis.portfolio.build_risk`'s result.
+
+    Pure, like :func:`build_full_report`. ``source`` names where the holdings
+    came from (and when), so a stale snapshot is visible.
+    """
+    ex = risk["exposure"]
+    flags = ex["flags"] + risk["funding"]["flags"]
+    flag_html = ("<ul class='flags'>" + "".join(f"<li>{_esc(f)}</li>" for f in flags) + "</ul>"
+                 if flags else "")
+    as_of = risk.get("as_of")
+    summary = (f"<p><b>Total {_cad(ex['total_cad'])}</b> · holdings from {_esc(source)} · "
+               f"prices as of {_esc(as_of.date() if as_of is not None else None)}</p>"
+               f"{flag_html}"
+               '<p class="note">Display only: this measures what is held and is not an input '
+               "to any signal.</p>")
+    sections = [
+        ("exposure", "Exposure", _render_exposure(ex)),
+        ("market", "Market Risk", _render_market(risk["market"])),
+        ("stress", "Stress Tests", _render_stress(risk["stress"])),
+        ("drawdown", "Account Drawdown", _render_drawdown(risk["drawdown"])),
+        ("stops", "Loss to Stops", _render_stops(risk["stops"])),
+        ("funding", "Cash & Funding", _render_funding(risk["funding"])),
+    ]
+    return _page("Portfolio Risk", sections, generated_at=generated_at, header_extra=summary)
 
 
 def save_report(html_doc: str, path) -> str:
