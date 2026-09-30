@@ -31,6 +31,23 @@ def test_no_service_account_key_is_tracked():
     assert leaked == [], f"credentials must stay untracked: {leaked}"
 
 
+def test_no_retirement_plan_is_tracked():
+    leaked = [p for p in _tracked() if p.startswith("retirement/")]
+    assert leaked == [], f"the personal retirement plan must stay untracked: {leaked}"
+
+
+def test_the_retirement_folder_is_gitignored():
+    res = subprocess.run(["git", "check-ignore", "-q", "retirement/plan.md"], cwd=ROOT)
+    assert res.returncode == 0, "retirement/ must be gitignored"
+
+
+def test_the_retirement_package_code_is_not_ignored():
+    # Only the root retirement/ folder is private; the package of the same name is source.
+    res = subprocess.run(["git", "check-ignore", "-q", "src/stockanalysis/retirement/rules.py"],
+                         cwd=ROOT)
+    assert res.returncode == 1, "the root-only /retirement/ pattern must not hide the package"
+
+
 def test_the_holdings_snapshot_path_is_gitignored():
     from stockanalysis.holdings import DEFAULT_SNAPSHOT
     res = subprocess.run(["git", "check-ignore", "-q", str(DEFAULT_SNAPSHOT)], cwd=ROOT)
