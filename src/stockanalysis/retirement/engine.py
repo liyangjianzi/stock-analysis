@@ -410,3 +410,34 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         investments=invest, balances=balances, home_value=home_value,
         legacy=invest[T] + home_value[T] - death_tax, death_tax=death_tax,
         retire_step=retire_step, max_residual=max_resid)
+
+
+@dataclass
+class PlanResult:
+    inputs: PlanInputs
+    simulated: Projection
+    average: Projection
+    bad_luck: Projection
+    average_return: float
+    bad_luck_path: int
+
+
+def bad_luck_index(proj: Projection, pct: float = 0.10) -> int:
+    """The path at the ``pct`` point, worst first: ranked by the year the money runs
+    out (earliest = worst), then by money left at the end."""
+    order = np.lexsort((proj.investments[-1], proj.first_shortfall_step))
+    return int(order[int(np.floor(pct * (len(order) - 1)))])
+
+
+def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) -> PlanResult:
+    """The plan over ``paths`` simulated futures, plus the average future (a steady
+    median return) and the bad-luck future (the 10th-percentile path, replayed alone)."""
+    r = plan.returns
+    T = steps(plan)
+    R = draw_returns(r.mean, r.sd, r.paths if paths is None else paths, T,
+                     r.seed if seed is None else seed)
+    simulated = simulate(plan, R)
+    g = median_return(r.mean, r.sd)
+    average = simulate(plan, np.full((T, 1), g))
+    k = bad_luck_index(simulated)
+    return PlanResult(plan, simulated, average, simulate(plan, R[:, [k]]), g, k)

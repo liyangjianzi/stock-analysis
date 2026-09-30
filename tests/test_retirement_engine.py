@@ -202,3 +202,30 @@ def test_legacy_taxes_registered_money_at_the_top_rate():
                          base=0.0, end_age=61))
     assert proj.death_tax[0] == pytest.approx(0.48 * 100_000.0)
     assert proj.legacy[0] == pytest.approx(100_000.0 * 0.52)
+
+
+# -- run & the two single futures ---------------------------------------------------
+
+def test_bad_luck_is_the_tenth_percentile_path():
+    p = plan(accounts=[Account("A", "rrsp", 2_000_000.0)], base=30_000.0, end_age=70)
+    returns = np.tile(np.linspace(-0.05, 0.05, 11), (engine.steps(p), 1))   # column j = its own rate
+    proj = engine.simulate(p, returns)
+    assert engine.bad_luck_index(proj) == 1                                  # 2nd-worst of 11
+
+
+def test_run_uses_the_median_return_and_replays_the_bad_luck_path():
+    p = plan(accounts=[Account("A", "rrsp", 400_000.0)], base=30_000.0, end_age=80)
+    from dataclasses import replace
+    p = replace(p, returns=Returns(0.05, 0.15, 200, 3))
+    result = engine.run(p)
+    assert result.average_return == engine.median_return(0.05, 0.15)
+    assert result.average.paths == 1 and result.simulated.paths == 200
+    k = result.bad_luck_path
+    for s in engine.SOURCES:
+        np.testing.assert_allclose(result.bad_luck.income[s][:, 0],
+                                   result.simulated.income[s][:, k], atol=2.0)
+
+
+def test_package_exports_the_api():
+    import stockanalysis.retirement as retirement
+    assert retirement.run is engine.run and retirement.PlanInputs is PlanInputs
