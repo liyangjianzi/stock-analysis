@@ -26,12 +26,13 @@ pip install -e ".[test]"
 pytest
 ```
 
-The suite under `tests/` (~275 tests, ~15 s) is **fully offline** — synthetic
+The suite under `tests/` (~550 tests, ~40 s) is **fully offline** — synthetic
 OHLCV fixtures and monkeypatched fetches, so no network or `yfinance` access is
 needed. It covers the screener, indicators, signal engine and trade plans,
 fundamentals normalization, the watchlist loader, the exporters and HTML
 reports, the pipeline and CLI, the backtest (plan exits, robustness statistics,
-random-entry null), the research price cache, and the `thesis/` subpackage.
+random-entry null), the research price cache, the `thesis/` subpackage, and the
+`retirement/` planner (hand-worked federal + Alberta tax, the RRIF/LIF/TFSA account model).
 
 ## Run (CLI)
 
@@ -150,6 +151,27 @@ Lifecycle: `IDEA → ENTRY_READY → ACTIVE → PARTIALLY_CLOSED → CLOSED` (+
 [`src/stockanalysis/thesis/README.md`](src/stockanalysis/thesis/README.md);
 library entry point: `from stockanalysis.thesis import register, from_signal_matrix`.
 
+## Retirement planner (Canada)
+
+Projects a one- or two-person Canadian household year by year under federal +
+Alberta tax, CPP, OAS (clawback, deferral, +10% at 75), RRSP→RRIF minimums, TFSA
+room and Alberta LIF rules, over 10,000 simulated return paths. The HTML report
+shows the chance the money lasts, the after-tax legacy, a stacked income-by-source
+chart with an Average / Bad-luck switch, one-change what-if suggestions ranked by
+effect, the money left by age, a year-by-year table and every rule with its
+official source.
+
+```bash
+stock-analysis retire --init    # starter retirement/plan.json (invented example values)
+scripts/retire.sh               # run it -> retirement/output/<ts>/retirement_report.html, opens it
+```
+
+`retirement/` is gitignored — a personal plan and its reports never enter git.
+Balances come from plan.json `balances`, or from a holdings workbook sorted by
+account name (RRSP / TFSA / RESP / LIRA-LIF). All statutory values live in
+`src/stockanalysis/retirement/rules.py`, each cited to its official page; update
+them each January. Library: `from stockanalysis.retirement import load_inputs, run`.
+
 ## Google Sheets export
 
 1. Create a Google Cloud **service account** and download its JSON key.
@@ -193,6 +215,7 @@ data/
   universe_sp500.csv    503-name research universe for broad backtests
   cache/prices.db       research price cache (gitignored, rebuildable)
   theses/               thesis journal state (JSON per thesis)
+retirement/             personal retirement plan + reports (gitignored)
 src/stockanalysis/
   config.py       watchlist loader (load_watchlist_csv), history period, overview universe/indices
   ingest.py       yfinance fetch + load_watchlist() driver
@@ -211,10 +234,12 @@ src/stockanalysis/
   cli.py          `stock-analysis` entry point
   outputs/        Exporter interface + Excel + Google Sheets
   thesis/         thesis tracking (lifecycle + JSON store + postmortems) — see its README
+  retirement/     Canadian retirement planner (rules, tax, engine, what-ifs, report, `retire` CLI)
 notebooks/
   stock_analysis.ipynb     thin interactive demo over the package
   thesis_tracking.ipynb    thesis lifecycle + postmortem demo
 scripts/run_daily.sh       daily job: pipeline + research-cache top-up
+scripts/retire.sh          retirement analysis: run the plan, log it, open the report
 research/                  offline harness behind the 2026-09-16 tuning study — see its README
 ```
 
