@@ -269,6 +269,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         # 1. January 1: TFSA room, LIF start (+ unlocking), downsizing.
         room += limit + restore
         restore[:] = 0.0
+        rrsp_jan1 = bal["rrsp"].copy()   # before any LIF unlock: that money wasn't here on Jan 1
         for i, p in enumerate(people):
             if lif_step[i] is None and not working[i] and ages[i] >= lif_age[i]:
                 unlock = p.unlock_share * bal["pension"][i]
@@ -288,7 +289,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         invest[t] = sum(balances[k][t] for k in ACCOUNTS)
         if not anyone_working and retire_ref is None:
             retire_ref, retire_step = invest[t].copy(), t
-        rrsp_jan1, pension_jan1 = bal["rrsp"].copy(), bal["pension"].copy()
+        pension_jan1 = bal["pension"].copy()
 
         # 2. The household's after-tax spending need.
         level = spend.base + sum(c.amount for c in spend.changes if c.year <= year)

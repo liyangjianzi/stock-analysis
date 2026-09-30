@@ -253,3 +253,11 @@ def test_lif_already_running_at_start_pays_its_minimum_and_is_not_unlocked_again
                          accounts=[Account("A", "pension", 100_000.0)], base=0.0, end_age=77))
     assert proj.balances["rrsp"][0, 0] == 0.0 and proj.balances["pension"][0, 0] == 100_000.0
     assert proj.income["minimums"][0, 0] == pytest.approx(rules.rrif_min_factor(74) * 100_000.0)
+
+
+def test_unlocked_lif_money_is_not_in_that_years_rrif_minimum_base():
+    proj = run_flat(plan(people=[person(age=70, retire_age=70, rrif_start_age=65, unlock_share=0.5)],
+                         accounts=[Account("A", "rrsp", 100_000.0), Account("A", "pension", 100_000.0)],
+                         base=0.0, end_age=72))
+    lif_min = 0.0                                   # the LIF's first year has no minimum
+    assert proj.income["minimums"][0, 0] == pytest.approx(100_000.0 / 21 + lif_min)

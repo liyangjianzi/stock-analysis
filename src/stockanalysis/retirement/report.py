@@ -166,17 +166,29 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
         fig.add_trace(go.Scatter(x=x, y=sim.home_value, name="Home value",
                                  line=dict(color=SERIES[1], width=2, dash="dot"),
                                  hovertemplate="Home: C$%{y:,.0f}<extra></extra>"))
-    marks = [(ref.age + (p.retire_age - p.age), f"{p.name} retires") for p in plan.people]
+    def at(p, age):                    # p's age -> the chart's x (people[0]'s age)
+        return ref.age + (age - p.age)
+
+    marks = [(at(p, p.retire_age), f"{p.name}: retires") for p in plan.people]
     if plan.home is not None and plan.home.downsize_age is not None:
         marks.append((plan.home.downsize_age, "Downsize"))
-    marks.append((ref.cpp_start_age, "CPP starts"))
-    for i, (age, label) in enumerate(marks):
+    for p in plan.people:
+        if p.cpp_start_age == p.oas_start_age:
+            marks.append((at(p, p.cpp_start_age), f"{p.name}: CPP + OAS"))
+        else:
+            marks += [(at(p, p.cpp_start_age), f"{p.name}: CPP"), (at(p, p.oas_start_age), f"{p.name}: OAS")]
+    grouped: dict = {}                 # one label per age, so marks never print on top of each other
+    for age, label in marks:
         if x[0] <= age <= x[-1]:
-            fig.add_vline(x=age, line=dict(color=AXIS, width=1, dash="dash"))
-            fig.add_annotation(x=age, y=1.0, yref="paper", text=label, showarrow=False,
-                               yshift=10 + 14 * (i % 2), font=dict(color=MUTED, size=11))
-    _style_axes(fig, 440)
-    fig.update_layout(hovermode="x unified", legend=dict(orientation="h", y=-0.2))
+            grouped.setdefault(age, []).append(label)
+    for i, age in enumerate(sorted(grouped)):
+        fig.add_vline(x=age, line=dict(color=AXIS, width=1, dash="dash"))
+        fig.add_annotation(x=age, y=1.0, yref="paper", text="<br>".join(grouped[age]),
+                           showarrow=False, yanchor="bottom", yshift=4 + 30 * (i % 3),
+                           font=dict(color=MUTED, size=11))
+    _style_axes(fig, 480)
+    fig.update_layout(hovermode="x unified", legend=dict(orientation="h", y=-0.2),
+                      margin=dict(l=70, r=20, t=120, b=40))
     fig.update_xaxes(title_text=f"Age of {ref.name}")
     return fig
 
@@ -247,7 +259,8 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
         f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{p.retire_age}</td>"
         f"<td>{p.cpp_start_age}</td><td>{p.oas_start_age}</td><td>{_money(engine.cpp_at_65(p))}</td>"
         f"<td>{p.years_in_canada_at_65:g}</td><td>{p.rrif_start_age}</td>"
-        f"<td>{_esc(p.lif_start_age if p.lif_start_age is not None else 'at retirement (50+)')}</td></tr>"
+        f"<td>{_esc(p.lif_start_age if p.lif_start_age is not None else 'at retirement (50+)')}</td>"
+        f"<td>{_money(p.tfsa_room)}</td></tr>"
         for p in plan.people)
     s, h, r = plan.spending, plan.home, plan.returns
     facts = [
@@ -271,7 +284,8 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
     return (
         "<table><thead><tr><th>Person</th><th>Age</th><th>Retires</th><th>CPP from</th>"
         "<th>OAS from</th><th>CPP at 65 (yearly)</th><th>Years in Canada at 65</th>"
-        f"<th>RRIF from</th><th>LIF from</th></tr></thead><tbody>{people}</tbody></table>"
+        f"<th>RRIF from</th><th>LIF from</th><th>TFSA room carried in</th></tr></thead>"
+        f"<tbody>{people}</tbody></table>"
         "<table><tbody>" + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in facts)
         + "</tbody></table><h2>Canadian rules used</h2>"
         "<table><thead><tr><th>Rule</th><th>Value</th><th>Year</th><th>Official source</th></tr>"

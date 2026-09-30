@@ -37,7 +37,7 @@ def variants(plan: PlanInputs) -> list:
         if p.age < p.retire_age and p.retire_age + 1 < plan.end_age:   # not already retired
             people = list(plan.people)
             people[i] = replace(p, retire_age=p.retire_age + 1)
-            out.append((f"retire_later_{p.id}", f"{p.name} retires 1 year later",
+            out.append((f"retire_later_{p.id}", f"{p.name}: retire 1 year later",
                         replace(plan, people=tuple(people))))
     home = plan.home
     if home is not None:

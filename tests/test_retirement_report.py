@@ -77,3 +77,26 @@ def test_income_legend_reads_in_stack_order(built):
     # (Earned income first, Shortfall last), not Plotly's reversed stacked-bar default.
     _, result, _, _ = built
     assert report.income_chart(result.average, result.bad_luck).layout.legend.traceorder == "normal"
+
+
+def test_money_left_marks_cpp_and_oas_for_each_person(built):
+    plan, result, _, _ = built
+    texts = [a.text for a in report.money_left_chart(result.simulated, plan).layout.annotations]
+    assert any("OAS" in s for s in texts)
+    assert sum(s.count("CPP") for s in texts) == len(plan.people)
+
+
+def test_money_left_labels_do_not_collide(built):
+    # Marks at the same age share one label; marks within a few years sit at different heights.
+    plan, result, _, _ = built
+    notes = report.money_left_chart(result.simulated, plan).layout.annotations
+    xs = [a.x for a in notes]
+    assert len(xs) == len(set(xs))
+    for a in notes:
+        for b in notes:
+            if a is not b and abs(a.x - b.x) < 5:
+                assert a.yshift != b.yshift
+
+
+def test_assumptions_explain_tfsa_room(built):
+    assert "TFSA room carried in" in _html(built)

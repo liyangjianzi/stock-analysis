@@ -49,3 +49,14 @@ def test_no_retire_later_suggestion_for_someone_already_retired(plan):
                                     plan.people[1]))
     keys = {k for k, _, _ in scenarios.variants(retired)}
     assert "retire_later_A" not in keys and "retire_later_B" in keys
+
+
+def test_retire_later_label_reads_naturally(plan):
+    labels = {k: label for k, label, _ in scenarios.variants(plan)}
+    assert labels["retire_later_A"] == "Partner A: retire 1 year later"
+
+
+def test_suggestion_baseline_matches_the_gauge_at_the_same_paths(plan):
+    from stockanalysis.retirement import engine
+    baseline, _ = scenarios.rank(plan, paths=60, seed=3)
+    assert baseline.success == engine.run(plan, paths=60, seed=3).simulated.success

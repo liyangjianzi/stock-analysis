@@ -117,3 +117,40 @@ def test_validation_rejects_a_nan_cost(tmp_path):
     path.write_text(json.dumps(d))
     with pytest.raises(ValueError, match=re.escape("balances[2].cost")):
         inputs.load_inputs(path)
+
+
+# -- deferred minors ------------------------------------------------------------------
+
+def _write(tmp_path, edit):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    edit(d)
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(d))
+    return path
+
+
+def test_a_downsize_age_already_passed_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match=re.escape("home.downsize_age")):
+        inputs.load_inputs(_write(tmp_path, lambda d: d["home"].update(downsize_age=40)))
+
+
+def test_a_lif_must_start_by_71(tmp_path):
+    with pytest.raises(ValueError, match=re.escape("people[0].lif_start_age")):
+        inputs.load_inputs(_write(tmp_path, lambda d: d["people"][0].update(lif_start_age=72)))
+
+
+def test_locked_in_rrsp_names_are_pension_money(plan):
+    frame = _frame([["Partner A Locked-in RRSP", "cash", np.nan, np.nan, 10.0, 10.0],
+                    ["Partner B LRSP", "cash", np.nan, np.nan, 5.0, 5.0]])
+    accts = inputs.balances_from_holdings(frame, MAPPING, plan.people)
+    assert {(a.owner, a.type) for a in accts} == {("A", "pension"), ("B", "pension")}
+
+
+def test_owner_keywords_match_whole_words(plan):
+    frame = _frame([["Personal RRSP", "cash", np.nan, np.nan, 5.0, 5.0]])
+    with pytest.raises(ValueError, match="whose"):
+        inputs.balances_from_holdings(frame, {"owners": {"A": ["Al"], "B": ["Bo"]}}, plan.people)
+
+
+def test_template_explains_balances_versus_holdings(plan):
+    assert "holdings" in inputs.TEMPLATE["_readme"] and "balances" in inputs.TEMPLATE["_readme"]

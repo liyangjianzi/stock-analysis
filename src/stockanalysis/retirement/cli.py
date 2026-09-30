@@ -24,8 +24,9 @@ def add_parser(sub) -> None:
     p.add_argument("--out", default=None, help="Output root (default: retirement/output/).")
     p.add_argument("--paths", type=int, default=None,
                    help="Simulated futures (default: plan.json returns.paths).")
-    p.add_argument("--scenario-paths", type=int, default=2000,
-                   help="Futures per what-if suggestion (default 2000).")
+    p.add_argument("--scenario-paths", type=int, default=None,
+                   help="Futures per what-if suggestion (default: the same as --paths, so the "
+                        "suggestions' current-plan row matches the gauge).")
     p.add_argument("--seed", type=int, default=None, help="Random seed (default: plan.json).")
     p.add_argument("--init", action="store_true", help="Write a starter plan.json and exit.")
 
@@ -51,7 +52,8 @@ def dispatch(args) -> int:
     plan, source = _with_balances(inputs.load_inputs(path), args.holdings)
     seed = plan.returns.seed if args.seed is None else args.seed
     result = engine.run(plan, paths=args.paths, seed=seed)
-    baseline, ranked = scenarios.rank(plan, paths=args.scenario_paths, seed=seed)
+    baseline, ranked = scenarios.rank(plan, seed=seed,
+                                      paths=args.scenario_paths or result.simulated.paths)
     root = Path(args.out) if args.out else config.DEFAULT_RETIREMENT_OUT
     previous = report.latest_summary(root)
     now = dt.datetime.now()

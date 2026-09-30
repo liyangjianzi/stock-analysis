@@ -82,3 +82,11 @@ def test_split_never_costs_more_than_no_split():
          "gains": np.zeros(50), "oas": np.full(50, 9_150.0), "age": 70}
     ta, tb, _ = tax.couple_tax(a, b)
     assert np.all(ta + tb <= tax.household_tax([a, b], 0.0) + 1e-9)
+
+
+def test_age_amount_uses_net_income_after_the_oas_repayment():
+    # 100,000 incl. 9,150 OAS at 70: repayment .15*(100,000-95,323) = 701.55 is deducted
+    # (line 23500), so net and taxable income are 99,298.45 for the brackets AND the age amount.
+    # Fed .14*58,523 + .205*40,775.45 - .14*(16,452 + 1,278.0325) = 14,069.982
+    # AB  .08*61,200 + .10*38,098.45 - .08*22,769 (age amount fully phased out) = 6,884.325
+    assert t(ordinary=90_850, oas=9_150, age=70) == pytest.approx(14_069.982 + 6_884.325 + 701.55, abs=0.01)

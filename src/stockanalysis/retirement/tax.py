@@ -57,7 +57,9 @@ def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, age=0, province
     gains (the inclusion rate is applied here). ``oas``: OAS received.
     """
     ordinary, pension, gains, oas = (np.asarray(x, dtype=float) for x in (ordinary, pension, gains, oas))
-    net = ordinary + pension + oas + rules.CAPITAL_GAINS_INCLUSION.value * gains
+    gross = ordinary + pension + oas + rules.CAPITAL_GAINS_INCLUSION.value * gains
+    recovery = oas_recovery(gross, oas)
+    net = gross - recovery           # line 23600: after deducting the OAS repayment
     over_65 = np.asarray(age) >= 65
 
     fed = rules.FEDERAL
@@ -80,7 +82,7 @@ def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, age=0, province
         prov_credits = prov_credits + s["rate"] * np.maximum(0.0, prov_credits - s["floor"])
     provincial = np.maximum(0.0, bracket_tax(net, prov["brackets"].value) - prov_credits)
 
-    return federal + provincial + oas_recovery(net, oas)
+    return federal + provincial + recovery
 
 
 def _split(a: dict, b: dict, share):

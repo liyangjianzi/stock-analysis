@@ -31,6 +31,7 @@ STRATEGY_LABELS = {
 # from "RRSP", and "Lifeco" apart from "LIF".
 KEYWORDS = (
     ("exclude", re.compile(r"\bRESP\b", re.I)),
+    ("pension", re.compile(r"\bLOCKED[- ]?IN\b|\bLRSP\b|\bLRIF\b|\bRLIF\b", re.I)),
     ("rrsp", re.compile(r"\bRRSP\b|\bRRIF\b", re.I)),
     ("tfsa", re.compile(r"\bTFSA\b", re.I)),
     ("pension", re.compile(r"\bLIRA\b|\bLIF\b|\bDCPP\b|\bPENSION\b", re.I)),
@@ -52,7 +53,7 @@ class Person:
     rrif_start_age: int = 65
     lif_start_age: int | None = None
     unlock_share: float = 0.5
-    tfsa_room: float = 0.0
+    tfsa_room: float = 0.0      # unused room carried in from past years, before this year's limit
     contributions: dict = field(default_factory=dict)
     contributions_when_partner_retired: dict | None = None
 
@@ -128,6 +129,9 @@ class PlanInputs:
 # Invented example household for `stock-analysis retire --init`. Delete
 # "balances" to read balances from the holdings workbook instead.
 TEMPLATE = {
+    "_readme": ("Example household with invented numbers. Amounts are in today's CAD. "
+                "Delete 'balances' to read balances from the holdings workbook instead. "
+                "tfsa_room is unused room carried in from past years, before this year's limit."),
     "province": "AB",
     "start_year": 2026,
     "end_age": 95,
@@ -218,6 +222,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"{f}.rrif_start_age", "an RRSP must become a RRIF by 71")
         if p.lif_start_age is not None and p.lif_start_age < lif_min:
             _fail(f"{f}.lif_start_age", f"a LIF can start at {lif_min} at the earliest")
+        if p.lif_start_age is not None and p.lif_start_age > rules.RRIF["convert_by_age"].value:
+            _fail(f"{f}.lif_start_age", "locked-in money must become a LIF by 71")
         if not 0 <= p.unlock_share <= max_unlock:
             _fail(f"{f}.unlock_share", f"between 0 and {max_unlock}")
         if not 0 <= p.cpp_earnings_ratio <= 1:
@@ -254,6 +260,9 @@ def validate(plan: PlanInputs) -> PlanInputs:
         for name in ("moving_cost", "property_tax", "insurance", "new_value"):
             if getattr(h, name) < 0:
                 _fail(f"home.{name}", "must not be negative")
+        if h.downsize_age is not None and h.downsize_age < plan.people[0].age:
+            _fail("home.downsize_age", f"{h.downsize_age} has already passed "
+                                       f"(people[0] is {plan.people[0].age}); set today's home value")
         if h.downsize_age is not None and h.value * (1 - h.selling_cost) - h.new_value - h.moving_cost < 0:
             _fail("home.new_value", "the sale must cover the new home and the move")
     r = plan.returns
@@ -318,7 +327,7 @@ def _owner(name: str, mapping: dict, people) -> str | None:
     if "owner" in explicit:
         return explicit["owner"]
     hits = [pid for pid, words in (mapping.get("owners") or {}).items()
-            if any(w.lower() in name.lower() for w in words)]
+            if any(re.search(rf"\b{re.escape(w)}\b", name, re.I) for w in words)]
     if len(hits) == 1:
         return hits[0]
     if len(people) == 1:

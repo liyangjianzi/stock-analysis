@@ -71,3 +71,7 @@ def test_no_balances_and_no_holdings_names_both(tmp_path, monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "balances" in err and "--holdings" in err
+
+
+def test_suggestions_default_to_the_same_futures_as_the_gauge():
+    assert cli.build_parser().parse_args(["retire"]).scenario_paths is None
