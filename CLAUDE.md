@@ -34,6 +34,13 @@ stock-analysis risk --from-run output/<ts>   # join an earlier run: check its Bu
 ```
 Reads the owner's holdings (never committed — see Conventions; `--holdings PATH` or `$HOLDINGS_FILE` to point elsewhere) and writes `risk_report.html` (library: `pipeline.run_risk`; pass `run_dir` + `signal_matrix` from `Results` to join a run — never infer the folder): exposure, market risk, stress tests, the real account's drawdown, loss to stops, and cash vs Buys. There is **no service account** (the owner ruled out Google Cloud): Claude refreshes `data/holdings_workbook.xlsx` / `data/holdings_snapshot.csv` through the Google Drive connector on request, and the report prints the file's age. Drive for Desktop syncs only a `.gsheet` pointer (the sheet id), never the data.
 
+### Retirement planner (`stock-analysis retire`)
+```bash
+stock-analysis retire --init       # writes retirement/plan.json with example values
+stock-analysis retire              # -> retirement/output/<ts>/retirement_report.html + summary.json
+```
+Projects a Canadian household year by year (`stockanalysis.retirement`) under federal + Alberta tax, CPP, OAS, RRIF, TFSA and Alberta LIF rules, over 10,000 return paths plus an "average" and a "bad-luck" (10th-percentile) future. The report shows the chance the money lasts, the after-tax legacy, a stacked income-by-source chart, one-change what-ifs ranked by effect, the money left by age, a year-by-year table and every rule with its official source. Balances: `--holdings` → plan.json `balances` → the holdings workbook, sorted by account name (RRSP / TFSA / RESP / LIRA-LIF keywords plus plan.json overrides; an unsorted account stops the run rather than being dropped). `retirement/` is gitignored — the owner's plan and reports never enter git.
+
 ### Broad-universe research (offline after one fetch)
 ```bash
 stock-analysis universe --out data/universe_sp500.csv   # 503 tickers, committed
@@ -96,7 +103,9 @@ Both came back no-edge. A 2026-09-27 study, `earn_*.py` (an earnings blackout on
   fetch+report layers), the `run`/`backtest` CLI flags, the backtest (plan exits,
   `robustness`, the random-entry null, and the single-pass equivalence tests),
   the research cache (`refresh`, drift detection, `replace_bars`, via a
-  monkeypatched `ingest.fetch_bulk_prices`), and the whole `thesis/` subpackage
+  monkeypatched `ingest.fetch_bulk_prices`), the whole `retirement/` planner (rules citations,
+  hand-worked federal + Alberta tax, the RRIF/LIF/TFSA account model, what-ifs, the HTML
+  report, the `retire` CLI), and the whole `thesis/` subpackage
   — model/store/sources/review/CLI, with an injected fake price adapter for
   MAE/MFE) with synthetic OHLCV fixtures — no network / yfinance calls.
 - Import check: `PYTHONPATH=src python3 -c "import stockanalysis"`
@@ -129,6 +138,7 @@ Module map (one responsibility each; core modules never import IPython/`display`
 | `cli.py` | `stock-analysis` console script |
 | `outputs/` | `Exporter` ABC + `ExcelExporter` + `GSheetsExporter`; `get_exporter(target)` factory |
 | `thesis/` | **Thesis memory** — track an idea idea→entry→exit→postmortem. `model` (shape/ids/validation), `store` (JSON-per-thesis persistence + lifecycle), `sources` (`from_signal_matrix`/`from_manual`), `review` (MAE/MFE, postmortem, summary), `report` (aggregated HTML journal → `output/theses/<ts>/report.html`), `cli` (the `thesis` subcommand). Separate persistent feature, **not** part of `pipeline.run`. |
+| `retirement/` | **Canadian retirement planner** — `rules` (every statutory value as `Rule(value, year, source)`: federal/Alberta tax, OAS, CPP, RRIF factors, TFSA, Alberta LIF), `tax` (vectorized person tax, household tax, 5%-step pension-split search), `inputs` (`plan.json` + holdings → validated `PlanInputs`), `engine` (year-by-year accounts over N paths; `run` adds the average + bad-luck futures), `scenarios` (one-change what-ifs on common random numbers), `report` (self-contained HTML), `cli` (`stock-analysis retire`). Separate from `pipeline.run`. |
 
 Data flow (in `pipeline.run`): `load_watchlist` → `prices` + `fundamentals_df` → `screen_fundamentals` → `screened_df` → `add_indicators` (per ticker) → `tech` → `generate_signals` → `signal_matrix` → exporter / combined HTML report (`report.build_full_report`, embedding dashboards + profiles + `overview.daily_overview`). The report's dashboards/profiles selection is `top_tickers(signal_matrix, top_n)`, falling back to whatever was fetched when nothing screened; the screener/signal-matrix sections it embeds are never capped by that selection.
 
@@ -150,3 +160,4 @@ Presentation (pandas `Styler`, `fig.show()`, printing `profile["report"]`) lives
 - **Holdings never enter git — the repo is public.** Real positions live only in the owner's sheet, in `data/holdings*` (gitignored) and in `output/`. `tests/test_privacy.py` fails the suite if a holdings file or a service-account key is ever tracked, and holdings tests use invented positions only. Don't paste real positions into docs, tests or commit messages.
 - **Exporters are pluggable.** Add an output destination by subclassing `outputs.base.Exporter` and registering it in `outputs.get_exporter`. Keep `gspread`/`google-auth` lazily imported (optional `gsheets` extra) so Excel works without them.
 - **Thesis lifecycle is forward-only and ledger-based.** `thesis.store` mutates status only through its lifecycle functions (`transition`/`open_position`/`trim`/`close`/`terminate`/`mark_reviewed`); each enforces `model.STATUS_ORDER` (IDEA→ENTRY_READY→ACTIVE→PARTIALLY_CLOSED→CLOSED, plus INVALIDATED), appends to `status_history`, re-validates, and writes atomically. Realized P&L is **summed from immutable ledger entries** (each trim/close carries `realized_pnl`) — never recompute by mutating the entry price. All exits go through one `store._record_sale` helper (compute realized → decrement `shares_remaining` → append the ledger row), so `trim` / `close` / a priced `terminate` always write an identically-shaped row — add new exit paths via that helper, don't hand-roll another. Registration is **idempotent on `origin.fingerprint`**, so re-ingesting the same `signal_matrix` won't duplicate. Storage is **JSON-per-thesis + `_index.json`** (stdlib only — don't add `pyyaml`/`jsonschema`; validation is plain Python in `model.validate_thesis`). MAE/MFE uses `ingest.fetch_stock_data` via `review.YFinancePriceAdapter` (injectable — tests pass a fake; **no FMP key**, unlike the upstream skill).
+- **Canadian rule values live only in `retirement/rules.py`,** each a `Rule(value, year, source)` read from the official CRA / Service Canada / Alberta page — never from memory. Update them every January (CRA's T4127 and TD1 forms carry the indexed amounts; OAS changes quarterly); the report shows a banner once `TAX_YEAR` is behind the calendar. The planner works in today's dollars, so rules are held flat for later years. **Plain RRSP withdrawals are not eligible pension income** — only RRIF/LIF payments at 65+ get the pension credit and pension splitting — which is why `rrif_start_age` defaults to 65.
