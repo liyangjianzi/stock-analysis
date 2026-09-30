@@ -34,7 +34,7 @@ def variants(plan: PlanInputs) -> list:
     out.append(("spend_less", "Reduce retirement spending by 5%",
                 replace(plan, spending=replace(plan.spending, base=plan.spending.base * 0.95))))
     for i, p in enumerate(plan.people):
-        if p.retire_age + 1 < plan.end_age:
+        if p.age < p.retire_age and p.retire_age + 1 < plan.end_age:   # not already retired
             people = list(plan.people)
             people[i] = replace(p, retire_age=p.retire_age + 1)
             out.append((f"retire_later_{p.id}", f"{p.name} retires 1 year later",

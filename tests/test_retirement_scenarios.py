@@ -41,3 +41,11 @@ def test_rank_is_sorted_by_change_in_success(plan):
     assert deltas == sorted(deltas, reverse=True)
     for s in ranked:
         assert s.delta == pytest.approx(s.success - baseline.success)
+
+
+def test_no_retire_later_suggestion_for_someone_already_retired(plan):
+    from dataclasses import replace
+    retired = replace(plan, people=(replace(plan.people[0], retire_age=plan.people[0].age),
+                                    plan.people[1]))
+    keys = {k for k, _, _ in scenarios.variants(retired)}
+    assert "retire_later_A" not in keys and "retire_later_B" in keys

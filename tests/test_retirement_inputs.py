@@ -100,3 +100,20 @@ def test_with_holdings_replaces_the_balances(plan):
     frame = _frame([["Partner A RRSP", "cash", np.nan, np.nan, 7.0, 7.0]])
     out = inputs.with_holdings(plan, frame)
     assert out.accounts == (inputs.Account(owner="A", type="rrsp", balance=7.0, cost=None),)
+
+
+def test_a_non_finite_holding_stops_the_run(plan):
+    # A #N/A cell in the sheet arrives as NaN: it must not be silently dropped.
+    frame = _frame([["Partner A RRSP", "stock", 10, 5.0, np.nan, np.nan],
+                    ["Partner A RRSP", "cash", np.nan, np.nan, 100.0, 100.0]])
+    with pytest.raises(ValueError, match="Partner A RRSP"):
+        inputs.balances_from_holdings(frame, MAPPING, plan.people)
+
+
+def test_validation_rejects_a_nan_cost(tmp_path):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["balances"][2]["cost"] = float("nan")
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match=re.escape("balances[2].cost")):
+        inputs.load_inputs(path)

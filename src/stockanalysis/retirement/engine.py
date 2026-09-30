@@ -98,8 +98,9 @@ SHORTFALL_EPS = 1.0   # a gap under a dollar is rounding, not a short year
 
 
 def steps(plan: PlanInputs) -> int:
-    """Years projected: from now until the first person reaches ``end_age``."""
-    return plan.end_age - plan.people[0].age
+    """Years projected: from now until the youngest person reaches ``end_age`` (both
+    spouses are assumed to live to it). Household events still key on people[0]'s age."""
+    return plan.end_age - min(p.age for p in plan.people)
 
 
 def stage_share(spending, age: int) -> float:
@@ -242,7 +243,10 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
     restore = np.zeros((P, N))
     lif_age = [p.lif_start_age if p.lif_start_age is not None
                else max(rules.LIF[prov]["min_age"].value, p.retire_age) for p in people]
-    lif_step: list = [None] * P
+    # A LIF already running at the start (retired, past its start age) was set up in
+    # an earlier year: its minimum applies now and the one-time unlock is long done.
+    lif_step: list = [-1 if p.retire_age <= p.age and p.age > a else None
+                      for p, a in zip(people, lif_age)]
     lif_gain = np.zeros((P, N))               # last year's LIF return (Alberta's "A")
     cpp_year = [cpp_at_65(p) * cpp_factor(p.cpp_start_age) for p in people]
     limit = rules.TFSA["annual_limit"].value
@@ -324,7 +328,10 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         base_taxable = cpp[:, None] + oas[:, None] + min_rrif + min_lif
 
         # 4. Top-up withdrawals, iterated with the household's tax.
-        avail = {"rrsp": bal["rrsp"], "lif": lif_room, "nonreg": bal["nonreg"], "tfsa": bal["tfsa"]}
+        # Earned income covers a worker: never draw on their RRSP/LIF before they retire.
+        retired = np.array([not w for w in working], dtype=float)[:, None]
+        avail = {"rrsp": bal["rrsp"] * retired, "lif": lif_room * retired,
+                 "nonreg": bal["nonreg"], "tfsa": bal["tfsa"]}
         gain_ratio = np.clip(np.divide(bal["nonreg"] - cost, bal["nonreg"], out=np.zeros((P, N)),
                                        where=bal["nonreg"] > 0), 0.0, 1.0)
         share, tax_est = prev_share, prev_tax.copy()

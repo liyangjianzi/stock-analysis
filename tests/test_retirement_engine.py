@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from stockanalysis.retirement import engine
+from stockanalysis.retirement import engine, rules
 from stockanalysis.retirement.inputs import (Account, Home, Person, PlanInputs, Returns,
                                              Spending, SpendingChange, Withdrawal)
 
@@ -229,3 +229,27 @@ def test_run_uses_the_median_return_and_replays_the_bad_luck_path():
 def test_package_exports_the_api():
     import stockanalysis.retirement as retirement
     assert retirement.run is engine.run and retirement.PlanInputs is PlanInputs
+
+
+# -- final-review fixes -------------------------------------------------------------
+
+def test_workers_registered_money_is_not_drawn_before_retirement():
+    for strategy in ("steady_income", "rrsp_first"):
+        p = plan(people=[person(age=50, retire_age=60)], accounts=[Account("A", "rrsp", 500_000.0)],
+                 base=30_000.0, end_age=55, strategy=strategy)
+        proj = run_flat(p)
+        assert np.all(proj.income["registered"] == 0.0), strategy
+        assert np.all(proj.balances["rrsp"][:, 0] == 500_000.0), strategy
+
+
+def test_projection_runs_until_the_youngest_reaches_end_age():
+    p = plan(people=[person(id="A", age=60), person(id="B", name="B", age=50)], end_age=63)
+    assert engine.steps(p) == 13
+    assert run_flat(p).ages[-1] == (72, 62)
+
+
+def test_lif_already_running_at_start_pays_its_minimum_and_is_not_unlocked_again():
+    proj = run_flat(plan(people=[person(age=75, retire_age=60, lif_start_age=60, unlock_share=0.5)],
+                         accounts=[Account("A", "pension", 100_000.0)], base=0.0, end_age=77))
+    assert proj.balances["rrsp"][0, 0] == 0.0 and proj.balances["pension"][0, 0] == 100_000.0
+    assert proj.income["minimums"][0, 0] == pytest.approx(rules.rrif_min_factor(74) * 100_000.0)

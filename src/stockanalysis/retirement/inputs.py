@@ -268,8 +268,10 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"balances[{j}].owner", f"{a.owner!r} is not one of the people {ids}")
         if a.type not in ACCOUNT_TYPES:
             _fail(f"balances[{j}].type", f"{a.type!r} is not one of {ACCOUNT_TYPES}")
-        if a.balance < 0:
-            _fail(f"balances[{j}].balance", "must not be negative")
+        if not (np.isfinite(a.balance) and a.balance >= 0):
+            _fail(f"balances[{j}].balance", "must be a number, not negative")
+        if a.cost is not None and not (np.isfinite(a.cost) and a.cost >= 0):
+            _fail(f"balances[{j}].cost", "must be a number, not negative")
     return plan
 
 
@@ -331,7 +333,7 @@ def balances_from_holdings(frame: pd.DataFrame, mapping: dict, people) -> tuple:
     keywords (RESP excluded; RRSP/RRIF; TFSA; LIRA/LIF/DCPP/pension). Anything
     else must be listed, so money is never silently dropped.
     """
-    unknown, unowned, totals = [], [], {}
+    unknown, unowned, broken, totals = [], [], [], {}
     for name, rows in frame.groupby("account", sort=True):
         kind = _classify(str(name), mapping)
         if kind is None:
@@ -343,10 +345,16 @@ def balances_from_holdings(frame: pd.DataFrame, mapping: dict, people) -> tuple:
         if who is None:
             unowned.append(str(name))
             continue
+        if not np.isfinite(rows["value_cad"].to_numpy(dtype=float)).all():
+            broken.append(str(name))
+            continue
         balance = float(rows["value_cad"].sum())
         cost = float(sum(_cost_cad(r) for _, r in rows.iterrows()))
         b, c = totals.get((who, kind), (0.0, 0.0))
         totals[(who, kind)] = (b + balance, c + cost)
+    if broken:
+        raise ValueError("A holding has no value (e.g. #N/A in the sheet) in: " + ", ".join(broken)
+                         + ". Fix the sheet and refresh, so no money is silently left out.")
     if unknown:
         raise ValueError("Can't tell the account type of: " + ", ".join(unknown)
                          + ". Add each to plan.json holdings.accounts (type rrsp / pension / "
