@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from stockanalysis import cli, holdings
-from stockanalysis.retirement import inputs
+from stockanalysis.retirement import inputs, optimize
 
 FAST = ["--paths", "40", "--scenario-paths", "20"]
 
@@ -75,3 +75,16 @@ def test_no_balances_and_no_holdings_names_both(tmp_path, monkeypatch, capsys):
 
 def test_suggestions_default_to_the_same_futures_as_the_gauge():
     assert cli.build_parser().parse_args(["retire"]).scenario_paths is None
+
+
+def test_optimize_prints_the_answers_without_a_report(tmp_path, monkeypatch, capsys):
+    small = optimize.best_benefit_ages
+    monkeypatch.setattr(optimize, "best_benefit_ages",
+                        lambda plan, **kw: small(plan, cpp_ages=(65, 70), oas_ages=(65, 70), workers=1, **kw))
+    out = tmp_path / "out"
+    assert cli.main(["retire", "--inputs", str(_plan(tmp_path)), "--out", str(out),
+                     "--optimize", "--target", "80", "--paths", "40"]) == 0
+    printed = capsys.readouterr().out
+    assert "target 80%" in printed and "Highest spending" in printed and "Earliest retirement" in printed
+    assert "Partner A: CPP" in printed and "Legacy (average future)" in printed
+    assert not out.exists()

@@ -14,6 +14,7 @@
 #   scripts/retire.sh --holdings FILE      # read balances from another holdings file
 #   NO_OPEN=1 scripts/retire.sh            # don't open the report in the browser
 #   scripts/retire.sh --init               # first time only: write a starter plan.json
+#   stock-analysis retire --gui            # edit plan.json in a local web page instead
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

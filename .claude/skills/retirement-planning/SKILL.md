@@ -31,6 +31,38 @@ NO_OPEN=1 scripts/retire.sh        # don't open the browser
 stock-analysis retire --init       # first time only: starter plan.json (invented values)
 ```
 
+### Planning tools (`--optimize`)
+
+```bash
+stock-analysis retire --optimize               # target: 90% chance the money lasts
+stock-analysis retire --optimize --target 85
+```
+
+Prints the highest safe base spending, the earliest safe retirement (everyone
+moved together) and the best CPP/OAS start ages, ranked by the average future's
+after-tax legacy. It takes about 20 s and writes no report. The GUI's
+**Optimize** tab runs the same tools and adds a table of what every other start
+age costs. When the gain is under 0.5% of the legacy, call it a near tie and say
+so: health, longevity and wanting the income sooner should decide instead. The
+optimizer assumes everyone lives to `end_age`. Deferred ideas are listed in
+`src/stockanalysis/retirement/README.md` under "Future improvements".
+
+### Edit the plan in a browser (`--gui`)
+
+```bash
+stock-analysis retire --gui                 # opens http://127.0.0.1:8765/
+stock-analysis retire --gui --port 9000 --no-browser
+```
+
+A local page (only reachable from this machine) with tabs for People, Spending,
+Home, Investing and Advanced. Every edit re-runs a quick 1,000-future estimate:
+the report's gauge and money-left chart, plus tiles that show the change against
+the *saved* plan on the same futures. An invalid value is named and highlighted
+and never saved. **Save** writes plan.json (the previous file is kept as
+`plan.json.bak`); **Save & generate report** also runs the full report and links
+to it. `holdings`, `balances` and `scenarios` aren't editable there and are
+kept exactly as they are.
+
 Balances come from, in order: `--holdings FILE` → `balances` in plan.json → the
 holdings workbook (`data/holdings_workbook.xlsx`). Before a run with live
 balances, **refresh holdings** from the Google Sheet (see CLAUDE.md, Household

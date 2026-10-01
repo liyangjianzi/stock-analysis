@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retirement planner</title>
+<script src="/plotly.js"></script>
+<style>
+/* Colours and font copy retirement/report.py, so the planner and the report read as one product. */
+:root{--surface:#fcfcfb;--page:#f9f9f7;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;
+  --axis:#c3c2b7;--blue:#2a78d6;--track:#cde2fb;--good:#006300;--bad:#d03b3b;--amber:#eda100;
+  --font:system-ui,-apple-system,"Segoe UI",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font-family:var(--font);font-size:14px}
+header{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--grid);
+  display:flex;align-items:center;gap:16px;padding:10px 24px;flex-wrap:wrap}
+header h1{font-size:1.2rem;margin:0}
+header .meta{color:var(--ink2);font-size:.8rem;flex:1;min-width:260px}
+header .meta a{color:var(--blue);cursor:pointer}
+.dirty{display:none;color:var(--amber);font-weight:600;font-size:.85rem}
+.dirty.on{display:inline}
+button{font:inherit;border:1px solid var(--axis);background:#fff;border-radius:8px;padding:7px 14px;cursor:pointer}
+button.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+#report-status{font-size:.85rem;color:var(--ink2)}
+#report-status a{color:var(--blue);font-weight:600}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--track);border-top-color:var(--blue);
+  border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
+main{display:grid;grid-template-columns:minmax(420px,1fr) minmax(420px,560px);gap:20px;
+  max-width:1400px;margin:0 auto;padding:16px 24px}
+@media (max-width:980px){main{grid-template-columns:1fr}}
+nav.tabs{display:flex;gap:4px;border-bottom:1px solid var(--grid);margin-bottom:12px;flex-wrap:wrap}
+nav.tabs button{border:none;background:none;border-bottom:3px solid transparent;border-radius:0;
+  padding:8px 12px;color:var(--ink2)}
+nav.tabs button.on{border-bottom-color:var(--blue);color:var(--ink);font-weight:600}
+.panel{display:none}.panel.on{display:block}
+.card{background:var(--surface);border:1px solid rgba(11,11,11,.10);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.card h3{margin:0 0 10px;font-size:1rem;display:flex;align-items:center;gap:8px}
+.card h4{margin:14px 0 6px;font-size:.85rem;color:var(--ink2);text-transform:uppercase;letter-spacing:.04em}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px 18px}
+.field{padding:6px 0}
+.field label{display:flex;justify-content:space-between;gap:8px;color:var(--ink2);font-size:.85rem;margin-bottom:4px}
+.field label b{color:var(--ink);font-variant-numeric:tabular-nums}
+.field .help{color:var(--muted);font-size:.75rem;margin-top:2px}
+.field .row{display:flex;gap:8px;align-items:center}
+input[type=range]{flex:1;accent-color:var(--blue)}
+input[type=number],input[type=text]{font:inherit;width:100%;padding:5px 8px;border:1px solid var(--axis);
+  border-radius:6px;background:#fff;font-variant-numeric:tabular-nums}
+.row input[type=number]{width:110px;flex:none}
+.field.invalid input{border-color:var(--bad);background:#fff3f3}
+.field.invalid label{color:var(--bad)}
+.check{display:flex;gap:8px;align-items:center;padding:6px 0;color:var(--ink2)}
+.radio{display:block;padding:4px 0}
+table.changes{width:100%;border-collapse:collapse}
+table.changes td{padding:3px 4px}
+table.changes td:last-child{width:32px}
+table.ages{border-collapse:collapse;margin:6px 0 10px;font-size:.8rem;font-variant-numeric:tabular-nums}
+table.ages td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--grid)}
+table.ages td:first-child{text-align:left;color:var(--ink2)}
+table.ages td.best{font-weight:700;color:var(--good)}
+.answer{padding:6px 0;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.answer b{font-size:1.05rem}
+.x{border:none;background:none;color:var(--muted);font-size:1.1rem;padding:2px 6px}
+aside{position:sticky;top:70px;align-self:start}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+.tile{background:var(--surface);border:1px solid rgba(11,11,11,.10);border-radius:10px;padding:10px 12px}
+.tile .label{color:var(--ink2);font-size:.8rem}.tile .value{font-size:1.35rem;font-weight:600;font-variant-numeric:tabular-nums}
+.tile .sub{font-size:.78rem;color:var(--muted)}
+.up{color:var(--good)}.down{color:var(--bad)}
+#gauge{height:240px}#chart{height:420px}
+.note{color:var(--muted);font-size:.78rem}
+#error{display:none;background:#fff3f3;border:1px solid var(--bad);color:var(--bad);border-radius:8px;padding:8px 12px;margin-bottom:10px}
+#results.stale{opacity:.45}
+</style>
+</head>
+<body>
+<header>
+  <h1>Retirement planner</h1>
+  <div class="meta"><span id="plan-path"></span> · balances: <span id="balances"></span>
+    (<a id="reload" title="Re-read the holdings file">reload</a>)
+    <span class="dirty" id="dirty">● unsaved changes</span></div>
+  <span id="report-status"></span>
+  <button id="revert" disabled>Revert</button>
+  <button id="save" disabled>Save</button>
+  <button id="report" class="primary">Save &amp; generate report</button>
+</header>
+<main>
+  <section>
+    <nav class="tabs" id="tabs"></nav>
+    <div id="panels"></div>
+  </section>
+  <aside>
+    <div id="error"></div>
+    <div id="results">
+      <div class="card" style="padding:4px"><div id="gauge"></div></div>
+      <div class="tiles" id="tiles"></div>
+      <div class="card" style="padding:4px"><div id="chart"></div></div>
+      <p class="note" id="note"></p>
+    </div>
+  </aside>
+</main>
+<script>
+"use strict";
+const TABS = [["people", "People"], ["spending", "Spending"], ["home", "Home"],
+              ["investing", "Investing"], ["optimize", "Optimize"], ["advanced", "Advanced"]];
+const ACCOUNTS = [["pension", "Pension / LIRA"], ["rrsp", "RRSP"], ["tfsa", "TFSA"], ["nonreg", "Non-registered"]];
+let original = null, draft = null, saved = null, strategies = {}, limits = {}, reportPaths = null, lastPreview = null;
+let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
+let gen = 0, inflight = false, timer = null;
+// Optimizer results, with the draft they were computed for (shown as out of date after an edit).
+let target = 0.9, afford = null, benefits = null;
+
+// ---- helpers --------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const clone = o => JSON.parse(JSON.stringify(o));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const money = x => x == null ? "–" : "C$" + Math.round(x).toLocaleString("en-CA");
+function short(x) {
+  if (x == null) return "–";
+  const a = Math.abs(x), s = x < 0 ? "−" : "";
+  if (a >= 1e6) return s + "C$" + (a / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return s + "C$" + Math.round(a / 1e3) + "k";
+  return s + "C$" + Math.round(a);
+}
+const pct = (x, d = 0) => (x * 100).toFixed(d) + "%";
+function get(obj, path) { return path.split(".").reduce((o, k) => o == null ? undefined : o[k], obj); }
+function set(obj, path, value) {
+  const keys = path.split("."), last = keys.pop();
+  const parent = keys.reduce((o, k) => (o[k] = o[k] ?? {}), obj);
+  if (value === undefined) delete parent[last]; else parent[last] = value;
+}
+// validate() names fields like "people[0].retire_age"; inputs use "people.0.retire_age".
+const toPath = f => f.replace(/\[(\d+)\]/g, ".$1");
+
+// ---- controls ---------------------------------------------------------------
+// Each control carries data-path; edits write into `draft` and schedule a preview.
+// opts: min, max, step, scale (display = value*scale), unit, nullable, help, structural
+function fmtVal(v, o) {
+  if (v == null) return "–";
+  if (o.unit === "%") return (v * 100).toFixed(o.digits ?? 0) + "%";
+  if (o.unit === "$") return money(v);
+  return String(v);
+}
+// Percent fields store fractions; their inputs show value, min, max and step x100.
+const scaleOf = o => o.unit === "%" ? 100 : 1;
+const scaled = (x, o) => x == null ? "" : +(x * scaleOf(o)).toFixed(4);
+function field(path, label, o, control, out = "") {
+  return `<div class="field" data-field="${path}"><label>${esc(label)}${out}</label>${control}
+    ${o.help ? `<div class="help">${esc(o.help)}</div>` : ""}</div>`;
+}
+function attrs(path, o) {
+  return `data-path="${path}" data-scale="${scaleOf(o)}" ${o.structural ? "data-structural" : ""}
+    ${o.nullable ? "data-nullable" : ""} ${o.optional ? "data-optional" : ""}
+    ${o.min != null ? `min="${scaled(o.min, o)}"` : ""} ${o.max != null ? `max="${scaled(o.max, o)}"` : ""}
+    step="${o.step != null ? scaled(o.step, o) : "any"}" value="${scaled(get(draft, path), o)}"`;
+}
+function slider(path, label, o) {
+  const a = attrs(path, {step: 1, ...o});
+  return field(path, label, o, `<div class="row"><input type="range" ${a}><input type="number" ${a}></div>`,
+    ` <b id="out-${path}" data-unit="${o.unit ?? ""}" data-digits="${o.digits ?? 0}">${fmtVal(get(draft, path), o)}</b>`);
+}
+function number(path, label, o = {}) {
+  return field(path, label, o, `<input type="number" ${attrs(path, o)} placeholder="${esc(o.placeholder ?? "")}">`);
+}
+const contribGrid = prefix => `<div class="grid2">${ACCOUNTS.map(([k, l]) =>
+  number(`${prefix}.${k}`, l, {min: 0, step: 500, optional: true, placeholder: "0"})).join("")}</div>`;
+function text(path, label) {
+  return `<div class="field" data-field="${path}"><label>${esc(label)}</label>
+    <input type="text" data-path="${path}" data-structural value="${esc(get(draft, path) ?? "")}"></div>`;
+}
+
+// ---- panels -----------------------------------------------------------------
+function peoplePanel() {
+  const end = draft.end_age;
+  return draft.people.map((p, i) => {
+    const P = `people.${i}`;
+    return `<div class="card"><h3>${esc(p.name)}</h3>
+      <div class="grid2">
+        ${number(`${P}.age`, "Age today", {min: 18, max: end - 1, step: 1, structural: true})}
+        ${slider(`${P}.retire_age`, "Retire at", {min: p.age, max: end - 1, structural: true})}
+        ${slider(`${P}.cpp_start_age`, "Start CPP at", {min: limits.cpp_start_age[0], max: limits.cpp_start_age[1],
+                 help: "Later pays more each year, for life."})}
+        ${slider(`${P}.oas_start_age`, "Start OAS at", {min: limits.oas_start_age[0], max: limits.oas_start_age[1],
+                 help: "Later pays more each year, for life."})}
+        ${slider(`${P}.rrif_start_age`, "RRSP becomes a RRIF at", {min: 50, max: limits.convert_by_age, help: "Only RRIF income at 65+ can be split and gets the pension credit."})}
+        ${number(`${P}.cpp_at_65`, "CPP at 65 (C$/yr, optional)", {min: 0, step: 100, nullable: true, placeholder: "estimate from years worked",
+                 help: "Prefer the figure from My Service Canada."})}
+      </div>
+      <h4>Saving each year while working (C$)</h4>
+      ${contribGrid(`${P}.contributions`)}
+    </div>`;
+  }).join("");
+}
+function spendingPanel() {
+  const s = draft.spending;
+  const rows = (s.changes || []).map((c, j) => `<tr>
+      <td><input type="number" data-path="spending.changes.${j}.year" step="1" value="${c.year}"></td>
+      <td><input type="number" data-path="spending.changes.${j}.amount" step="1000" value="${c.amount}"></td>
+      <td><input type="text" data-path="spending.changes.${j}.label" value="${esc(c.label || "")}"></td>
+      <td><button class="x" data-remove-change="${j}" title="Remove">×</button></td></tr>`).join("");
+  return `<div class="card"><h3>Yearly spending</h3>
+      ${slider("spending.base", "After-tax spending (today's C$)", {min: 0, max: 300000, step: 1000, unit: "$"})}
+      <h4>Dated changes</h4>
+      <table class="changes"><tr class="note"><td>Year</td><td>Change (C$/yr)</td><td>What</td><td></td></tr>${rows}</table>
+      <button id="add-change" style="margin-top:6px">+ Add a change</button>
+    </div>
+    <div class="card"><h3>Later life</h3><div class="grid2">
+      ${slider("spending.slow_go_age", "Slow down at", {min: 60, max: 100, structural: true})}
+      ${slider("spending.slow_go_share", "…spending this much", {min: 0.5, max: 1, step: 0.01, unit: "%"})}
+      ${slider("spending.no_go_age", "Slow down more at", {min: 60, max: 100, structural: true})}
+      ${slider("spending.no_go_share", "…spending this much", {min: 0.4, max: 1, step: 0.01, unit: "%"})}
+      ${number("spending.care", "Care costs in the last years (C$/yr)", {min: 0, step: 1000})}
+    </div></div>
+    <div class="card"><h3>When markets fall</h3><div class="grid2">
+      ${slider("spending.bad_market_cut", "Cut spending by", {min: 0, max: 0.3, step: 0.01, unit: "%"})}
+      ${slider("spending.bad_market_trigger", "…when investments drop below", {min: 0.5, max: 1, step: 0.01, unit: "%",
+               help: "Share of their value on retirement day."})}
+    </div></div>`;
+}
+function homePanel() {
+  const h = draft.home;
+  if (!h) return `<div class="card"><p class="note">This plan has no home. Add a "home" section to plan.json to plan a downsize.</p></div>`;
+  const down = h.downsize_age != null;
+  const age0 = draft.people[0].age;
+  return `<div class="card"><h3>Home</h3>
+      ${number("home.value", "Value today (C$)", {min: 0, step: 10000})}
+      <label class="check"><input type="checkbox" id="downsize" ${down ? "checked" : ""}> Plan to downsize</label>
+      ${down ? slider("home.downsize_age", `Downsize when ${draft.people[0].name} is`, {min: age0, max: draft.end_age - 1})
+             + slider("home.new_value", "New home value (C$)", {min: 0, max: Math.max(h.value, 100000), step: 10000, unit: "$",
+                      help: "The rest of the sale, after costs, is invested."}) : ""}
+    </div>`;
+}
+function investingPanel() {
+  const w = draft.withdrawal;
+  return `<div class="card"><h3>Returns after inflation</h3>
+      ${slider("returns.mean", "Average yearly return", {min: 0, max: 0.10, step: 0.0025, unit: "%", digits: 2})}
+      ${slider("returns.sd", "Ups and downs (volatility)", {min: 0, max: 0.30, step: 0.01, unit: "%"})}
+      <p class="note">Volatility pulls the typical return below the average · typical (median) return
+        <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>
+    </div>
+    <div class="card"><h3>Which account to draw from first</h3>
+      ${Object.entries(strategies).map(([k, l]) => `<label class="radio"><input type="radio" name="strategy"
+        value="${k}" ${w.strategy === k ? "checked" : ""}> ${esc(l)}</label>`).join("")}
+      ${w.strategy === "steady_income" ? number("withdrawal.steady_income_target", "Target taxable income per person (C$/yr)", {min: 0, step: 1000}) : ""}
+    </div>`;
+}
+function advancedPanel() {
+  const people = draft.people.map((p, i) => {
+    const P = `people.${i}`, partner = p.contributions_when_partner_retired;
+    return `<div class="card"><h3>${esc(p.name)}</h3><div class="grid2">
+      ${text(`${P}.name`, "Name")}
+      ${number(`${P}.cpp_years`, "Years paying into CPP", {min: 0, step: 1})}
+      ${number(`${P}.cpp_earnings_ratio`, "Earnings vs the CPP maximum (%)", {min: 0, max: 1, step: 0.01, unit: "%"})}
+      ${number(`${P}.years_in_canada_at_65`, "Years in Canada by 65", {min: 0, max: 40, step: 1})}
+      ${number(`${P}.lif_start_age`, "LIF starts at (optional)", {min: limits.lif_min_age, max: limits.convert_by_age, step: 1,
+               nullable: true, placeholder: `max(${limits.lif_min_age}, retire age)`})}
+      ${number(`${P}.unlock_share`, "LIF one-time unlock (%)", {min: 0, max: limits.unlock_share, step: 0.01, unit: "%"})}
+      ${number(`${P}.tfsa_room`, "Unused TFSA room from past years (C$)", {min: 0, step: 500})}
+      </div>
+      ${draft.people.length > 1 ? `<label class="check"><input type="checkbox" data-partner="${i}" ${partner ? "checked" : ""}>
+        Save differently once the partner has retired</label>
+        ${partner ? contribGrid(`${P}.contributions_when_partner_retired`) : ""}` : ""}
+    </div>`;
+  }).join("");
+  const home = draft.home ? `<div class="card"><h3>Home costs</h3><div class="grid2">
+      ${number("home.selling_cost", "Selling cost (%)", {min: 0, max: 0.99, step: 0.005, unit: "%"})}
+      ${number("home.moving_cost", "Moving cost (C$)", {min: 0, step: 1000})}
+      ${number("home.property_tax", "Property tax (C$/yr)", {min: 0, step: 100})}
+      ${number("home.insurance", "Insurance (C$/yr)", {min: 0, step: 100})}
+    </div></div>` : "";
+  return people + home + `<div class="card"><h3>Plan</h3><div class="grid2">
+      ${number("end_age", "Plan to age", {min: 70, max: 110, step: 1, structural: true})}
+      ${number("start_year", "First year", {step: 1})}
+      ${number("returns.paths", "Futures in the report", {min: 100, step: 1000})}
+      ${number("returns.seed", "Random seed", {min: 0, step: 1})}
+    </div></div>`;
+}
+function optimizePanel() {
+  const stale = r => r && r.forDraft !== JSON.stringify(draft)
+    ? `<p class="note">You've edited the plan since; run it again for current numbers.</p>` : "";
+  let a = "";
+  if (afford && afford.error) a = `<p class="note" style="color:var(--bad)">${esc(afford.error)}</p>`;
+  else if (afford) {
+    const r = afford.result, goal = pct(r.target);
+    const spend = r.max_spending == null
+      ? `<div class="answer">Even with no spending the chance stays below ${goal}.</div>`
+      : `<div class="answer"><span>Highest spending:</span><b>${money(r.max_spending)}/yr</b>
+           <span class="note">now ${money(r.spending)} · ${pct(r.max_spending_success)} chance</span>
+           <button data-apply="spending">Use this</button></div>`;
+    const s = r.retire_shift;
+    const when = s == null ? "" : r.retire_ages.map(([n, age]) => `${esc(n)} at ${age}`).join(", ");
+    const shift = s == null ? "" : s === 0 ? "as planned" :
+      `${Math.abs(s)} year${Math.abs(s) === 1 ? "" : "s"} ${s < 0 ? "earlier" : "later"}`;
+    const retire = s == null
+      ? `<div class="answer">No retirement age reaches ${goal}.</div>`
+      : `<div class="answer"><span>Earliest retirement:</span><b>${when}</b>
+           <span class="note">${shift} · ${pct(r.retire_success)} chance</span>
+           ${s !== 0 ? `<button data-apply="retire">Use this</button>` : ""}</div>`;
+    a = `<p class="note">Chance the money lasts now: ${pct(r.success)}.</p>${spend}${retire}${stale(afford)}`;
+  }
+  let b = "";
+  if (benefits && benefits.error) b = `<p class="note" style="color:var(--bad)">${esc(benefits.error)}</p>`;
+  else if (benefits) {
+    const r = benefits.result, gain = r.best_legacy - r.legacy;
+    const row = (label, values, best) => `<tr><td>${label}</td>${Object.entries(values).map(([age, v]) =>
+      `<td class="${Number(age) === best ? "best" : ""}">${age}<br>${v === values[best] ? "best" : "−" + short(values[best] - v)}</td>`).join("")}</tr>`;
+    b = r.people.map(c => `<h4>${esc(c.name)}: CPP at ${c.best[0]}, OAS at ${c.best[1]}
+          <span class="note">(now ${c.current[0]} / ${c.current[1]})</span></h4>
+        <table class="ages">${row("CPP start", c.by_cpp, c.best[0])}${row("OAS start", c.by_oas, c.best[1])}</table>`).join("") +
+      `<div class="answer"><span>Legacy in the average future:</span><b>${short(r.best_legacy)}</b>
+         <span class="note">${gain > 0 ? "+" + short(gain) + " vs today's ages" : "today's ages are already best"}
+         · chance the money lasts ${pct(r.success)} → ${pct(r.best_success)}</span>
+         ${gain > 0 ? `<button data-apply="benefits">Use these ages</button>` : ""}</div>
+      ${gain < 0.005 * Math.abs(r.legacy) ? `<p class="note">The difference is under 0.5% of the legacy, a near tie:
+         choose on other grounds, such as health or wanting the income sooner.</p>` : ""}${stale(benefits)}`;
+  }
+  return `<div class="card"><h3>What can we afford?</h3>
+      <div class="field"><label>Chance the money lasts to aim for <b id="target-out">${pct(target)}</b></label>
+        <input type="range" id="target" min="75" max="99" step="1" value="${Math.round(target * 100)}" style="width:100%"></div>
+      <button id="opt-afford">Find highest spending and earliest retirement</button>
+      <div id="afford-out">${a}</div>
+      <p class="note">Searches the plan you're editing over ${(lastPreview || saved || {paths: 1000}).paths.toLocaleString()} futures (a few seconds).
+        Retirement moves everyone by the same number of years.</p>
+    </div>
+    <div class="card"><h3>When to start CPP and OAS</h3>
+      <button id="opt-benefits">Find the best start ages</button>
+      <div id="benefits-out">${b}</div>
+      <p class="note">Tries every CPP (${limits.cpp_start_age.join("–")}) and OAS (${limits.oas_start_age.join("–")}) start age for each person and keeps the ones that
+        leave the most money after tax at ${draft.end_age} in the average future (about 10 seconds).
+        It assumes everyone lives to ${draft.end_age}; starting later pays off only if you do.</p>
+    </div>`;
+}
+const PANELS = {people: peoplePanel, spending: spendingPanel, home: homePanel,
+                investing: investingPanel, optimize: optimizePanel, advanced: advancedPanel};
+
+function render() {
+  $("tabs").innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === activeTab ? "on" : ""}">${l}</button>`).join("");
+  $("panels").innerHTML = TABS.map(([k]) => `<div class="panel ${k === activeTab ? "on" : ""}" id="panel-${k}">${PANELS[k]()}</div>`).join("");
+}
+
+// ---- events -------------------------------------------------------------------
+function readInput(el) {
+  if (el.type === "text") return el.value;
+  if (el.value === "") return el.hasAttribute("data-nullable") ? null : el.hasAttribute("data-optional") ? undefined : 0;
+  return +(Number(el.value) / Number(el.dataset.scale || 1)).toFixed(6);
+}
+document.addEventListener("input", e => {
+  const el = e.target;
+  if (!el.dataset.path) return;
+  const v = readInput(el);
+  set(draft, el.dataset.path, v);
+  // keep a slider and its number box in step
+  document.querySelectorAll(`[data-path="${el.dataset.path}"]`).forEach(o => { if (o !== el) o.value = el.value; });
+  const out = document.getElementById("out-" + el.dataset.path);
+  if (out) out.textContent = fmtVal(v, {unit: out.dataset.unit, digits: Number(out.dataset.digits)});
+  changed();
+});
+// An edit that adds, removes or re-limits controls: redraw the form, then preview.
+function edited() { render(); changed(); }
+document.addEventListener("change", e => {
+  const el = e.target;
+  if (el.hasAttribute("data-structural")) render();     // other controls' limits depend on it
+  if (el.name === "strategy") { draft.withdrawal.strategy = el.value; edited(); }
+  if (el.id === "downsize") {
+    const age0 = draft.people[0].age;
+    draft.home.downsize_age = el.checked ? Math.max(age0, Math.min(65, draft.end_age - 1)) : null;
+    edited();
+  }
+  if (el.dataset.partner != null) {
+    const p = draft.people[Number(el.dataset.partner)];
+    p.contributions_when_partner_retired = el.checked ? clone(p.contributions || {}) : null;
+    edited();
+  }
+});
+document.addEventListener("click", e => {
+  const el = e.target;
+  if (el.dataset.tab) {
+    activeTab = el.dataset.tab;
+    history.replaceState(null, "", "#" + activeTab);
+    document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === activeTab));
+    document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "panel-" + activeTab));
+  }
+  if (el.id === "add-change") {
+    draft.spending.changes = draft.spending.changes || [];
+    draft.spending.changes.push({year: draft.start_year + 1, amount: 0, label: ""});
+    edited();
+  }
+  if (el.id === "opt-afford") runOptimizer(el, "affordability", r => afford = r, {target});
+  if (el.id === "opt-benefits") runOptimizer(el, "benefits", r => benefits = r, {});
+  if (el.dataset.apply) applyOptimizer(el.dataset.apply);
+  if (el.dataset.removeChange != null) {
+    draft.spending.changes.splice(Number(el.dataset.removeChange), 1);
+    edited();
+  }
+});
+
+document.addEventListener("input", e => {
+  if (e.target.id !== "target") return;
+  target = Number(e.target.value) / 100;
+  $("target-out").textContent = pct(target);
+});
+async function runOptimizer(button, kind, keep, extra) {
+  button.disabled = true;
+  button.innerHTML = `<span class="spin"></span>Searching…`;
+  const forDraft = JSON.stringify(draft);
+  try { keep({result: await api("/api/optimize/" + kind, {plan: draft, ...extra}), forDraft}); }
+  catch (err) { keep({error: err.message, forDraft}); }
+  render();
+}
+function applyOptimizer(kind) {
+  if (kind === "spending") draft.spending.base = afford.result.max_spending;
+  if (kind === "retire") draft.people.forEach(p => { p.retire_age += afford.result.retire_shift; });
+  if (kind === "benefits") benefits.result.people.forEach((c, i) => {
+    draft.people[i].cpp_start_age = c.best[0];
+    draft.people[i].oas_start_age = c.best[1];
+  });
+  edited();
+}
+
+function isDirty() { return JSON.stringify(draft) !== JSON.stringify(original); }
+// The saved plan's preview comes with the plan, so only an edited draft needs a run.
+const needsPreview = () => isDirty() || !saved;
+function changed() {
+  const d = isDirty();
+  $("dirty").classList.toggle("on", d);
+  $("save").disabled = !d; $("revert").disabled = !d;
+  gen++;
+  clearTimeout(timer);
+  if (needsPreview()) timer = setTimeout(preview, 400);
+  else { showError(null); showResults(saved); }
+}
+window.addEventListener("beforeunload", e => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---- server -------------------------------------------------------------------
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} :
+    {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const data = await r.json().catch(() => ({message: r.statusText}));
+  if (!r.ok) throw Object.assign(new Error(data.message || r.statusText), {field: data.field});
+  return data;
+}
+function showError(err) {
+  document.querySelectorAll(".field.invalid").forEach(f => f.classList.remove("invalid"));
+  $("error").style.display = err ? "block" : "none";
+  $("results").classList.toggle("stale", !!err);
+  if (!err) return;
+  $("error").textContent = err.message;
+  if (err.field) {
+    const f = document.querySelector(`.field[data-field="${toPath(err.field)}"]`);
+    if (f) f.classList.add("invalid");
+  }
+}
+// One preview in flight at a time: an edit made meanwhile is picked up when it returns,
+// so stale runs never queue up on the server.
+async function preview() {
+  if (inflight) return;
+  inflight = true;
+  const mine = gen;
+  let res = null, error = null;
+  try { res = await api("/api/preview", {plan: draft, previous: saved ? saved.success : null}); }
+  catch (err) { error = err; }
+  inflight = false;
+  if (mine !== gen) { if (needsPreview()) preview(); return; }
+  showError(error);
+  if (res) showResults(res);
+}
+// The arrow follows the number; the colour says whether that is better (lower taxes are).
+function delta(now, then, fmt, lowerIsBetter = false) {
+  if (then == null || now == null || Math.round(now) === Math.round(then)) return "";
+  const d = now - then, better = lowerIsBetter ? d < 0 : d > 0;
+  return ` <span class="${better ? "up" : "down"}">${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}</span>`;
+}
+function showResults(r) {
+  lastPreview = r;
+  const s = saved || {};
+  const shortTile = r.first_short_age_bad == null ? "Never runs short" : `Runs short at ${r.first_short_age_bad}`;
+  const tiles = [
+    ["Legacy at " + draft.end_age, short(r.legacy) + delta(r.legacy, s.legacy, short), "After tax, home included · bad luck " + short(r.legacy_bad)],
+    ["Investments at retirement", short(r.investments_at_retirement) + delta(r.investments_at_retirement, s.investments_at_retirement, short), "Average future"],
+    ["Bad-luck future", shortTile, r.short_years_bad + " short year" + (r.short_years_bad === 1 ? "" : "s") + " (1-in-10 bad run)"],
+    ["Lifetime taxes", short(r.lifetime_tax) + delta(r.lifetime_tax, s.lifetime_tax, short, true), "Income tax plus tax at death"],
+  ];
+  $("tiles").innerHTML = tiles.map(([a, b, c]) => `<div class="tile"><div class="label">${esc(a)}</div>
+    <div class="value">${b}</div><div class="sub">${esc(c)}</div></div>`).join("");
+  const cfg = {displaylogo: false, responsive: true};
+  Plotly.react("gauge", r.gauge.data, r.gauge.layout, cfg);
+  Plotly.react("chart", r.chart.data, Object.assign(r.chart.layout, {height: 420}), cfg);
+  $("note").textContent = `Quick estimate over ${r.paths.toLocaleString()} futures, compared with the saved plan on the same futures. ` +
+    `The report uses ${(reportPaths || r.paths).toLocaleString()} and adds the what-if suggestions.`;
+  if ($("median")) $("median").textContent = pct(r.median_return, 2);
+  $("balances").textContent = r.balances_source;
+}
+function load(state) {
+  original = state.plan; draft = clone(original); saved = state.saved;
+  strategies = state.strategies; limits = state.limits; reportPaths = state.report_paths;
+  $("plan-path").textContent = state.path;
+  if (saved) $("balances").textContent = saved.balances_source;
+  render(); changed();
+  if (state.error) showError(state.error);
+}
+
+$("revert").onclick = () => { draft = clone(original); edited(); };
+$("save").onclick = async () => {
+  try { load(await api("/api/plan", {plan: draft})); } catch (err) { showError(err); }
+};
+$("reload").onclick = async () => {
+  try { const st = await api("/api/reload-balances", {}); saved = st.saved; changed(); } catch (err) { showError(err); }
+};
+$("report").onclick = async () => {
+  const status = $("report-status");
+  try {
+    load(await api("/api/report", {plan: draft}));     // saved; the report runs in the background
+  } catch (err) { showError(err); return; }
+  $("report").disabled = true;
+  status.innerHTML = `<span class="spin"></span>Saved; building the report…`;
+  const poll = setInterval(async () => {
+    const job = await api("/api/report/status");
+    if (job.state === "running") return;
+    clearInterval(poll);
+    $("report").disabled = false;
+    if (job.state === "done") {
+      status.innerHTML = `Report ready (${pct(job.success)}): <a href="${job.url}" target="_blank">open ↗</a>`;
+      window.open(job.url, "_blank");
+    } else {
+      status.textContent = "Report failed: " + job.message;
+    }
+  }, 1000);
+};
+
+api("/api/plan").then(load).catch(showError);
+</script>
+</body>
+</html>
