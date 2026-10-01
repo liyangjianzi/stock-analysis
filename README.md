@@ -153,24 +153,19 @@ library entry point: `from stockanalysis.thesis import register, from_signal_mat
 
 ## Retirement planner (Canada)
 
-Projects a one- or two-person Canadian household year by year under federal +
-Alberta tax, CPP, OAS (clawback, deferral, +10% at 75), RRSP→RRIF minimums, TFSA
-room and Alberta LIF rules, over 10,000 simulated return paths. The HTML report
-shows the chance the money lasts, the after-tax legacy, a stacked income-by-source
-chart with an Average / Bad-luck switch, one-change what-if suggestions ranked by
-effect, the money left by age, a year-by-year table and every rule with its
-official source.
+Projects a Canadian household year by year under federal + Alberta tax, CPP,
+OAS, RRIF, TFSA and Alberta LIF rules, over 10,000 simulated futures. The report
+shows the chance the money lasts, the after-tax legacy, income by source and
+ranked what-ifs. A local page lets you edit the plan with sliders.
 
 ```bash
 stock-analysis retire --init    # starter retirement/plan.json (invented example values)
+stock-analysis retire --gui     # edit the plan in a browser, live estimate, report button
 scripts/retire.sh               # run it -> retirement/output/<ts>/retirement_report.html, opens it
 ```
 
-`retirement/` is gitignored — a personal plan and its reports never enter git.
-Balances come from plan.json `balances`, or from a holdings workbook sorted by
-account name (RRSP / TFSA / RESP / LIRA-LIF). All statutory values live in
-`src/stockanalysis/retirement/rules.py`, each cited to its official page; update
-them each January. Library: `from stockanalysis.retirement import load_inputs, run`.
+Full guide (flags, plan.json fields, the editor, reading the report, the library
+API): [`src/stockanalysis/retirement/README.md`](src/stockanalysis/retirement/README.md).
 
 ## Google Sheets export
 
@@ -234,7 +229,7 @@ src/stockanalysis/
   cli.py          `stock-analysis` entry point
   outputs/        Exporter interface + Excel + Google Sheets
   thesis/         thesis tracking (lifecycle + JSON store + postmortems) — see its README
-  retirement/     Canadian retirement planner (rules, tax, engine, what-ifs, report, `retire` CLI)
+  retirement/     Canadian retirement planner (rules, tax, engine, what-ifs, report, `retire` CLI, `--gui`) — see its README
 notebooks/
   stock_analysis.ipynb     thin interactive demo over the package
   thesis_tracking.ipynb    thesis lifecycle + postmortem demo

@@ -191,8 +191,27 @@ def _build(d: dict) -> PlanInputs:
         raise ValueError(f"plan.json has an unexpected or missing field: {e}") from e
 
 
+class PlanError(ValueError):
+    """A plan.json value that fails validation; ``field`` is its path, e.g. ``people[0].age``."""
+
+    def __init__(self, field: str, message: str):
+        super().__init__(f"{field}: {message}")
+        self.field = field
+
+
 def _fail(field_name: str, message: str):
-    raise ValueError(f"{field_name}: {message}")
+    raise PlanError(field_name, message)
+
+
+def limits(province: str) -> dict:
+    """The statutory age and share limits ``validate`` enforces, read from rules.py
+    (the GUI's sliders use the same numbers)."""
+    cpp, oas, lif = rules.CPP["adjustment"].value, rules.OAS["deferral"].value, rules.LIF[province]
+    return {"cpp_start_age": (cpp["min_age"], cpp["max_age"]),
+            "oas_start_age": (oas["min_age"], oas["max_age"]),
+            "convert_by_age": rules.RRIF["convert_by_age"].value,
+            "lif_min_age": lif["min_age"].value,
+            "unlock_share": lif["unlock_share"].value}
 
 
 def validate(plan: PlanInputs) -> PlanInputs:
@@ -204,8 +223,9 @@ def validate(plan: PlanInputs) -> PlanInputs:
     ids = [p.id for p in plan.people]
     if len(set(ids)) != len(ids):
         _fail("people", "ids must be unique")
-    lif_min = rules.LIF[plan.province]["min_age"].value
-    max_unlock = rules.LIF[plan.province]["unlock_share"].value
+    lim = limits(plan.province)
+    lif_min, max_unlock, convert_by = lim["lif_min_age"], lim["unlock_share"], lim["convert_by_age"]
+    (cpp_lo, cpp_hi), (oas_lo, oas_hi) = lim["cpp_start_age"], lim["oas_start_age"]
     for i, p in enumerate(plan.people):
         f = f"people[{i}]"
         if not 18 <= p.age < plan.end_age:
@@ -214,16 +234,16 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"{f}.retire_age", f"{p.retire_age} is below age {p.age}")
         if p.retire_age >= plan.end_age:
             _fail(f"{f}.retire_age", f"{p.retire_age} must be below end_age {plan.end_age}")
-        if not 60 <= p.cpp_start_age <= 70:
-            _fail(f"{f}.cpp_start_age", "CPP starts between 60 and 70")
-        if not 65 <= p.oas_start_age <= 70:
-            _fail(f"{f}.oas_start_age", "OAS starts between 65 and 70")
-        if p.rrif_start_age > rules.RRIF["convert_by_age"].value:
-            _fail(f"{f}.rrif_start_age", "an RRSP must become a RRIF by 71")
+        if not cpp_lo <= p.cpp_start_age <= cpp_hi:
+            _fail(f"{f}.cpp_start_age", f"CPP starts between {cpp_lo} and {cpp_hi}")
+        if not oas_lo <= p.oas_start_age <= oas_hi:
+            _fail(f"{f}.oas_start_age", f"OAS starts between {oas_lo} and {oas_hi}")
+        if p.rrif_start_age > convert_by:
+            _fail(f"{f}.rrif_start_age", f"an RRSP must become a RRIF by {convert_by}")
         if p.lif_start_age is not None and p.lif_start_age < lif_min:
             _fail(f"{f}.lif_start_age", f"a LIF can start at {lif_min} at the earliest")
-        if p.lif_start_age is not None and p.lif_start_age > rules.RRIF["convert_by_age"].value:
-            _fail(f"{f}.lif_start_age", "locked-in money must become a LIF by 71")
+        if p.lif_start_age is not None and p.lif_start_age > convert_by:
+            _fail(f"{f}.lif_start_age", f"locked-in money must become a LIF by {convert_by}")
         if not 0 <= p.unlock_share <= max_unlock:
             _fail(f"{f}.unlock_share", f"between 0 and {max_unlock}")
         if not 0 <= p.cpp_earnings_ratio <= 1:
@@ -289,7 +309,12 @@ def load_inputs(path) -> PlanInputs:
     if not path.exists():
         raise FileNotFoundError(
             f"No plan at {path}. Create one with: stock-analysis retire --init --inputs {path}")
-    return validate(_build(json.loads(path.read_text(encoding="utf-8"))))
+    return parse(json.loads(path.read_text(encoding="utf-8")))
+
+
+def parse(d: dict) -> PlanInputs:
+    """A plan.json dict -> validated PlanInputs (ValueError names the offending field)."""
+    return validate(_build(d))
 
 
 def write_template(path) -> Path:

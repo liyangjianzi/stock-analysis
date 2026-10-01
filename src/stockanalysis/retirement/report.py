@@ -94,6 +94,8 @@ def _style_axes(fig: go.Figure, height: int) -> go.Figure:
 
 
 def success_meter(success: float, previous: float | None = None) -> go.Figure:
+    if previous is not None and round(previous * 100) == round(success * 100):
+        previous = None                 # a "0 pts" delta is noise, not news
     delta = None if previous is None else {
         "reference": round(previous * 100), "suffix": " pts",
         "increasing": {"color": GOOD_TEXT}, "decreasing": {"color": CRITICAL}}
@@ -329,13 +331,17 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
             f"</header>{body}</body></html>")
 
 
-def write_summary(result: PlanResult, path) -> str:
-    """The run's headline numbers, so the next run can show the change."""
+def headline(result: PlanResult) -> dict:
+    """The run's headline numbers (simulated success, the average future's money)."""
     avg = result.average
-    data = {"generated": dt.datetime.now().isoformat(timespec="seconds"),
-            "success": result.simulated.success, "paths": result.simulated.paths,
+    return {"success": result.simulated.success, "paths": result.simulated.paths,
             "legacy": float(avg.legacy[0]), "lifetime_tax": float(avg.lifetime_tax[0]),
             "investments_at_retirement": float(avg.investments_at_retirement[0])}
+
+
+def write_summary(result: PlanResult, path) -> str:
+    """The run's headline numbers, so the next run can show the change."""
+    data = {"generated": dt.datetime.now().isoformat(timespec="seconds"), **headline(result)}
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
