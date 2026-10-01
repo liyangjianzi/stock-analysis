@@ -279,6 +279,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_risk_parser(sub)
     from .thesis import cli as thesis_cli
     thesis_cli.add_parser(sub)
+    from .retirement import cli as retire_cli
+    retire_cli.add_parser(sub)
     return parser
 
 
@@ -455,6 +457,14 @@ def main(argv=None) -> int:
             return thesis_cli.dispatch(args)
         except (ValueError, KeyError, FileNotFoundError) as e:
             print(f"Thesis command failed: {e}", file=sys.stderr)
+            return 1
+
+    if args.command == "retire":
+        from .retirement import cli as retire_cli
+        try:
+            return retire_cli.dispatch(args)
+        except (ValueError, FileNotFoundError, FileExistsError) as e:
+            print(f"Retire command failed: {e}", file=sys.stderr)
             return 1
 
     return 1

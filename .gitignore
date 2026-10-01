@@ -32,6 +32,9 @@ secrets/
 # Real portfolio holdings (read from a private Google Sheet). This repo is
 # public: snapshots of positions must never be committed.
 data/holdings*
+# Personal retirement plan (real spending, income, balances) — same reason.
+# Anchored to the root: src/stockanalysis/retirement/ is source code.
+/retirement/
 
 # OS / IDE
 .DS_Store

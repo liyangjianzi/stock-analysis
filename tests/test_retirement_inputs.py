@@ -1,0 +1,156 @@
+"""plan.json loading/validation and sorting holdings accounts (invented numbers)."""
+from __future__ import annotations
+
+import copy
+import json
+import re
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from stockanalysis.retirement import inputs
+
+
+@pytest.fixture
+def plan(tmp_path):
+    return inputs.load_inputs(inputs.write_template(tmp_path / "plan.json"))
+
+
+def test_template_round_trip(plan):
+    assert [p.id for p in plan.people] == ["A", "B"]
+    assert plan.withdrawal.strategy == "rrsp_first"
+    assert {a.type for a in plan.accounts} == {"rrsp", "tfsa", "pension", "nonreg"}
+    assert plan.spending.changes[0].amount == -10_000
+    assert plan.home.downsize_age == 65
+
+
+def test_write_template_refuses_to_overwrite(tmp_path):
+    path = tmp_path / "plan.json"
+    path.write_text("{}")
+    with pytest.raises(FileExistsError, match="already exists"):
+        inputs.write_template(path)
+
+
+def test_missing_plan_names_the_init_hint(tmp_path):
+    with pytest.raises(FileNotFoundError, match="--init"):
+        inputs.load_inputs(tmp_path / "nope.json")
+
+
+@pytest.mark.parametrize("edit, field", [
+    (lambda d: d["people"][0].update(retire_age=40), "people[0].retire_age"),
+    (lambda d: d["people"][0].update(cpp_start_age=58), "people[0].cpp_start_age"),
+    (lambda d: d["people"][1].update(lif_start_age=45), "people[1].lif_start_age"),
+    (lambda d: d["withdrawal"].update(strategy="yolo"), "withdrawal.strategy"),
+    (lambda d: d.update(province="ZZ"), "province"),
+    (lambda d: d["spending"].update(slow_go_share=1.5), "spending.slow_go_share"),
+    (lambda d: d["home"].update(new_value=2_000_000), "home.new_value"),
+    (lambda d: d["balances"][0].update(owner="Z"), "balances[0].owner"),
+])
+def test_validation_names_the_field(tmp_path, edit, field):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    edit(d)
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match=re.escape(field)):
+        inputs.load_inputs(path)
+
+
+def _frame(rows):
+    return pd.DataFrame(rows, columns=["account", "kind", "shares", "cost", "value", "value_cad"])
+
+
+MAPPING = {"owners": {"A": ["Partner A"], "B": ["Partner B"]},
+           "accounts": {"Partner B Company": {"owner": "B", "type": "pension"},
+                        "Partner A Lifeco shares": {"type": "nonreg"}},
+           "ignore": []}
+
+
+def test_holdings_sorted_by_keywords_and_mapping(plan):
+    frame = _frame([
+        ["Partner A RRSP", "stock", 10, 50.0, 1_000.0, 1_000.0],
+        ["Partner B TFSA CAD", "cash", np.nan, np.nan, 500.0, 500.0],
+        ["Family RESP", "stock", 5, 10.0, 100.0, 100.0],
+        ["Partner B Company", "other", np.nan, np.nan, 2_000.0, 2_000.0],
+        ["Partner A Lifeco shares", "stock", 10, 5.0, 100.0, 100.0],
+    ])
+    accts = {(a.owner, a.type): a for a in inputs.balances_from_holdings(frame, MAPPING, plan.people)}
+    assert accts[("A", "rrsp")].balance == 1_000
+    assert accts[("B", "tfsa")].balance == 500
+    assert accts[("B", "pension")].balance == 2_000
+    assert accts[("A", "nonreg")].balance == 100 and accts[("A", "nonreg")].cost == 50
+    assert sum(a.balance for a in accts.values()) == 3_600      # the RESP is excluded
+
+
+def test_keyword_collisions_are_not_misread(plan):
+    # "Lifeco" must not be read as a LIF, and nothing unmapped is silently dropped.
+    frame = _frame([["Partner A Lifeco", "stock", 1, 1.0, 10.0, 10.0],
+                    ["Partner A RESP", "cash", np.nan, np.nan, 5.0, 5.0]])
+    with pytest.raises(ValueError, match="Partner A Lifeco"):
+        inputs.balances_from_holdings(frame, {"owners": MAPPING["owners"]}, plan.people)
+
+
+def test_account_with_no_owner_raises(plan):
+    frame = _frame([["Joint RRSP", "cash", np.nan, np.nan, 5.0, 5.0]])
+    with pytest.raises(ValueError, match="whose"):
+        inputs.balances_from_holdings(frame, {"owners": MAPPING["owners"]}, plan.people)
+
+
+def test_with_holdings_replaces_the_balances(plan):
+    frame = _frame([["Partner A RRSP", "cash", np.nan, np.nan, 7.0, 7.0]])
+    out = inputs.with_holdings(plan, frame)
+    assert out.accounts == (inputs.Account(owner="A", type="rrsp", balance=7.0, cost=None),)
+
+
+def test_a_non_finite_holding_stops_the_run(plan):
+    # A #N/A cell in the sheet arrives as NaN: it must not be silently dropped.
+    frame = _frame([["Partner A RRSP", "stock", 10, 5.0, np.nan, np.nan],
+                    ["Partner A RRSP", "cash", np.nan, np.nan, 100.0, 100.0]])
+    with pytest.raises(ValueError, match="Partner A RRSP"):
+        inputs.balances_from_holdings(frame, MAPPING, plan.people)
+
+
+def test_validation_rejects_a_nan_cost(tmp_path):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["balances"][2]["cost"] = float("nan")
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match=re.escape("balances[2].cost")):
+        inputs.load_inputs(path)
+
+
+# -- deferred minors ------------------------------------------------------------------
+
+def _write(tmp_path, edit):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    edit(d)
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(d))
+    return path
+
+
+def test_a_downsize_age_already_passed_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match=re.escape("home.downsize_age")):
+        inputs.load_inputs(_write(tmp_path, lambda d: d["home"].update(downsize_age=40)))
+
+
+def test_a_lif_must_start_by_71(tmp_path):
+    with pytest.raises(ValueError, match=re.escape("people[0].lif_start_age")):
+        inputs.load_inputs(_write(tmp_path, lambda d: d["people"][0].update(lif_start_age=72)))
+
+
+def test_locked_in_rrsp_names_are_pension_money(plan):
+    frame = _frame([["Partner A Locked-in RRSP", "cash", np.nan, np.nan, 10.0, 10.0],
+                    ["Partner B LRSP", "cash", np.nan, np.nan, 5.0, 5.0]])
+    accts = inputs.balances_from_holdings(frame, MAPPING, plan.people)
+    assert {(a.owner, a.type) for a in accts} == {("A", "pension"), ("B", "pension")}
+
+
+def test_owner_keywords_match_whole_words(plan):
+    frame = _frame([["Personal RRSP", "cash", np.nan, np.nan, 5.0, 5.0]])
+    with pytest.raises(ValueError, match="whose"):
+        inputs.balances_from_holdings(frame, {"owners": {"A": ["Al"], "B": ["Bo"]}}, plan.people)
+
+
+def test_template_explains_balances_versus_holdings(plan):
+    assert "holdings" in inputs.TEMPLATE["_readme"] and "balances" in inputs.TEMPLATE["_readme"]
