@@ -90,3 +90,35 @@ def test_age_amount_uses_net_income_after_the_oas_repayment():
     # Fed .14*58,523 + .205*40,775.45 - .14*(16,452 + 1,278.0325) = 14,069.982
     # AB  .08*61,200 + .10*38,098.45 - .08*22,769 (age amount fully phased out) = 6,884.325
     assert t(ordinary=90_850, oas=9_150, age=70) == pytest.approx(14_069.982 + 6_884.325 + 701.55, abs=0.01)
+
+
+def test_eligible_dividends_alone_are_tax_free_up_to_a_point_in_alberta():
+    # $50k received -> 69,000 grossed up. Fed: 8,193.22 + .205*10,477 = 10,341.005 against
+    # credits .14*16,452 + .150198*69,000 = 12,666.94 -> 0. AB: 4,896 + 780 = 5,676 against
+    # .08*22,769 + .0812*69,000 = 7,424.32 -> 0.
+    assert t(dividends=50_000, age=50) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_eligible_dividends_hand_worked():
+    # $100k received -> 138,000. Fed: 8,193.22 + .205*58,522 + .26*20,955 = 25,638.53
+    #   minus .14*16,452 + .150198*138,000 = 23,030.604 -> 2,607.926. AB credits exceed tax -> 0.
+    assert t(dividends=100_000, age=50) == pytest.approx(2_607.926, abs=0.01)
+
+
+def test_the_gross_up_counts_toward_the_oas_recovery():
+    # 80,000 * 1.38 + 9,150 = 119,550 total income: .15 * (119,550 - 95,323) = 3,634.05.
+    gross = tax.total_income(dividends=80_000, oas=9_150)
+    assert float(gross) == pytest.approx(119_550)
+    assert float(tax.oas_recovery(gross, 9_150)) == pytest.approx(3_634.05, abs=0.01)
+    # So adding OAS on top costs the recovery plus ordinary tax on the 9,150.
+    added = t(dividends=80_000, oas=9_150, age=70) - t(dividends=80_000, age=70)
+    assert added > 3_634.05
+
+
+def test_extra_tax_is_the_tax_on_top_of_a_base():
+    assert float(tax.extra_tax(150_000, ordinary=10_000, age=50)) == pytest.approx(
+        t(ordinary=160_000, age=50) - t(ordinary=150_000, age=50))
+
+
+def test_eligible_dividends_are_taxed_below_ordinary_income():
+    assert t(dividends=20_000, age=50) < t(ordinary=20_000, age=50)

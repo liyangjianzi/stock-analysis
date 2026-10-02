@@ -154,3 +154,21 @@ def test_owner_keywords_match_whole_words(plan):
 
 def test_template_explains_balances_versus_holdings(plan):
     assert "holdings" in inputs.TEMPLATE["_readme"] and "balances" in inputs.TEMPLATE["_readme"]
+
+
+def test_nonreg_income_defaults_to_none_and_is_bounded():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d.pop("nonreg_income")
+    assert inputs.parse(d).nonreg_income.total == 0.0
+    d["nonreg_income"] = {"eligible_dividends": 0.5}
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "nonreg_income.eligible_dividends"
+
+
+def test_salary_must_not_be_negative():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["salary"] = -1
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].salary"

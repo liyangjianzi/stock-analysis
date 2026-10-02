@@ -25,7 +25,7 @@ commit messages, docs or this skill. Tests use invented households only.
 ## Run it
 
 ```bash
-scripts/retire.sh                  # run the plan, log to logs/, open the report
+scripts/retire.sh                  # run the plan, log to retirement/logs/, open the report
 scripts/retire.sh --paths 2000     # faster; extra args go to `stock-analysis retire`
 NO_OPEN=1 scripts/retire.sh        # don't open the browser
 stock-analysis retire --init       # first time only: starter plan.json (invented values)
@@ -81,6 +81,8 @@ Library: `from stockanalysis.retirement import load_inputs, run` then
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, costs, `property_tax`, `insurance` |
 | `returns` | real `mean`, `sd`, `paths`, `seed` |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`) |
+| `education` | kids (`age`, `start_age`, `years`, `living` home/away), costs per student-year, family RESP (`resp_balance` from holdings by default; `contribute` while the grant is still earned), `student_grant` (Canada Student Grant, tested on last year's taxable family income, so the withdrawal order matters) |
+| `nonreg_income` | yearly non-registered payouts as shares of the balance (`eligible_dividends`, `foreign_dividends`, `interest`), taxed every year; with `people[].salary` for the working years |
 | `holdings` | owner keywords (whole words) and explicit `accounts` for names that don't say RRSP / TFSA / RESP / LIRA-LIF / Locked-in; an unsorted account **stops the run** |
 | `scenarios` | `downsize_ages` to test (null = never), `cheaper_home_share` |
 
@@ -121,5 +123,5 @@ big decisions.
 ## Known simplifications
 
 Both spouses live to `end_age` (no survivor benefits); no GIS, QPP or provinces
-other than Alberta; no tax drag inside non-registered accounts; full-year CPP/OAS
+other than Alberta; non-registered payouts as a fixed share of the balance (no fund capital-gains distributions); full-year CPP/OAS
 in the start year; household events (stages, downsizing) key on people[0]'s age.

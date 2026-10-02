@@ -100,3 +100,16 @@ def test_money_left_labels_do_not_collide(built):
 
 def test_assumptions_explain_tfsa_room(built):
     assert "TFSA room carried in" in _html(built)
+
+
+def test_education_section_only_when_the_plan_has_children():
+    import copy
+    from stockanalysis.retirement import engine, inputs, scenarios
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["education"] = {"kids": [{"name": "Older", "age": 17}], "resp_balance": 30_000}
+    for plan, present in ((inputs.parse(d), True), (inputs.parse(inputs.TEMPLATE), False)):
+        result = engine.run(plan, paths=40)
+        baseline, ranked = scenarios.rank(plan, paths=20, seed=1)
+        html = report.build_report(result, baseline, ranked, generated_at="now")
+        assert (f'id="{report.EDUCATION_ID}"' in html) is present
+        assert ("Canada Student Grants" in html) is present

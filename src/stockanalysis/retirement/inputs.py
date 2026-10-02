@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import MISSING, dataclass, field, fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +21,10 @@ import pandas as pd
 from . import rules
 
 ACCOUNT_TYPES = ("rrsp", "pension", "tfsa", "nonreg")
+LIVING = ("home", "away")
+# Yearly cost per student in today's dollars: an editable estimate, not a rule.
+# Home ~ Alberta undergraduate tuition, fees and books; away adds residence and food.
+EDUCATION_COSTS = {"home": 11_000.0, "away": 25_000.0}
 STRATEGIES = ("rrsp_first", "proportional", "steady_income")
 STRATEGY_LABELS = {
     "rrsp_first": "Withdraw from RRSP/RRIF first",
@@ -54,6 +58,7 @@ class Person:
     lif_start_age: int | None = None
     unlock_share: float = 0.5
     tfsa_room: float = 0.0      # unused room carried in from past years, before this year's limit
+    salary: float | None = None  # gross employment income while working; taxes non-reg payouts then
     contributions: dict = field(default_factory=dict)
     contributions_when_partner_retired: dict | None = None
 
@@ -104,6 +109,47 @@ class Withdrawal:
 
 
 @dataclass(frozen=True)
+class NonregIncome:
+    """Yearly payouts of the non-registered accounts, as shares of their balance.
+
+    They are part of ``returns.mean`` (not extra growth), are reinvested (so they
+    raise the cost base) and are taxed every year: eligible Canadian dividends with
+    the gross-up and dividend credits, foreign dividends and interest as ordinary
+    income.
+    """
+    eligible_dividends: float = 0.0
+    foreign_dividends: float = 0.0
+    interest: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.eligible_dividends + self.foreign_dividends + self.interest
+
+
+@dataclass(frozen=True)
+class Kid:
+    name: str
+    age: int
+    start_age: int = 18
+    years: int = 4
+    living: str = "away"                    # "home" or "away" while studying
+    cesg_received: float | None = None       # grant so far; None: every year's grant collected
+
+
+@dataclass(frozen=True)
+class Education:
+    """Children's school, paid from a family RESP; what it can't cover is household spending."""
+    kids: tuple = ()
+    costs: dict = field(default_factory=lambda: dict(EDUCATION_COSTS))
+    resp_balance: float | None = None   # None: the holdings' RESP accounts (or 0 without holdings)
+    contributed: float | None = None    # contributions so far; None: grants / grant rate
+    grants: float | None = None         # CESG so far; None: the kids' cesg_received (estimated)
+    contribute: bool = True             # contribute each January while it still earns the grant
+    aip_to_rrsp: bool = True            # leftover growth to the RRSP (up to the limit) first
+    student_grant: bool = True          # apply for the Canada Student Grant (income-tested)
+
+
+@dataclass(frozen=True)
 class Account:
     owner: str
     type: str
@@ -122,6 +168,8 @@ class PlanInputs:
     returns: Returns
     withdrawal: Withdrawal
     accounts: tuple = ()
+    nonreg_income: NonregIncome = NonregIncome()
+    education: Education | None = None
     holdings: dict = field(default_factory=dict)
     scenarios: dict = field(default_factory=dict)
 
@@ -140,12 +188,14 @@ TEMPLATE = {
          "cpp_start_age": 70, "oas_start_age": 70, "cpp_at_65": None,
          "cpp_years": 25, "cpp_earnings_ratio": 0.9, "years_in_canada_at_65": 40,
          "rrif_start_age": 65, "lif_start_age": None, "unlock_share": 0.5, "tfsa_room": 0,
+         "salary": 105000,
          "contributions": {"pension": 8000, "tfsa": 7000, "rrsp": 10000, "nonreg": 0},
          "contributions_when_partner_retired": None},
         {"id": "B", "name": "Partner B", "age": 48, "retire_age": 58,
          "cpp_start_age": 70, "oas_start_age": 70, "cpp_at_65": None,
          "cpp_years": 20, "cpp_earnings_ratio": 0.9, "years_in_canada_at_65": 38,
          "rrif_start_age": 65, "lif_start_age": None, "unlock_share": 0.5, "tfsa_room": 0,
+         "salary": 90000,
          "contributions": {"pension": 6000, "tfsa": 7000, "rrsp": 8000, "nonreg": 0},
          "contributions_when_partner_retired": None},
     ],
@@ -157,6 +207,7 @@ TEMPLATE = {
              "moving_cost": 20000, "property_tax": 6000, "insurance": 2000},
     "returns": {"mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
     "withdrawal": {"strategy": "rrsp_first", "steady_income_target": 58000},
+    "nonreg_income": {"eligible_dividends": 0.015, "foreign_dividends": 0.01, "interest": 0.0},
     "balances": [
         {"owner": "A", "type": "rrsp", "balance": 400000},
         {"owner": "A", "type": "tfsa", "balance": 100000},
@@ -182,6 +233,8 @@ def _build(d: dict) -> PlanInputs:
             returns=Returns(**d.get("returns", {})),
             withdrawal=Withdrawal(**d.get("withdrawal", {})),
             accounts=tuple(Account(**a) for a in d.get("balances") or []),
+            nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
+            education=_education(d.get("education")),
             holdings=dict(d.get("holdings") or {}),
             scenarios=dict(d.get("scenarios") or {}),
         )
@@ -199,6 +252,15 @@ class PlanError(ValueError):
         self.field = field
 
 
+def _education(d: dict | None) -> Education | None:
+    if d is None:
+        return None
+    d = dict(d)
+    kids = tuple(Kid(**k) for k in d.pop("kids", []))
+    costs = {**EDUCATION_COSTS, **(d.pop("costs", None) or {})}
+    return Education(kids=kids, costs=costs, **d)
+
+
 def _fail(field_name: str, message: str):
     raise PlanError(field_name, message)
 
@@ -207,11 +269,23 @@ def limits(province: str) -> dict:
     """The statutory age and share limits ``validate`` enforces, read from rules.py
     (the GUI's sliders use the same numbers)."""
     cpp, oas, lif = rules.CPP["adjustment"].value, rules.OAS["deferral"].value, rules.LIF[province]
+    cesg, aip = rules.RESP["cesg"].value, rules.RESP["aip"].value
     return {"cpp_start_age": (cpp["min_age"], cpp["max_age"]),
             "oas_start_age": (oas["min_age"], oas["max_age"]),
             "convert_by_age": rules.RRIF["convert_by_age"].value,
             "lif_min_age": lif["min_age"].value,
-            "unlock_share": lif["unlock_share"].value}
+            "unlock_share": lif["unlock_share"].value,
+            "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
+            "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
+            "student_grant_max": rules.STUDENT_GRANT.value["yearly_max"],
+            "aip_rrsp_max": aip["rrsp_transfer_max"], "aip_extra_tax": aip["extra_tax"]}
+
+
+def defaults() -> dict:
+    """Defaults for the optional sections the GUI can add, for filling blanks."""
+    flags = {f.name: f.default for f in fields(Education) if isinstance(f.default, bool)}
+    kid = {f.name: f.default for f in fields(Kid) if f.default not in (MISSING, None)}
+    return {"education": {**flags, "costs": dict(EDUCATION_COSTS)}, "kid": kid}
 
 
 def validate(plan: PlanInputs) -> PlanInputs:
@@ -253,6 +327,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
                 _fail(f"{f}.{name}", "must not be negative")
         if p.cpp_at_65 is not None and p.cpp_at_65 < 0:
             _fail(f"{f}.cpp_at_65", "must not be negative")
+        if p.salary is not None and p.salary < 0:
+            _fail(f"{f}.salary", "must not be negative")
         for label, amounts in (("contributions", p.contributions),
                                ("contributions_when_partner_retired",
                                 p.contributions_when_partner_retired or {})):
@@ -288,10 +364,35 @@ def validate(plan: PlanInputs) -> PlanInputs:
     r = plan.returns
     if r.mean <= -1 or r.sd < 0 or r.paths < 1:
         _fail("returns", "need mean > -1, sd >= 0 and paths >= 1")
+    for name in ("eligible_dividends", "foreign_dividends", "interest"):
+        if not 0 <= getattr(plan.nonreg_income, name) <= 0.2:
+            _fail(f"nonreg_income.{name}", "a yearly share of the balance between 0 and 0.2")
     if plan.withdrawal.strategy not in STRATEGIES:
         _fail("withdrawal.strategy", f"{plan.withdrawal.strategy!r} is not one of {STRATEGIES}")
     if plan.withdrawal.steady_income_target < 0:
         _fail("withdrawal.steady_income_target", "must not be negative")
+    e = plan.education
+    if e is not None:
+        for living, cost in e.costs.items():
+            if living not in LIVING or not cost >= 0:
+                _fail(f"education.costs.{living}", f"a yearly cost (not negative) for one of {LIVING}")
+        for name in ("resp_balance", "contributed", "grants"):
+            if getattr(e, name) is not None and not getattr(e, name) >= 0:
+                _fail(f"education.{name}", "must not be negative")
+        for k, kid in enumerate(e.kids):
+            f = f"education.kids[{k}]"
+            if not 0 <= kid.age <= 30:
+                _fail(f"{f}.age", "between 0 and 30")
+            (lo, hi), (ylo, yhi) = lim["kid_start_age"], lim["kid_years"]
+            if not lo <= kid.start_age <= hi:
+                _fail(f"{f}.start_age", f"between {lo} and {hi}")
+            if not ylo <= kid.years <= yhi:
+                _fail(f"{f}.years", f"between {ylo} and {yhi}")
+            if kid.living not in LIVING:
+                _fail(f"{f}.living", f"one of {LIVING}")
+            if kid.cesg_received is not None and not (
+                    0 <= kid.cesg_received <= rules.RESP["cesg"].value["lifetime_max"]):
+                _fail(f"{f}.cesg_received", "between 0 and the lifetime grant maximum")
     for j, a in enumerate(plan.accounts):
         if a.owner not in ids:
             _fail(f"balances[{j}].owner", f"{a.owner!r} is not one of the people {ids}")
@@ -401,6 +502,17 @@ def balances_from_holdings(frame: pd.DataFrame, mapping: dict, people) -> tuple:
                  for (o, k), (b, c) in sorted(totals.items()))
 
 
+def resp_from_holdings(frame: pd.DataFrame, mapping: dict) -> float:
+    """The holdings' RESP accounts (the ones ``balances_from_holdings`` leaves out)."""
+    rows = frame[[_classify(str(a), mapping) == "exclude" for a in frame["account"]]]
+    return float(rows["value_cad"].sum())
+
+
 def with_holdings(plan: PlanInputs, frame: pd.DataFrame) -> PlanInputs:
-    """``plan`` with its accounts replaced by the sorted holdings."""
-    return validate(replace(plan, accounts=balances_from_holdings(frame, plan.holdings, plan.people)))
+    """``plan`` with its accounts replaced by the sorted holdings (and, when the plan
+    has an education section without a balance, its RESP balance from them)."""
+    plan = replace(plan, accounts=balances_from_holdings(frame, plan.holdings, plan.people))
+    if plan.education is not None and plan.education.resp_balance is None:
+        plan = replace(plan, education=replace(plan.education,
+                                               resp_balance=resp_from_holdings(frame, plan.holdings)))
+    return validate(plan)

@@ -22,6 +22,7 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 | `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `TEMPLATE` is the invented `--init` plan |
 | `engine.py` | Year-by-year accounts over N paths (`simulate`); `run` adds the average future (steady median return) and the bad-luck future (10th-percentile path replayed alone) → `PlanResult` |
 | `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success |
+| `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
 | `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers) and `best_benefit_ages` (per-person CPP x OAS grid on the average-future legacy, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
 | `report.py` | `build_report` (pure; self-contained HTML string), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
 | `cli.py` | `stock-analysis retire`. `generate(plan, source, ...)` is **the one report path** (run → rank → build → save → summary); the CLI and the GUI both call it. `_with_balances(plan, path, load=_load_book)` is the one balance-precedence rule; the GUI passes a caching `load` |
@@ -45,6 +46,44 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 - **LIF:** no minimum in its first year. The maximum is the greater of last year's
   return and the Alberta % × the January 1 balance. Alberta allows a one-time 50%
   unlock at 50+.
+- **Non-registered payouts are taxed every year** (`plan.nonreg_income`, shares of
+  the balance; they are part of `returns.mean`, not extra growth). Eligible
+  Canadian dividends go through `tax.income_tax(dividends=...)`: the 38% gross-up
+  counts toward net income, so they raise the OAS recovery and trim the age amount,
+  and they earn the federal and Alberta credits (`rules.DIVIDENDS`,
+  `PROVINCIAL[..]["dividend_credit"]`, from the CRA 5000-D1 and AB428 worksheets).
+  Foreign dividends and interest are ordinary income.
+  - A **retiree's** payouts enter the household tax loop, so pension splitting and
+    the clawback see them.
+  - A **worker's** payouts are taxed as `tax(salary + payouts) − tax(salary)`. That
+    "drag" is sold out of the account and booked as tax paid and as non-reg
+    income, so the income bars still add up.
+  - Payouts are added to the cost base. Lifetime tax can therefore *fall* while
+    the legacy falls too: tax moves from death to every year and loses compounding.
+    That is correct, not a leak.
+- **The RESP is outside the household's investments.** The holdings' RESP
+  accounts are left out of `accounts` and read only into `education.resp_balance`.
+  School is paid from the RESP first; the shortfall is household need (from savings
+  while anyone works, via `cash_need`). Withdrawals take growth and grants first
+  (taxed to the student: about nothing), then contributions. At `end_step`:
+  contributions go back to people[0]'s non-registered account, grants are repaid,
+  and growth goes to the RRSP (up to `rules.RESP["aip"]`). The rest is taxed plus
+  20%: on top of salary while people[0] works (`tax.extra_tax`), otherwise as
+  their ordinary income inside the household tax loop, alongside CPP, OAS,
+  withdrawals, the clawback and splitting.
+  - The `Schedule` rides on `Projection.school`; the report and GUI read it from
+    there, never rebuild it.
+  - Income-tested amounts use `tax.total_income` (line 15000), the same function
+    `income_tax` uses for gross income. Don't hand-assemble income again.
+  Contributions start the year after `start_year`.
+  - The **Canada Student Grant** (`education.student_grant`, `rules.STUDENT_GRANT`)
+    is path-dependent: each year the engine records `last_income`, the household's
+    line-15000 income (workers' salary and payouts; each part's ordinary + pension
+    + OAS + grossed-up dividends + half of gains). The next school year's grant
+    comes from it. A missing salary while working counts as income too high, and
+    so does the year before a retired household's plan starts.
+  - Statutory values live in `rules.RESP` and `rules.STUDENT_GRANT`; the cost per student-year is a plan input (`inputs.EDUCATION_COSTS`
+  defaults), not a rule.
 - **No registered draws while working.** Nobody's RRSP/LIF is drawn while they
   still work; earned income covers them.
 - **Comparisons share futures.** What-ifs (`scenarios`), the report's

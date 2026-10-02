@@ -5,9 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from stockanalysis.retirement import engine, rules
-from stockanalysis.retirement.inputs import (Account, Home, Person, PlanInputs, Returns,
-                                             Spending, SpendingChange, Withdrawal)
+from dataclasses import replace
+
+from stockanalysis.retirement import engine, rules, tax
+from stockanalysis.retirement.inputs import (Account, Home, NonregIncome, Person, PlanInputs,
+                                             Returns, Spending, SpendingChange, Withdrawal)
 
 
 def person(**kw) -> Person:
@@ -261,3 +263,42 @@ def test_unlocked_lif_money_is_not_in_that_years_rrif_minimum_base():
                          base=0.0, end_age=72))
     lif_min = 0.0                                   # the LIF's first year has no minimum
     assert proj.income["minimums"][0, 0] == pytest.approx(100_000.0 / 21 + lif_min)
+
+
+# -- non-registered payouts -------------------------------------------------------
+
+def test_a_retirees_payouts_are_taxed_every_year():
+    p = plan(accounts=[Account("A", "nonreg", 1_000_000.0, cost=1_000_000.0)], base=40_000.0)
+    without = run_flat(p)
+    taxed = run_flat(replace(p, nonreg_income=NonregIncome(foreign_dividends=0.03)))
+    assert taxed.tax[0, 0] > without.tax[0, 0] + 1_000
+    assert taxed.investments[-1, 0] < without.investments[-1, 0]
+    total = sum(taxed.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, taxed.need + taxed.tax + taxed.saved, atol=2.0)
+
+
+def test_eligible_dividends_cost_less_tax_than_foreign_ones():
+    p = plan(accounts=[Account("A", "nonreg", 1_000_000.0, cost=1_000_000.0)], base=40_000.0)
+    eligible = run_flat(replace(p, nonreg_income=NonregIncome(eligible_dividends=0.03)))
+    foreign = run_flat(replace(p, nonreg_income=NonregIncome(foreign_dividends=0.03)))
+    assert eligible.tax[0, 0] < foreign.tax[0, 0]
+
+
+def test_a_workers_payouts_are_taxed_on_top_of_salary_and_sold_from_the_account():
+    worker = person(age=50, retire_age=55, salary=150_000.0)
+    p = replace(plan(people=[worker], accounts=[Account("A", "nonreg", 500_000.0)], base=40_000.0,
+                     end_age=56), nonreg_income=NonregIncome(foreign_dividends=0.02))
+    proj = run_flat(p)
+    due = float(tax.income_tax(ordinary=160_000, age=50) - tax.income_tax(ordinary=150_000, age=50))
+    assert proj.tax[0, 0] == pytest.approx(due, abs=0.01)
+    assert proj.income["nonreg"][0, 0] == pytest.approx(due, abs=0.01)
+    assert proj.investments[1, 0] == pytest.approx(500_000.0 - due, abs=0.01)
+    low = run_flat(replace(p, people=(replace(worker, salary=40_000.0),)))
+    assert low.tax[0, 0] < proj.tax[0, 0]                 # a lower marginal rate
+
+
+def test_no_payouts_leave_working_years_untaxed():
+    worker = person(age=50, retire_age=55, salary=150_000.0)
+    proj = run_flat(plan(people=[worker], accounts=[Account("A", "nonreg", 500_000.0)],
+                         base=40_000.0, end_age=56))
+    assert proj.tax[0, 0] == 0.0 and proj.investments[1, 0] == pytest.approx(500_000.0)

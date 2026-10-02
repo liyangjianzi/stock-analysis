@@ -102,10 +102,11 @@ aside{position:sticky;top:70px;align-self:start}
 </main>
 <script>
 "use strict";
-const TABS = [["people", "People"], ["spending", "Spending"], ["home", "Home"],
+const TABS = [["people", "People"], ["spending", "Spending"], ["education", "Education"], ["home", "Home"],
               ["investing", "Investing"], ["optimize", "Optimize"], ["advanced", "Advanced"]];
 const ACCOUNTS = [["pension", "Pension / LIRA"], ["rrsp", "RRSP"], ["tfsa", "TFSA"], ["nonreg", "Non-registered"]];
 let original = null, draft = null, saved = null, strategies = {}, limits = {}, reportPaths = null, lastPreview = null;
+let eduDefaults = {}, kidDefaults = {};   // from the server: inputs.defaults()
 let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
 let gen = 0, inflight = false, timer = null;
 // Optimizer results, with the draft they were computed for (shown as out of date after an edit).
@@ -184,6 +185,8 @@ function peoplePanel() {
         ${slider(`${P}.oas_start_age`, "Start OAS at", {min: limits.oas_start_age[0], max: limits.oas_start_age[1],
                  help: "Later pays more each year, for life."})}
         ${slider(`${P}.rrif_start_age`, "RRSP becomes a RRIF at", {min: 50, max: limits.convert_by_age, help: "Only RRIF income at 65+ can be split and gets the pension credit."})}
+        ${number(`${P}.salary`, "Salary while working (C$/yr)", {min: 0, step: 1000, nullable: true,
+                 placeholder: "not set", help: "Taxes your non-registered payouts while you work."})}
         ${number(`${P}.cpp_at_65`, "CPP at 65 (C$/yr, optional)", {min: 0, step: 100, nullable: true, placeholder: "estimate from years worked",
                  help: "Prefer the figure from My Service Canada."})}
       </div>
@@ -218,6 +221,67 @@ function spendingPanel() {
                help: "Share of their value on retirement day."})}
     </div></div>`;
 }
+const newKid = n => ({...kidDefaults, name: `Child ${n}`, age: 10});
+function check(path, label, fallback = false) {
+  const on = get(draft, path) ?? fallback;
+  return `<label class="check"><input type="checkbox" data-path="${path}" ${on ? "checked" : ""}> ${esc(label)}</label>`;
+}
+function educationSummary(e) {
+  if (!e) return "";
+  const kids = e.kids.map(k => `<li>${esc(k.name)}: school ${k.school_years[0]}–${k.school_years[k.school_years.length - 1]},
+      living ${k.living} at ${money(k.yearly_cost)}/yr${k.contributions > 0
+        ? ` · contribute ${money(k.contributions)} more for ${money(k.grants)} of grant`
+        : ` · no grant left to earn (${money(k.grant_left)} unclaimed)`}</li>`).join("");
+  return `<div class="answer"><span>School costs:</span><b>${money(e.cost)}</b>
+      <span class="note">RESP today ${money(e.balance)} · student grants ${money(e.student_grants)} ·
+        you pay ${money(e.household - e.contributions)} plus ${money(e.contributions)} of RESP
+        contributions (average future)</span></div>
+    <ul class="note">${kids}</ul>`;
+}
+function educationPanel() {
+  const e = draft.education;
+  if (!e) return `<div class="card"><p class="note">No children's education in this plan.</p>
+      <button id="add-education">Add children's education</button></div>`;
+  const costs = {...eduDefaults.costs, ...(e.costs || {})};
+  const kids = (e.kids || []).map((k, i) => {
+    const K = `education.kids.${i}`;
+    const opt = (v, label) => `<label class="radio"><input type="radio" name="living-${i}" data-path="${K}.living"
+        value="${v}" ${k.living === v ? "checked" : ""}> ${label}</label>`;
+    return `<div class="card"><h3>${esc(k.name)} <button class="x" data-remove-kid="${i}" title="Remove">×</button></h3>
+      <div class="grid2">
+        ${text(`${K}.name`, "Name")}
+        ${number(`${K}.age`, "Age today", {min: 0, max: 30, step: 1, structural: true})}
+        ${slider(`${K}.start_age`, "Starts university/college at", {min: limits.kid_start_age[0], max: limits.kid_start_age[1]})}
+        ${slider(`${K}.years`, "Years of school", {min: limits.kid_years[0], max: limits.kid_years[1]})}
+      </div>
+      <h4>While studying</h4>
+      ${opt("home", `Living at home (${money(costs.home)}/yr)`)}${opt("away", `Living away (${money(costs.away)}/yr)`)}
+      ${number(`${K}.cesg_received`, "Government grant (CESG) received so far, from the RESP statement",
+               {min: 0, max: limits.cesg_lifetime, step: 100, nullable: true, placeholder: "estimated: every year's grant collected"})}
+    </div>`;
+  }).join("");
+  return `<div class="card"><h3>The plan</h3><div id="edu-summary">${educationSummary(lastPreview && lastPreview.education)}</div>
+      <p class="note">The RESP pays school first; what it can't cover is your spending those years
+        (from savings while you still work).</p></div>
+    ${kids}<button id="add-kid" style="margin-bottom:14px">+ Add a child</button>
+    <div class="card"><h3>Yearly cost per student (today's C$)</h3><div class="grid2">
+      ${number("education.costs.home", "Living at home: tuition, fees, books", {min: 0, step: 500, placeholder: String(eduDefaults.costs.home)})}
+      ${number("education.costs.away", "Living away: plus residence and food", {min: 0, step: 500, placeholder: String(eduDefaults.costs.away)})}
+    </div></div>
+    <div class="card"><h3>RESP</h3>
+      ${check("education.contribute", `Contribute each January while it still earns the government grant (${pct(limits.cesg_rate)})`, eduDefaults.contribute)}
+      <div class="grid2">
+        ${number("education.resp_balance", "Balance today (C$)", {min: 0, step: 1000, nullable: true, placeholder: "from the holdings file"})}
+        ${number("education.contributed", "Contributed so far (C$)", {min: 0, step: 1000, nullable: true, placeholder: "estimated from the grants"})}
+        ${number("education.grants", "Grants received so far (C$)", {min: 0, step: 100, nullable: true, placeholder: "estimated"})}
+      </div>
+      ${check("education.student_grant", `Apply for the Canada Student Grant (up to ${money(limits.student_grant_max)} a student-year when last year's family income is low)`, eduDefaults.student_grant)}
+      <p class="note">Family income is your taxable income: RRSP/RRIF withdrawals count, TFSA withdrawals don't.
+        Drawing "proportionally" (Investing tab) can keep it low enough during school years.</p>
+      ${check("education.aip_to_rrsp", `Move leftover growth to the RRSP (up to ${money(limits.aip_rrsp_max)}) instead of paying tax + ${pct(limits.aip_extra_tax)}`, eduDefaults.aip_to_rrsp)}
+      <p class="note">After the last child's school, your contributions come back tax-free and unused grants are repaid.</p>
+    </div>`;
+}
 function homePanel() {
   const h = draft.home;
   if (!h) return `<div class="card"><p class="note">This plan has no home. Add a "home" section to plan.json to plan a downsize.</p></div>`;
@@ -238,6 +302,13 @@ function investingPanel() {
       ${slider("returns.sd", "Ups and downs (volatility)", {min: 0, max: 0.30, step: 0.01, unit: "%"})}
       <p class="note">Volatility pulls the typical return below the average · typical (median) return
         <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>
+    </div>
+    <div class="card"><h3>Non-registered payouts</h3><div class="grid2">
+      ${number("nonreg_income.eligible_dividends", "Canadian dividends (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
+      ${number("nonreg_income.foreign_dividends", "Foreign dividends (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
+      ${number("nonreg_income.interest", "Interest (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
+      </div><p class="note">Part of the return above, paid out and taxed every year (Canadian dividends get the
+        dividend tax credit). Reinvested, so they raise the cost base.</p>
     </div>
     <div class="card"><h3>Which account to draw from first</h3>
       ${Object.entries(strategies).map(([k, l]) => `<label class="radio"><input type="radio" name="strategy"
@@ -331,7 +402,7 @@ function optimizePanel() {
         It assumes everyone lives to ${draft.end_age}; starting later pays off only if you do.</p>
     </div>`;
 }
-const PANELS = {people: peoplePanel, spending: spendingPanel, home: homePanel,
+const PANELS = {people: peoplePanel, spending: spendingPanel, education: educationPanel, home: homePanel,
                 investing: investingPanel, optimize: optimizePanel, advanced: advancedPanel};
 
 function render() {
@@ -341,7 +412,8 @@ function render() {
 
 // ---- events -------------------------------------------------------------------
 function readInput(el) {
-  if (el.type === "text") return el.value;
+  if (el.type === "text" || el.type === "radio") return el.value;
+  if (el.type === "checkbox") return el.checked;
   if (el.value === "") return el.hasAttribute("data-nullable") ? null : el.hasAttribute("data-optional") ? undefined : 0;
   return +(Number(el.value) / Number(el.dataset.scale || 1)).toFixed(6);
 }
@@ -351,7 +423,8 @@ document.addEventListener("input", e => {
   const v = readInput(el);
   set(draft, el.dataset.path, v);
   // keep a slider and its number box in step
-  document.querySelectorAll(`[data-path="${el.dataset.path}"]`).forEach(o => { if (o !== el) o.value = el.value; });
+  if (el.type === "range" || el.type === "number")
+    document.querySelectorAll(`[data-path="${el.dataset.path}"]`).forEach(o => { if (o !== el) o.value = el.value; });
   const out = document.getElementById("out-" + el.dataset.path);
   if (out) out.textContent = fmtVal(v, {unit: out.dataset.unit, digits: Number(out.dataset.digits)});
   changed();
@@ -389,6 +462,9 @@ document.addEventListener("click", e => {
   if (el.id === "opt-afford") runOptimizer(el, "affordability", r => afford = r, {target});
   if (el.id === "opt-benefits") runOptimizer(el, "benefits", r => benefits = r, {});
   if (el.dataset.apply) applyOptimizer(el.dataset.apply);
+  if (el.id === "add-education") { draft.education = {kids: [newKid(1)]}; edited(); }
+  if (el.id === "add-kid") { draft.education.kids.push(newKid(draft.education.kids.length + 1)); edited(); }
+  if (el.dataset.removeKid != null) { draft.education.kids.splice(Number(el.dataset.removeKid), 1); edited(); }
   if (el.dataset.removeChange != null) {
     draft.spending.changes.splice(Number(el.dataset.removeChange), 1);
     edited();
@@ -489,9 +565,13 @@ function showResults(r) {
   $("note").textContent = `Quick estimate over ${r.paths.toLocaleString()} futures, compared with the saved plan on the same futures. ` +
     `The report uses ${(reportPaths || r.paths).toLocaleString()} and adds the what-if suggestions.`;
   if ($("median")) $("median").textContent = pct(r.median_return, 2);
+  if ($("edu-summary")) $("edu-summary").innerHTML = educationSummary(r.education);
   $("balances").textContent = r.balances_source;
 }
 function load(state) {
+  ({education: eduDefaults, kid: kidDefaults} = state.defaults);
+  const e = state.plan.education;      // show a child's defaulted fields instead of blanks
+  if (e && e.kids) e.kids = e.kids.map(k => ({...kidDefaults, ...k}));
   original = state.plan; draft = clone(original); saved = state.saved;
   strategies = state.strategies; limits = state.limits; reportPaths = state.report_paths;
   $("plan-path").textContent = state.path;

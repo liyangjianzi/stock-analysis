@@ -25,7 +25,7 @@ tracked. Tests use invented households only (`inputs.TEMPLATE`).
 ```bash
 stock-analysis retire --init      # first time only: starter retirement/plan.json (invented values)
 stock-analysis retire             # -> retirement/output/<ts>/retirement_report.html + summary.json
-scripts/retire.sh                 # the same, logged to logs/retire_<ts>.log, then opens the report
+scripts/retire.sh                 # the same, logged to retirement/logs/retire_<ts>.log, then opens the report
 stock-analysis retire --gui       # edit plan.json in a local web page (see below)
 stock-analysis retire --optimize  # highest safe spending, earliest safe retirement, best CPP/OAS ages
 ```
@@ -91,14 +91,52 @@ keeps it. Library: `optimize.affordability(plan, target=0.9)` and
 
 | Section | Holds |
 |---|---|
-| `people[]` (1–2) | `age`, `retire_age`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
+| `people[]` (1–2) | `age`, `retire_age`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working; taxes non-registered payouts then), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
 | `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), bad-market rule (`bad_market_cut` when investments fall below `bad_market_trigger` × retirement-day value) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, `selling_cost`, `moving_cost`, `property_tax`, `insurance` |
 | `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed` |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`) |
+| `education` (optional) | `kids[]` (`name`, `age`, `start_age` 18, `years` 4, `living` `home`/`away`, `cesg_received`), `costs` per student-year (`home` 11,000 / `away` 25,000 today's $, editable estimates), RESP `resp_balance` (default: the holdings' RESP), `contributed` / `grants` so far (default: estimated as if every year's grant was collected), `contribute` (each January while it still earns the grant), `aip_to_rrsp`, `student_grant` (apply for the Canada Student Grant) |
+| `nonreg_income` (optional) | yearly payouts of the non-registered accounts as shares of their balance: `eligible_dividends` (Canadian companies), `foreign_dividends`, `interest`. Part of `returns.mean`, reinvested, taxed every year. Omit for none |
 | `balances` (optional) | `{owner, type, balance, cost}` rows; omit to read the holdings workbook |
 | `holdings` | owner keywords (whole words) and explicit `accounts` for names that don't say what they are |
 | `scenarios` | `downsize_ages` to test (null = never), `cheaper_home_share` |
+
+## Children's education (the RESP)
+
+The family RESP pays school first. Each January it takes the contribution that
+earns the largest government grant (CESG) still available: 20% of up to C$2,500
+per child, or C$5,000 when catching up missed years, until the child reaches the
+C$7,200 lifetime grant or the year they turn 17. Anything that earns no grant isn't
+contributed. This year's contribution is assumed already in the balance.
+
+- **Shortfall:** school costs the RESP can't cover are your spending those years
+  (from savings while you still work).
+- **Leftover:** after the last child's school, your contributions come back
+  tax-free and unused grants are repaid. Growth goes to the subscriber's RRSP, up
+  to C$50,000 (that needs RRSP room), and the rest is taxed as income plus 20%.
+
+- **Canada Student Grant** (`student_grant`, on by default): up to C$4,200 per
+  student per school year. It is full below the first family-income threshold
+  (C$76,952 for a family of 4), none at the cut-off (C$129,769), and assumed to
+  fall in a straight line between. It is tested each year on the plan's own
+  taxable family income for the year before:
+  - salary while working;
+  - RRSP/RRIF withdrawals, CPP, OAS, payouts and half of realized gains count;
+  - TFSA withdrawals don't.
+
+  So the withdrawal order matters: drawing `proportional` instead of
+  `rrsp_first` can keep income low enough in school years. A retired household's
+  first year has no known prior income, and gets no grant that year. The grant
+  reduces the school cost before the RESP pays. The amount is the one announced
+  to the end of 2026–27, held flat like every rule.
+- **Not modelled:** the additional CESG for lower incomes, which adds 10–20% on
+  the first C$500 a year but counts toward the same C$7,200 lifetime cap, and
+  Alberta's own student aid.
+
+Withdrawals for school are taxed in the student's hands, which the planner treats
+as no tax. The plan assumes the 16–17 grant condition is met (C$2,000
+contributed before the year the child turns 15).
 
 ## The report
 
@@ -134,7 +172,10 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 
 - Both spouses live to `end_age` (no survivor benefits).
 - No GIS, no QPP, and no provinces other than Alberta.
-- No tax drag inside non-registered accounts.
+- Non-registered payouts are a fixed share of the balance. Foreign withholding tax
+  is ignored (the foreign tax credit roughly offsets it), and selling to pay the
+  payout tax while working doesn't realize gains. Funds' capital-gains
+  distributions aren't modelled.
 - CPP/OAS count as a full year in the start year.
 - Household events (spending stages, downsizing) key on people[0]'s age.
 
@@ -153,17 +194,14 @@ order of value:
 3. **Lifespan as a range.** Draw ages at death from Canadian life tables instead of
    a fixed `end_age`. That makes "chance the money lasts" literal, and the CPP/OAS
    optimizer could then weigh longevity instead of assuming it.
-4. **Yearly tax on non-registered accounts.** Dividends, interest and realized
-   gains are taxed each year. Ignoring that flatters plans that save heavily
-   outside RRSPs and TFSAs.
-5. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
+4. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
    bad-market cut.
-6. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
+5. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
    50, downsize at 60", each with its gauge and legacy.
-7. **Historical replay.** Run the plan through actual Canadian/US return
+6. **Historical replay.** Run the plan through actual Canadian/US return
    sequences (1970→) beside the random futures.
-8. **One-time money events.** Inheritances, education costs, a car every 10 years,
-   part-time work income.
+7. **One-time money events.** Inheritances, a car every 10 years, part-time work
+   income. (Education is modelled; see above.)
 
 Treat results as estimates, not guarantees. Check the real CPP statement, and see
 a fee-only planner before big decisions.

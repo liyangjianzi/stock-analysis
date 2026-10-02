@@ -57,6 +57,15 @@ _AB_LIF_TABLE = ("https://open.alberta.ca/dataset/f0c27086-6b12-4aa3-881a-b89549
 _AB_LIF_GUIDE = ("https://open.alberta.ca/dataset/623fa691-3296-4bf4-ae01-ebd3cd657f99/resource/"
                  "f3497e09-0666-4975-851a-2d1c8c716637/download/ig-18-life-income-funds-lifs.pdf")
 _AB_UNLOCK = "https://www.alberta.ca/pensions-individuals"
+_DIVIDENDS_FED = "https://www.canada.ca/content/dam/cra-arc/formspubs/pbg/5000-d1/5000-d1-25e.pdf"
+_CESG = ("https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/"
+         "registered-education-savings-plans-resps/canada-education-savings-programs-cesp/"
+         "canada-education-savings-grant-cesg.html")
+_RESP_LIMIT = ("https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/"
+               "registered-education-savings-plans-resps/resp-contributions.html")
+_RESP_AIP = "https://www.canada.ca/en/services/benefits/education/education-savings/managing-plan.html"
+_STUDENT_GRANT = "https://www.canada.ca/en/services/benefits/education/student-aid/grants-loans/full-time.html"
+_DIVIDENDS_AB = "https://www.canada.ca/content/dam/cra-arc/formspubs/pbg/5009-d/5009-d-25e.pdf"
 
 FEDERAL = {
     "brackets": Rule(((58_523, 0.14), (117_045, 0.205), (181_440, 0.26),
@@ -81,11 +90,44 @@ PROVINCIAL = {
         "pension_amount": Rule(1_753, 2026, _TD1AB),
         # Alberta supplemental credit (T4127 K5P): 25% of credits above $4,896.
         "supplemental_credit": Rule({"floor": 4_896.00, "rate": 0.25}, 2026, _T4127),
+        # Worksheet AB428 line 61520: 8.12% of the taxable (grossed-up) eligible dividends.
+        "dividend_credit": Rule(0.0812, 2025, _DIVIDENDS_AB),
     },
+}
+
+# Eligible dividends from Canadian corporations (Federal Worksheet 5000-D1): the
+# taxable amount is 138% of the dividend received; the federal credit (line 40425)
+# is 15.0198% of that taxable amount. Foreign dividends get neither.
+DIVIDENDS = {
+    "eligible_gross_up": Rule(0.38, 2025, _DIVIDENDS_FED),
+    "federal_credit": Rule(0.150198, 2025, _DIVIDENDS_FED),
 }
 
 # The proposed two-thirds rate was cancelled on 2025-03-21; one half stays.
 CAPITAL_GAINS_INCLUSION = Rule(0.5, 2025, _CAP_GAINS)
+
+RESP = {
+    # Basic CESG: 20% of contributions, up to $500 a child a year ($1,000 with unused
+    # room from earlier years), $7,200 lifetime, through the year the child turns 17.
+    # Room accrues $500 a year from birth (from 2007 on).
+    "cesg": Rule({"rate": 0.20, "yearly_max": 500, "yearly_max_catch_up": 1_000,
+                  "lifetime_max": 7_200, "last_age": 17, "room_from_year": 2007}, 2026, _CESG),
+    "contribution_lifetime_max": Rule(50_000, 2026, _RESP_LIMIT),
+    # Leftover growth (an accumulated income payment) is taxed as income plus 20%,
+    # unless up to $50,000 goes to the subscriber's RRSP (room needed).
+    "aip": Rule({"extra_tax": 0.20, "rrsp_transfer_max": 50_000}, 2026, _RESP_AIP),
+}
+
+# Canada Student Grant for Full-Time Students: up to $4,200 a school year (the rate
+# announced to the end of 2026-27; held flat like every other rule). Full grant
+# below the first threshold of gross family income, none at the cut-off, by
+# family size (7 = 7 or more); thresholds effective August 1, 2026.
+STUDENT_GRANT = Rule({
+    "yearly_max": 4_200,
+    "thresholds": {1: (38_474, 69_987), 2: (54_412, 98_017), 3: (66_641, 117_317),
+                   4: (76_952, 129_769), 5: (86_033, 141_180), 6: (94_245, 151_937),
+                   7: (101_797, 161_321)},
+}, 2026, _STUDENT_GRANT)
 
 # Up to 50% of eligible pension income (RRIF/LIF payments when the transferor
 # is 65+, NOT plain RRSP withdrawals) can be allocated to a spouse.
@@ -173,7 +215,7 @@ def all_rules() -> list[tuple[str, Rule]]:
             for key, value in obj.items():
                 walk(f"{prefix}.{key}", value)
 
-    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "PENSION_SPLIT",
+    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PENSION_SPLIT",
                  "OAS", "CPP", "RRIF", "TFSA", "LIF"):
         walk(name.lower(), globals()[name])
     return found
