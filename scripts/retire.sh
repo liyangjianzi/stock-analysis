@@ -22,10 +22,11 @@ cd "$PROJECT_DIR"
 
 source venv/bin/activate
 
-mkdir -p logs
-LOG_FILE="logs/retire_$(date +%Y%m%d_%H%M%S).log"
+# The log holds the plan's results, so it lives with the plan in the gitignored
+# retirement/ folder: every personal retirement file stays in one place.
+mkdir -p retirement/logs
+LOG_FILE="retirement/logs/retire_$(date +%Y%m%d_%H%M%S).log"
 
-# Keep the log private-by-location too: logs/ is gitignored.
 stock-analysis retire "$@" 2>&1 | tee "$LOG_FILE"
 status=${PIPESTATUS[0]}
 if [[ $status -ne 0 ]]; then

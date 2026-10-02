@@ -34,7 +34,9 @@ LABELS = {"earned": "Earned income", "cpp": "CPP", "oas": "OAS", "minimums": "RR
           "registered": "Registered", "tfsa": "TFSA", "nonreg": "Non-registered",
           "shortfall": "⚠ Shortfall"}
 COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "shortfall": CRITICAL}
+DRAWN = ("registered", "tfsa", "nonreg")   # year-table sources that are withdrawals from an account
 SECTION_IDS = ("summary", "suggestions", "income", "money-left", "years", "assumptions")
+EDUCATION_ID = "education"          # only when the plan has children's education
 
 _STYLE = f"""
 body{{margin:0;background:{PAGE};color:{INK};font-family:{FONT}}}
@@ -203,7 +205,7 @@ def _legacy_tile(plan, avg: Projection, bad: Projection) -> str:
 
 def _kpis(result: PlanResult) -> str:
     avg, bad, r = result.average, result.bad_luck, result.inputs.returns
-    tiles = [
+    rows = [
         ("Short years", f"{int(avg.shortfall_years[0])}", f"Bad luck: {int(bad.shortfall_years[0])}"),
         ("Investments at retirement", _short(avg.investments_at_retirement[0]),
          f"Bad luck: {_short(bad.investments_at_retirement[0])}"),
@@ -211,9 +213,12 @@ def _kpis(result: PlanResult) -> str:
          f"After inflation; {r.mean:.0%} average with ups and downs"),
         ("Lifetime taxes", _short(avg.lifetime_tax[0]), "Income tax plus tax at death"),
     ]
-    return "<div class='kpis'>" + "".join(
-        f"<div class='tile'><div class='label'>{_esc(a)}</div><div class='value'>{_esc(b)}</div>"
-        f"<div class='sub'>{_esc(c)}</div></div>" for a, b, c in tiles) + "</div>"
+    return "<div class='kpis'>" + "".join(_tile(*row) for row in rows) + "</div>"
+
+
+def _tile(label: str, value: str, sub: str) -> str:
+    return (f"<div class='tile'><div class='label'>{_esc(label)}</div><div class='value'>{_esc(value)}</div>"
+            f"<div class='sub'>{_esc(sub)}</div></div>")
 
 
 def _suggestions(baseline, suggestions) -> str:
@@ -237,15 +242,56 @@ def _suggestions(baseline, suggestions) -> str:
             f"<table><thead>{head}</thead><tbody>{body}</tbody></table>")
 
 
+def _education(plan, avg: Projection, bad: Projection) -> str:
+    """Children's school in the average future: who pays, year by year."""
+    s = avg.school
+    uncovered = avg.education[:, 0] - s.contribution
+    grants = avg.student_grant[:, 0]
+    resp_pays = s.cost - grants - uncovered
+    years = [t for t in range(len(avg.years)) if s.cost[t] > 0]
+    tiles = "".join([
+        _tile("School costs", _short(s.cost.sum()), f"{int(s.students.sum())} student-years"),
+        _tile("Canada Student Grants", _short(grants.sum()),
+             f"Bad luck: {_short(bad.student_grant[:, 0].sum())}" if plan.education.student_grant
+             else "not applied for"),
+        _tile("Paid by the RESP", _short(resp_pays.sum()), f"RESP today {_short(s.balance)}"),
+        _tile("Paid by you", _short(uncovered.sum()),
+             f"plus {_short(s.contribution.sum())} of RESP contributions"),
+    ])
+    names = {t: ", ".join(k.name for k in s.kids if avg.years[t] in k.school_years) for t in years}
+    rows = "".join(
+        f"<tr><td>{avg.years[t]}</td><td>{_esc(names[t])}</td><td>{_money(s.cost[t])}</td>"
+        f"<td>{_money(grants[t])}</td><td>{_money(resp_pays[t])}</td><td>{_money(uncovered[t])}</td>"
+        f"<td>{_money(avg.resp[t, 0])}</td></tr>" for t in years)
+    hint = ""
+    if plan.education.student_grant and plan.withdrawal.strategy != "proportional":
+        hint = ("<p class='note'>The student grant is tested on last year's taxable family income: "
+                "RRSP/RRIF withdrawals count, TFSA withdrawals don't. Drawing proportionally from all "
+                "accounts (see Expert planning) can keep that income low enough in school years.</p>")
+    return (f"<div class='kpis' style='grid-template-columns:repeat(4,1fr)'>{tiles}</div>"
+            "<table><thead><tr><th>Year</th><th>In school</th><th>Cost</th><th>Student grant</th>"
+            "<th>RESP pays</th><th>You pay</th><th>RESP after</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>{hint}"
+            "<p class='note'>Average future, today's dollars. Each grant uses the family income of the "
+            "year before; a year with no known prior income gets none.</p>")
+
+
 def _year_table(proj: Projection) -> str:
-    head = ["Year", "Ages", "Spending", "Tax", *[LABELS[s] for s in SOURCES], "Saved",
-            "RRSP/RRIF", "Pension/LIF", "TFSA", "Non-registered", "Total"]
+    school = proj.education is not None
+    # Sources are what was drawn that year; the last columns are January 1 balances.
+    head = ["Year", "Ages", "Spending", "Tax", *[f"{LABELS[s]} drawn" if s in DRAWN else LABELS[s]
+                                                 for s in SOURCES], "Saved",
+            "RRSP/RRIF balance", "Pension/LIF balance", "TFSA balance", "Non-registered balance",
+            "Total invested",
+            *(["Education (household)", "Student grants", "RESP"] if school else [])]
     rows = []
     for t, year in enumerate(proj.years):
         cells = [year, age_label(proj.ages[t]), _money(proj.need[t, 0]), _money(proj.tax[t, 0]),
                  *[_money(proj.income[s][t, 0]) for s in SOURCES], _money(proj.saved[t, 0]),
                  *[_money(proj.balances[k][t, 0]) for k in ("rrsp", "pension", "tfsa", "nonreg")],
-                 _money(proj.investments[t, 0])]
+                 _money(proj.investments[t, 0]),
+                 *([_money(proj.education[t, 0]), _money(proj.student_grant[t, 0]),
+                    _money(proj.resp[t, 0])] if school else [])]
         rows.append("<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in cells) + "</tr>")
     return ("<div class='years'><table><thead><tr>" + "".join(f"<th>{_esc(h)}</th>" for h in head)
             + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
@@ -256,15 +302,31 @@ def _rule_value(value) -> str:
     return text if len(text) <= 140 else text[:137] + "…"
 
 
+def _education_facts(plan, s) -> list:
+    if s is None:
+        return []
+    rows = [(f"School: {k.name}",
+             f"{k.school_years[0]}–{k.school_years[-1]}, living {k.living} at {_money(k.yearly_cost)} "
+             f"a year; RESP contributions {_money(k.contributions)} earning {_money(k.grants)} "
+             f"of grant ({_money(k.grant_left)} of lifetime grant left unclaimed)")
+            for k in s.kids]
+    grant = ("applied for: tested each school year on last year's family income"
+             if plan.education.student_grant else "not applied for")
+    return [("RESP", f"{_money(s.balance)} today ({_money(s.contributed)} contributed, "
+                     f"{_money(s.grants)} grants); pays school first, the household pays the rest"),
+            ("Canada Student Grant", grant), *rows]
+
+
 def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
     people = "".join(
         f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{p.retire_age}</td>"
         f"<td>{p.cpp_start_age}</td><td>{p.oas_start_age}</td><td>{_money(engine.cpp_at_65(p))}</td>"
         f"<td>{p.years_in_canada_at_65:g}</td><td>{p.rrif_start_age}</td>"
         f"<td>{_esc(p.lif_start_age if p.lif_start_age is not None else 'at retirement (50+)')}</td>"
-        f"<td>{_money(p.tfsa_room)}</td></tr>"
+        f"<td>{_money(p.tfsa_room)}</td>"
+        f"<td>{_money(p.salary) if p.salary is not None else 'not set'}</td></tr>"
         for p in plan.people)
-    s, h, r = plan.spending, plan.home, plan.returns
+    s, h, r, ni = plan.spending, plan.home, plan.returns, plan.nonreg_income
     facts = [
         ("Withdrawal order", STRATEGY_LABELS[plan.withdrawal.strategy]),
         ("Returns", f"{r.mean:.1%} average, {r.sd:.0%} yearly swings; typical "
@@ -272,11 +334,17 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
         ("Spending", f"{_money(s.base)} a year after tax; slow-go from {s.slow_go_age} "
                      f"({s.slow_go_share:.0%}), no-go from {s.no_go_age} ({s.no_go_share:.0%}) "
                      f"plus {_money(s.care)} care"),
+        ("Non-registered payouts",
+         "none" if not ni.total else
+         f"{ni.eligible_dividends:.1%} Canadian dividends, {ni.foreign_dividends:.1%} foreign "
+         f"dividends, {ni.interest:.1%} interest a year, taxed every year and reinvested; "
+         f"while working, taxed on top of salary"),
         ("Bad-market rule", f"cut {s.bad_market_cut:.0%} when investments are below "
                             f"{s.bad_market_trigger:.0%} of their value on retirement day"),
         ("Home", "none" if h is None else (
             f"{_money(h.value)}; downsize at {h.downsize_age} to {_money(h.new_value)}"
             if h.downsize_age is not None else f"{_money(h.value)}; never sold")),
+        *_education_facts(plan, result.average.school),
         ("Balances from", holdings_source or "plan.json"),
         ("Futures simulated", f"{result.simulated.paths:,}"),
     ]
@@ -286,7 +354,7 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
     return (
         "<table><thead><tr><th>Person</th><th>Age</th><th>Retires</th><th>CPP from</th>"
         "<th>OAS from</th><th>CPP at 65 (yearly)</th><th>Years in Canada at 65</th>"
-        f"<th>RRIF from</th><th>LIF from</th><th>TFSA room carried in</th></tr></thead>"
+        f"<th>RRIF from</th><th>LIF from</th><th>TFSA room carried in</th><th>Salary</th></tr></thead>"
         f"<tbody>{people}</tbody></table>"
         "<table><tbody>" + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in facts)
         + "</tbody></table><h2>Canadian rules used</h2>"
@@ -310,6 +378,8 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
     sections = [
         ("summary", "", top),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
+        *([(EDUCATION_ID, "Children's education", _education(plan, avg, bad))]
+          if avg.education is not None else []),
         ("income", "Detailed income projection",
          "<p class='note'>Each bar is one year's spending plus income tax, by where the money "
          "comes from. Switch to the bad-luck future (the 1-in-10 bad run of returns) to see "

@@ -62,7 +62,20 @@ def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
         "median_return": result.average_return,
         "gauge": json.loads(report.success_meter(sim.success, previous).to_json()),
         "chart": json.loads(report.money_left_chart(sim, plan).to_json()),
+        "education": _education_summary(result),
     }
+
+
+def _education_summary(result: engine.PlanResult) -> dict | None:
+    """What the RESP covers in the average future, and the planned contributions."""
+    avg = result.average
+    s = avg.school
+    if s is None:
+        return None
+    return {"cost": float(s.cost.sum()), "household": float(avg.education[:, 0].sum()),
+            "student_grants": float(avg.student_grant[:, 0].sum()),
+            "contributions": float(s.contribution.sum()), "grants": float(s.grant.sum()),
+            "balance": s.balance, "kids": [dataclasses.asdict(k) for k in s.kids]}
 
 
 class PlannerApp:
@@ -143,7 +156,8 @@ class PlannerApp:
         return {"plan": raw, "path": str(self.plan_path), "saved": saved, "error": error,
                 "report_paths": self.report_paths or raw.get("returns", {}).get("paths"),
                 "strategies": inputs.STRATEGY_LABELS,
-                "limits": inputs.limits(raw.get("province", "AB"))}
+                "limits": inputs.limits(raw.get("province", "AB")),
+                "defaults": inputs.defaults()}
 
     def start_report(self, d: dict) -> bool:
         """Save ``d`` and start the full report; False if one is already running."""

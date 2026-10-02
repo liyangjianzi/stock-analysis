@@ -52,3 +52,8 @@ def test_the_holdings_snapshot_path_is_gitignored():
     from stockanalysis.holdings import DEFAULT_SNAPSHOT
     res = subprocess.run(["git", "check-ignore", "-q", str(DEFAULT_SNAPSHOT)], cwd=ROOT)
     assert res.returncode == 0, f"{DEFAULT_SNAPSHOT} must be gitignored"
+
+
+def test_retirement_run_logs_stay_in_the_private_folder():
+    script = (ROOT / "scripts" / "retire.sh").read_text(encoding="utf-8")
+    assert 'LOG_FILE="retirement/logs/' in script, "retire.sh must log under the gitignored retirement/"
