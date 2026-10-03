@@ -29,6 +29,11 @@ Each step is one calendar year:
    on top of their salary and that tax is sold out of the account. Surplus saved
    (TFSA room, then non-registered); shortfall recorded.
 6. Growth, then the year's contributions from whoever still works.
+7. Lifespans (``deaths``): a dead person earns, draws and pays nothing; each January
+   their accounts roll to the living partner untaxed (plus the CPP death benefit
+   once); the survivor gets the CPP survivor's pension, spends ``survivor_share`` of
+   the budget, and files alone (no splitting). The estate is valued the January
+   after the last death.
 
 Pure: no I/O. Every statutory number comes from :mod:`rules`.
 """
@@ -664,15 +669,35 @@ def bad_luck_index(proj: Projection, pct: float = 0.10) -> int:
     return int(order[int(np.floor(pct * (len(order) - 1)))])
 
 
-def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) -> PlanResult:
-    """The plan over ``paths`` simulated futures, plus the average future (a steady
-    median return) and the bad-luck future (the 10th-percentile path, replayed alone)."""
-    r = plan.returns
+def average_deaths(plan: PlanInputs) -> np.ndarray:
+    """(P, 1) deaths for the average and bad-luck futures. In a couple, the person
+    with fewer median years left (ties: the older, then people[1]) dies at their
+    median death age and the survivor lives to ``end_age``; one person lives to it."""
     T = steps(plan)
-    R = draw_returns(r.mean, r.sd, r.paths if paths is None else paths, T,
-                     r.seed if seed is None else seed)
-    simulated = simulate(plan, R)
-    g = median_return(r.mean, r.sd)
-    average = simulate(plan, np.full((T, 1), g))
+    d = fixed_deaths(plan, T, 1)
+    if len(plan.people) == 2:
+        left = [(mortality.median_death_age(p, plan.start_year) - p.age, -p.age, -i)
+                for i, p in enumerate(plan.people)]
+        i = min(range(2), key=lambda k: left[k])
+        d[i, 0] = min(d[i, 0], plan.people[i].age + left[i][0])
+    return d
+
+
+def draw_futures(plan: PlanInputs, paths: int, seed: int) -> tuple:
+    """(returns over life_steps, death ages): one set of futures every comparison shares."""
+    r = plan.returns
+    return (draw_returns(r.mean, r.sd, paths, life_steps(plan), seed),
+            mortality.draw_death_ages(plan.people, plan.start_year, paths, seed))
+
+
+def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) -> PlanResult:
+    """The plan over ``paths`` simulated futures with drawn lifespans, plus the average
+    future (a steady median return) and the bad-luck future (the 10th-percentile path's
+    returns, replayed alone), both with ``average_deaths`` over ``steps(plan)``."""
+    r = plan.returns
+    R, D = draw_futures(plan, r.paths if paths is None else paths, r.seed if seed is None else seed)
+    simulated = simulate(plan, R, D)
+    T, g, fixed = steps(plan), median_return(r.mean, r.sd), average_deaths(plan)
+    average = simulate(plan, np.full((T, 1), g), fixed)
     k = bad_luck_index(simulated)
-    return PlanResult(plan, simulated, average, simulate(plan, R[:, [k]]), g, k)
+    return PlanResult(plan, simulated, average, simulate(plan, R[:T, [k]], fixed), g, k)

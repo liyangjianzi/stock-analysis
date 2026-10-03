@@ -2,6 +2,7 @@
 Offline, invented household (inputs.TEMPLATE), small path counts."""
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from stockanalysis.retirement import engine, inputs, optimize
@@ -12,7 +13,7 @@ GRID = {"cpp_ages": (60, 65, 70), "oas_ages": (65, 70)}
 
 @pytest.fixture(scope="module")
 def R():
-    return optimize._returns(PLAN, 60, 7)
+    return optimize._futures(PLAN, 60, 7)
 
 
 def test_max_spending_is_the_last_step_that_meets_the_target(R):
@@ -38,7 +39,7 @@ def test_an_unreachable_target_says_so(R):
 def test_affordability_reports_the_plan_as_it_stands():
     a = optimize.affordability(PLAN, target=0.9, paths=60)
     assert a.spending == PLAN.spending.base
-    assert a.success == engine.simulate(PLAN, optimize._returns(PLAN, 60, PLAN.returns.seed)).success
+    assert a.success == engine.simulate(PLAN, *optimize._futures(PLAN, 60, PLAN.returns.seed)).success
     assert [name for name, _ in a.retire_ages] == [p.name for p in PLAN.people]
 
 
@@ -64,3 +65,11 @@ def test_the_process_pool_gives_the_same_answer():
     pooled = optimize.best_benefit_ages(PLAN, paths=60, workers=2, **GRID)
     assert [c.best for c in pooled.people] == [c.best for c in serial.people]
     assert pooled.best_legacy == pytest.approx(serial.best_legacy)
+
+
+def test_expected_legacy_averages_the_lifespan_draws():
+    from stockanalysis.retirement import mortality
+    D = mortality.draw_death_ages(PLAN.people, PLAN.start_year, 20, 7)
+    g = engine.median_return(PLAN.returns.mean, PLAN.returns.sd)
+    proj = engine.simulate(PLAN, np.full((engine.life_steps(PLAN), 20), g), D)
+    assert optimize._expected_legacy(PLAN, D) == pytest.approx(float(proj.legacy.mean()))

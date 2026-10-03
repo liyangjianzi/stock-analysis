@@ -217,15 +217,17 @@ def test_bad_luck_is_the_tenth_percentile_path():
 
 def test_run_uses_the_median_return_and_replays_the_bad_luck_path():
     p = plan(accounts=[Account("A", "rrsp", 400_000.0)], base=30_000.0, end_age=80)
-    from dataclasses import replace
     p = replace(p, returns=Returns(0.05, 0.15, 200, 3))
     result = engine.run(p)
     assert result.average_return == engine.median_return(0.05, 0.15)
     assert result.average.paths == 1 and result.simulated.paths == 200
-    k = result.bad_luck_path
+    assert len(result.simulated.years) == engine.life_steps(p)
+    assert len(result.average.years) == engine.steps(p)
+    R, D = engine.draw_futures(p, 200, 3)
+    replay = engine.simulate(p, R[:engine.steps(p), [result.bad_luck_path]], engine.average_deaths(p))
     for s in engine.SOURCES:
-        np.testing.assert_allclose(result.bad_luck.income[s][:, 0],
-                                   result.simulated.income[s][:, k], atol=2.0)
+        np.testing.assert_allclose(result.bad_luck.income[s], replay.income[s])
+    np.testing.assert_array_equal(result.simulated.death_ages, D)
 
 
 def test_package_exports_the_api():
@@ -442,3 +444,22 @@ def test_one_person_plan_ignores_the_survivor_share():
              end_age=80, survivor_share=0.5)
     proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), np.array([[70]]))
     assert proj.need[5, 0] == 30_000.0 and proj.end_step[0] == 10
+
+
+def test_average_future_loses_the_earlier_median_death_first_and_the_survivor_reaches_end_age():
+    from stockanalysis.retirement import mortality
+    a = person(id="A", name="A", age=60, sex="male")
+    b = person(id="B", name="B", age=60, sex="female")
+    p = plan(people=[a, b], end_age=95)
+    d = engine.average_deaths(p)
+    assert d[0, 0] == min(mortality.median_death_age(a, 2026), a.age + engine.steps(p))
+    assert d[1, 0] == b.age + engine.steps(p)
+    single = plan(people=[person(age=60)], end_age=95)
+    assert engine.average_deaths(single)[0, 0] == 95
+
+
+def test_success_counts_only_years_someone_is_alive():
+    p = plan(accounts=[Account("A", "tfsa", 100_000.0)], base=30_000.0, end_age=95)
+    R = np.zeros((engine.life_steps(p), 2))
+    proj = engine.simulate(p, R, np.array([[62, 100]]))
+    assert proj.shortfall_years[0] == 0 and proj.shortfall_years[1] > 0
