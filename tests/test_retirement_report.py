@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from stockanalysis.retirement import engine, inputs, report, rules, scenarios
@@ -130,3 +131,46 @@ def test_year_table_hides_all_zero_columns_and_keeps_exact_values(built):
     assert f"title='{report._money(avg.investments[0, 0])}'" in table
     for always in ("Spending", "Tax", "Total invested"):
         assert f">{always}</th>" in table
+
+
+def test_headline_says_as_long_as_either_of_you_lives(built):
+    plan, result, *_ = built
+    html = _html(built)
+    assert report.lasts_label(plan) in html
+    assert report.lasts_label(plan) == "Chance the money lasts as long as either of you lives"
+    single = replace(plan, people=plan.people[:1])
+    assert report.lasts_label(single) == "Chance the money lasts as long as you live"
+
+
+def test_lifespans_tile_and_summary(built):
+    plan, result, *_ = built
+    life = report.lifespans(result)
+    assert [x["name"] for x in life["people"]] == [p.name for p in plan.people]
+    for x, p in zip(life["people"], plan.people):
+        assert p.age <= x["median_age_at_death"] < 111
+    assert 0 <= life["reach_95"] <= 1 and life["alone_years"] >= 0
+    assert "Median age at death" in _html(built)
+    assert report.headline(result)["lifespans"] == life
+
+
+def test_year_table_marks_the_dead_with_a_dagger(built):
+    _, result, *_ = built
+    avg = result.average
+    table = report._year_table(avg)
+    if (~avg.alive[:, :, 0]).any():
+        assert "†" in table
+    else:
+        assert "†" not in table
+
+
+def test_money_left_band_stops_at_end_age_and_ignores_ended_futures(built):
+    plan, result, *_ = built
+    fig = report.money_left_chart(result.simulated, plan)
+    xs = fig.data[0].x
+    assert xs[-1] <= plan.end_age and not any(np.isnan(fig.data[2].y[:3]))
+
+
+def test_assumptions_list_lifespan_sources(built):
+    html = _html(built)
+    assert "pid=1310011401" in html and "actuarial-report-32nd" in html
+    assert "Survivor spending" in html

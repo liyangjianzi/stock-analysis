@@ -60,7 +60,8 @@ def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
         "short_years_bad": int(bad.shortfall_years[0]),
         "first_short_age_bad": plan.people[0].age + first if first < len(bad.years) else None,
         "median_return": result.average_return,
-        "gauge": json.loads(report.success_meter(sim.success, previous).to_json()),
+        "gauge": json.loads(report.success_meter(sim.success, previous,
+                                                 title=report.lasts_label(plan)).to_json()),
         "chart": json.loads(report.money_left_chart(sim, plan).to_json()),
         "education": _education_summary(result),
     }

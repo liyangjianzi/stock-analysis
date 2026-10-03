@@ -93,7 +93,7 @@ def dispatch(args) -> int:
     out, result = generate(plan, source, paths=args.paths, scenario_paths=args.scenario_paths,
                            seed=args.seed, out_root=args.out)
     avg = result.average
-    print(f"Chance the money lasts to {plan.end_age}: {result.simulated.success:.0%}")
+    print(f"{report.lasts_label(plan)}: {result.simulated.success:.0%}")
     print(f"Legacy (average future): C${avg.legacy[0]:,.0f}")
     print(f"Lifetime taxes (average future): C${avg.lifetime_tax[0]:,.0f}")
     print(f"Report: {out}")
@@ -119,6 +119,6 @@ def _print_optimize(plan, target: float, *, paths: int, seed) -> int:
     b = optimize.best_benefit_ages(plan, paths=paths, seed=seed)
     for c in b.people:
         print(f"{c.name}: CPP {c.current[0]} -> {c.best[0]}, OAS {c.current[1]} -> {c.best[1]}")
-    print(f"Legacy (average future): C${b.legacy:,.0f} -> C${b.best_legacy:,.0f}; "
+    print(f"Expected legacy (over lifespans): C${b.legacy:,.0f} -> C${b.best_legacy:,.0f}; "
           f"chance the money lasts {b.success:.0%} -> {b.best_success:.0%}")
     return 0

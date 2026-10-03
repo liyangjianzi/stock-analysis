@@ -15,13 +15,14 @@ from __future__ import annotations
 import datetime as dt
 import html
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
 
 from ..report import save_report  # noqa: F401  (re-exported: the same writer as the other reports)
-from . import engine, rules
+from . import engine, mortality, rules
 from .engine import SOURCES, PlanResult, Projection
 from .inputs import STRATEGY_LABELS
 
@@ -108,7 +109,8 @@ def _style_axes(fig: go.Figure, height: int) -> go.Figure:
     return fig
 
 
-def success_meter(success: float, previous: float | None = None) -> go.Figure:
+def success_meter(success: float, previous: float | None = None,
+                  title: str = "Chance the money lasts") -> go.Figure:
     if previous is not None and round(previous * 100) == round(success * 100):
         previous = None                 # a "0 pts" delta is noise, not news
     delta = None if previous is None else {
@@ -118,7 +120,7 @@ def success_meter(success: float, previous: float | None = None) -> go.Figure:
         mode="gauge+number" + ("" if delta is None else "+delta"),
         value=round(success * 100), delta=delta,
         number={"suffix": "%", "font": {"size": 48, "color": INK}},
-        title={"text": "Chance the money lasts", "font": {"size": 14, "color": INK_2}},
+        title={"text": title, "font": {"size": 14, "color": INK_2}},
         gauge={"axis": {"range": [0, 100], "tickcolor": MUTED, "tickfont": {"color": MUTED}},
                "bar": {"color": SERIES[0], "thickness": 0.35}, "bgcolor": TRACK, "borderwidth": 0}))
     fig.update_layout(height=240, paper_bgcolor=SURFACE, font=dict(family=FONT, color=INK_2),
@@ -169,8 +171,12 @@ def income_chart(avg: Projection, bad: Projection) -> go.Figure:
 def money_left_chart(sim: Projection, plan) -> go.Figure:
     """Investments by age as a bad / typical / good band, plus the home's value."""
     ref = plan.people[0]
-    x = [ref.age + t for t in range(sim.investments.shape[0])]
-    p10, p50, p90 = np.percentile(sim.investments, [10, 50, 90], axis=1)
+    rows = min(sim.investments.shape[0], plan.end_age - ref.age + 1)   # the band stops at end_age
+    inv = sim.investments[:rows]
+    x = [ref.age + t for t in range(rows)]
+    with warnings.catch_warnings():                       # a year where every future has ended
+        warnings.simplefilter("ignore", RuntimeWarning)
+        p10, p50, p90 = np.nanpercentile(inv, [10, 50, 90], axis=1)
     fig = go.Figure([
         go.Scatter(x=x, y=p90, name="Good luck (1 in 10)", line=dict(color=SERIES[0], width=1),
                    hovertemplate="Good luck: C$%{y:,.0f}<extra></extra>"),
@@ -180,7 +186,7 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
                    hovertemplate="Typical: C$%{y:,.0f}<extra></extra>"),
     ])
     if plan.home is not None:
-        fig.add_trace(go.Scatter(x=x, y=sim.home_value, name="Home value",
+        fig.add_trace(go.Scatter(x=x, y=sim.home_value[:rows], name="Home value",
                                  line=dict(color=SERIES[1], width=2, dash="dot"),
                                  hovertemplate="Home: C$%{y:,.0f}<extra></extra>"))
     def at(p, age):                    # p's age -> the chart's x (people[0]'s age)
@@ -194,6 +200,10 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
             marks.append((at(p, p.cpp_start_age), f"{p.name}: CPP + OAS"))
         else:
             marks += [(at(p, p.cpp_start_age), f"{p.name}: CPP"), (at(p, p.oas_start_age), f"{p.name}: OAS")]
+    fixed = engine.average_deaths(plan)
+    for i, p in enumerate(plan.people):
+        if len(plan.people) == 2 and fixed[i, 0] < p.age + engine.steps(plan):
+            marks.append((at(p, int(fixed[i, 0])), f"{p.name}: dies (average future)"))
     grouped: dict = {}                 # one label per age, so marks never print on top of each other
     for age, label in marks:
         if x[0] <= age <= x[-1]:
@@ -208,6 +218,39 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
                       margin=dict(l=70, r=20, t=120, b=40))
     fig.update_xaxes(title_text=f"Age of {ref.name}")
     return fig
+
+
+def lasts_label(plan) -> str:
+    who = "either of you lives" if len(plan.people) == 2 else "you live"
+    return f"Chance the money lasts as long as {who}"
+
+
+def lifespans(result: PlanResult) -> dict:
+    """Median age at death per person, the chance someone reaches 95, and the median
+    years a survivor lives alone, over the simulated futures."""
+    plan, d = result.inputs, result.simulated.death_ages
+    age0 = np.array([[p.age] for p in plan.people])
+    out = {"people": [{"name": p.name, "median_age_at_death": int(np.median(d[i])) - 1}
+                      for i, p in enumerate(plan.people)],
+           "reach_95": float((d > 95).any(axis=0).mean()),
+           "alone_years": None}
+    if len(plan.people) == 2:
+        left = d - age0
+        out["alone_years"] = float(np.median(np.abs(left[0] - left[1])))
+    return out
+
+
+def _lifespan_tiles(result: PlanResult) -> str:
+    life = lifespans(result)
+    ages = " · ".join(f"{x['name']} {x['median_age_at_death']}" for x in life["people"])
+    tiles = [_tile("Median age at death", ages, "Alberta life table, improving over time"),
+             _tile("Chance one of you reaches 95" if len(life["people"]) == 2 else "Chance of reaching 95",
+                   f"{life['reach_95']:.0%}", "Plan-to age stays your choice")]
+    if life["alone_years"] is not None:
+        tiles.append(_tile("Survivor alone (median)", f"{life['alone_years']:.0f} years",
+                           f"Spending {result.inputs.spending.survivor_share:.0%} of the couple's"))
+    return (f"<div class='kpis' style='grid-template-columns:repeat({len(tiles)},1fr);margin-top:16px'>"
+            + "".join(tiles) + "</div>")
 
 
 def _legacy_tile(plan, avg: Projection, bad: Projection) -> str:
@@ -338,11 +381,13 @@ def _year_table(proj: Projection) -> str:
         cells = "".join(f"<td{edge(i)} title='{_money(v[t])}'>{_compact(v[t])}</td>"
                         for i, (_, _, v) in enumerate(cols))
         cls = " class='short'" if round(short[t]) > 0 else ""
+        ages = "/".join(f"{a}{'' if proj.alive is None or proj.alive[t, i, 0] else '†'}"
+                        for i, a in enumerate(proj.ages[t]))
         rows.append(f"<tr{cls}><td class='stick'>{year}</td>"
-                    f"<td class='stick s2'>{_esc(age_label(proj.ages[t]))}</td>{cells}</tr>")
+                    f"<td class='stick s2'>{_esc(ages)}</td>{cells}</tr>")
     return ("<p class='note'>C$, today's dollars; k = thousand, M = million, – = none. Hover a cell "
             "for the exact amount. Columns that are zero every year are hidden; short years are "
-            "shaded red.</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
+            "shaded red; † = has died (the survivor's years follow).</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
             + "".join(rows) + "</tbody></table></div>")
 
 
@@ -368,7 +413,8 @@ def _education_facts(plan, s) -> list:
 
 def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
     people = "".join(
-        f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{p.retire_age}</td>"
+        f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{_esc(p.sex or 'not set (average table)')}</td>"
+        f"<td>{p.retire_age}</td>"
         f"<td>{p.cpp_start_age}</td><td>{p.oas_start_age}</td><td>{_money(engine.cpp_at_65(p))}</td>"
         f"<td>{p.years_in_canada_at_65:g}</td><td>{p.rrif_start_age}</td>"
         f"<td>{_esc(p.lif_start_age if p.lif_start_age is not None else 'at retirement (50+)')}</td>"
@@ -383,6 +429,11 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
         ("Spending", f"{_money(s.base)} a year after tax; slow-go from {s.slow_go_age} "
                      f"({s.slow_go_share:.0%}), no-go from {s.no_go_age} ({s.no_go_share:.0%}) "
                      f"plus {_money(s.care)} care"),
+        ("Survivor spending", f"{s.survivor_share:.0%} of the couple's budget once one of you has "
+                              "died (care costs stay whole)" if len(plan.people) == 2 else "n/a"),
+        ("Lifespans", "drawn per future from the Statistics Canada Alberta life table "
+                      "(2021–2023) with the CPP actuarial report's mortality improvement; "
+                      f"the average future assumes the median first death and the survivor to {plan.end_age}"),
         ("Non-registered payouts",
          "none" if not ni.total else
          f"{ni.eligible_dividends:.1%} Canadian dividends, {ni.foreign_dividends:.1%} foreign "
@@ -400,8 +451,13 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
     rules_rows = "".join(
         f"<tr><td>{_esc(name)}</td><td>{_esc(_rule_value(rule.value))}</td><td>{rule.year}</td>"
         f"<td><a href='{_esc(rule.source)}'>source</a></td></tr>" for name, rule in rules.all_rules())
+    life = [("mortality.life_table", "Alberta 2021–2023, by sex, ages 0–110", mortality.QX),
+            ("mortality.improvement", _rule_value(mortality.IMPROVEMENT.value), mortality.IMPROVEMENT)]
+    rules_rows += "".join(
+        f"<tr><td>{_esc(n)}</td><td>{_esc(v)}</td><td>{r.year}</td>"
+        f"<td><a href='{_esc(r.source)}'>source</a></td></tr>" for n, v, r in life)
     return (
-        "<table><thead><tr><th>Person</th><th>Age</th><th>Retires</th><th>CPP from</th>"
+        "<table><thead><tr><th>Person</th><th>Age</th><th>Sex</th><th>Retires</th><th>CPP from</th>"
         "<th>OAS from</th><th>CPP at 65 (yearly)</th><th>Years in Canada at 65</th>"
         f"<th>RRIF from</th><th>LIF from</th><th>TFSA room carried in</th><th>Salary</th></tr></thead>"
         f"<tbody>{people}</tbody></table>"
@@ -422,8 +478,9 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
         banner = (f"<p class='banner'>⚠ The tax and benefit rules are for {rules.TAX_YEAR}. "
                   f"Update rules.py for {today.year} from the official pages it cites.</p>")
     prev = previous.get("success") if previous else None
-    top = (f"<div class='top'><div class='card'>{_fig(success_meter(sim.success, prev), 'cdn')}</div>"
-           f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>")
+    meter = success_meter(sim.success, prev, title=lasts_label(plan))
+    top = (f"<div class='top'><div class='card'>{_fig(meter, 'cdn')}</div>"
+           f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>{_lifespan_tiles(result)}")
     sections = [
         ("summary", "", top),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
@@ -455,7 +512,8 @@ def headline(result: PlanResult) -> dict:
     avg = result.average
     return {"success": result.simulated.success, "paths": result.simulated.paths,
             "legacy": float(avg.legacy[0]), "lifetime_tax": float(avg.lifetime_tax[0]),
-            "investments_at_retirement": float(avg.investments_at_retirement[0])}
+            "investments_at_retirement": float(avg.investments_at_retirement[0]),
+            "lifespans": lifespans(result)}
 
 
 def write_summary(result: PlanResult, path) -> str:

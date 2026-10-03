@@ -45,7 +45,7 @@ def test_pinned_balances_write_report_and_summary(tmp_path, monkeypatch, capsys)
     [run_dir] = list(out.iterdir())
     assert (run_dir / "retirement_report.html").exists() and (run_dir / "summary.json").exists()
     printed = capsys.readouterr().out
-    assert "Chance the money lasts to 95" in printed and "Report:" in printed
+    assert "Chance the money lasts as long as either of you lives" in printed and "Report:" in printed
 
 
 def test_reads_holdings_when_plan_has_no_balances(tmp_path, monkeypatch):
@@ -86,5 +86,5 @@ def test_optimize_prints_the_answers_without_a_report(tmp_path, monkeypatch, cap
                      "--optimize", "--target", "80", "--paths", "40"]) == 0
     printed = capsys.readouterr().out
     assert "target 80%" in printed and "Highest spending" in printed and "Earliest retirement" in printed
-    assert "Partner A: CPP" in printed and "Legacy (average future)" in printed
+    assert "Partner A: CPP" in printed and "Expected legacy (over lifespans)" in printed
     assert not out.exists()
