@@ -63,7 +63,7 @@ table.ages td.best{font-weight:700;color:var(--good)}
 .answer b{font-size:1.05rem}
 .x{border:none;background:none;color:var(--muted);font-size:1.1rem;padding:2px 6px}
 aside{position:sticky;top:70px;align-self:start}
-.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0} .tiles .tile:nth-child(5){grid-column:1/-1}
 .tile{background:var(--surface);border:1px solid rgba(11,11,11,.10);border-radius:10px;padding:10px 12px}
 .tile .label{color:var(--ink2);font-size:.8rem}.tile .value{font-size:1.35rem;font-weight:600;font-variant-numeric:tabular-nums}
 .tile .sub{font-size:.78rem;color:var(--muted)}
@@ -166,6 +166,12 @@ function number(path, label, o = {}) {
 }
 const contribGrid = prefix => `<div class="grid2">${ACCOUNTS.map(([k, l]) =>
   number(`${prefix}.${k}`, l, {min: 0, step: 500, optional: true, placeholder: "0"})).join("")}</div>`;
+function choice(path, label, options) {
+  const v = get(draft, path) ?? "";
+  return `<div class="field" data-field="${path}"><label>${esc(label)}</label>
+    <select data-path="${path}">${options.map(([k, l]) =>
+      `<option value="${k}" ${k === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`;
+}
 function text(path, label) {
   return `<div class="field" data-field="${path}"><label>${esc(label)}</label>
     <input type="text" data-path="${path}" data-structural value="${esc(get(draft, path) ?? "")}"></div>`;
@@ -179,6 +185,7 @@ function peoplePanel() {
     return `<div class="card"><h3>${esc(p.name)}</h3>
       <div class="grid2">
         ${number(`${P}.age`, "Age today", {min: 18, max: end - 1, step: 1, structural: true})}
+        ${choice(`${P}.sex`, "Sex (for life expectancy)", [["", "Not set (average)"], ["female", "Female"], ["male", "Male"]])}
         ${slider(`${P}.retire_age`, "Retire at", {min: p.age, max: end - 1, structural: true})}
         ${slider(`${P}.cpp_start_age`, "Start CPP at", {min: limits.cpp_start_age[0], max: limits.cpp_start_age[1],
                  help: "Later pays more each year, for life."})}
@@ -214,6 +221,7 @@ function spendingPanel() {
       ${slider("spending.no_go_age", "Slow down more at", {min: 60, max: 100, structural: true})}
       ${slider("spending.no_go_share", "…spending this much", {min: 0.4, max: 1, step: 0.01, unit: "%"})}
       ${number("spending.care", "Care costs in the last years (C$/yr)", {min: 0, step: 1000})}
+      ${draft.people.length === 2 ? slider("spending.survivor_share", "A survivor alone spends", {min: limits.survivor_share[0], max: limits.survivor_share[1], step: 0.01, unit: "%"}) : ""}
     </div></div>
     <div class="card"><h3>When markets fall</h3><div class="grid2">
       ${slider("spending.bad_market_cut", "Cut spending by", {min: 0, max: 0.3, step: 0.01, unit: "%"})}
@@ -379,7 +387,7 @@ function optimizePanel() {
     b = r.people.map(c => `<h4>${esc(c.name)}: CPP at ${c.best[0]}, OAS at ${c.best[1]}
           <span class="note">(now ${c.current[0]} / ${c.current[1]})</span></h4>
         <table class="ages">${row("CPP start", c.by_cpp, c.best[0])}${row("OAS start", c.by_oas, c.best[1])}</table>`).join("") +
-      `<div class="answer"><span>Legacy in the average future:</span><b>${short(r.best_legacy)}</b>
+      `<div class="answer"><span>Expected legacy (over lifespans):</span><b>${short(r.best_legacy)}</b>
          <span class="note">${gain > 0 ? "+" + short(gain) + " vs today's ages" : "today's ages are already best"}
          · chance the money lasts ${pct(r.success)} → ${pct(r.best_success)}</span>
          ${gain > 0 ? `<button data-apply="benefits">Use these ages</button>` : ""}</div>
@@ -398,8 +406,8 @@ function optimizePanel() {
       <button id="opt-benefits">Find the best start ages</button>
       <div id="benefits-out">${b}</div>
       <p class="note">Tries every CPP (${limits.cpp_start_age.join("–")}) and OAS (${limits.oas_start_age.join("–")}) start age for each person and keeps the ones that
-        leave the most money after tax at ${draft.end_age} in the average future (about 10 seconds).
-        It assumes everyone lives to ${draft.end_age}; starting later pays off only if you do.</p>
+        leave the most money after tax on average over 300 drawn lifespans (about 20 seconds), so
+        starting later counts only in the futures where you live to collect it.</p>
     </div>`;
 }
 const PANELS = {people: peoplePanel, spending: spendingPanel, education: educationPanel, home: homePanel,
@@ -412,6 +420,7 @@ function render() {
 
 // ---- events -------------------------------------------------------------------
 function readInput(el) {
+  if (el.tagName === "SELECT") return el.value === "" ? null : el.value;
   if (el.type === "text" || el.type === "radio") return el.value;
   if (el.type === "checkbox") return el.checked;
   if (el.value === "") return el.hasAttribute("data-nullable") ? null : el.hasAttribute("data-optional") ? undefined : 0;
@@ -556,6 +565,8 @@ function showResults(r) {
     ["Investments at retirement", short(r.investments_at_retirement) + delta(r.investments_at_retirement, s.investments_at_retirement, short), "Average future"],
     ["Bad-luck future", shortTile, r.short_years_bad + " short year" + (r.short_years_bad === 1 ? "" : "s") + " (1-in-10 bad run)"],
     ["Lifetime taxes", short(r.lifetime_tax) + delta(r.lifetime_tax, s.lifetime_tax, short, true), "Income tax plus tax at death"],
+    ...(r.lifespans ? [["Median age at death", r.lifespans.people.map(x => `${esc(x.name)} ${x.median_age_at_death}`).join(" · "),
+        `Chance someone reaches 95: ${pct(r.lifespans.reach_95)}`]] : []),
   ];
   $("tiles").innerHTML = tiles.map(([a, b, c]) => `<div class="tile"><div class="label">${esc(a)}</div>
     <div class="value">${b}</div><div class="sub">${esc(c)}</div></div>`).join("");

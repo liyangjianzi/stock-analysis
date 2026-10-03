@@ -11,7 +11,7 @@ A stdlib ``http.server`` on 127.0.0.1 serves one self-contained page
 - ``GET  /api/report/status``    idle / running / done (+ url) / error
 - ``POST /api/reload-balances``  re-read the holdings file
 - ``POST /api/optimize/affordability``  highest spending / earliest retirement at a target
-- ``POST /api/optimize/benefits``       best CPP / OAS start ages (~10 s)
+- ``POST /api/optimize/benefits``       best CPP / OAS start ages (~20 s)
 - ``GET  /reports/<path>``       files under the output root (browsers won't follow
                                  ``file://`` links from an http page)
 

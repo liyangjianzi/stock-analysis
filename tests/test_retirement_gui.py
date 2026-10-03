@@ -168,3 +168,13 @@ def test_benefits_endpoint(server, monkeypatch):
     status, r = _req(server, "POST", "/api/optimize/benefits", {"plan": inputs.TEMPLATE})
     assert status == 200 and r["plan"] is None and r["best_legacy"] >= r["legacy"]
     assert [c["name"] for c in r["people"]] == ["Partner A", "Partner B"]
+
+
+def test_page_edits_sex_and_survivor_share(server):
+    status, page = _req(server, "GET", "/")
+    page = page.decode()
+    assert status == 200 and "${P}.sex" in page and "spending.survivor_share" in page
+    assert "It assumes everyone lives to" not in page
+    status, st = _req(server, "GET", "/api/plan")
+    assert st["limits"]["survivor_share"] == [0.4, 1.0]
+    assert "lifespans" in st["saved"]
