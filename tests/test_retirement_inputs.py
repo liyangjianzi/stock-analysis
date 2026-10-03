@@ -172,3 +172,33 @@ def test_salary_must_not_be_negative():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "people[0].salary"
+
+
+def test_sex_and_survivor_share_default_and_round_trip():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    plan = inputs.parse(d)
+    assert [p.sex for p in plan.people] == ["female", "male"]
+    assert plan.spending.survivor_share == 0.70
+    for p in d["people"]:
+        p.pop("sex")
+    d["spending"].pop("survivor_share")
+    plan = inputs.parse(d)
+    assert [p.sex for p in plan.people] == [None, None] and plan.spending.survivor_share == 0.70
+
+
+def test_a_misspelled_sex_names_the_field():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][1]["sex"] = "M"
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[1].sex"
+
+
+@pytest.mark.parametrize("share", [0.39, 1.01])
+def test_survivor_share_is_bounded(share):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["spending"]["survivor_share"] = share
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "spending.survivor_share"
+    assert inputs.limits("AB")["survivor_share"] == (0.4, 1.0)

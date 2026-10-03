@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import rules
+from . import mortality, rules
 
 ACCOUNT_TYPES = ("rrsp", "pension", "tfsa", "nonreg")
 LIVING = ("home", "away")
@@ -82,6 +82,7 @@ class Spending:
     care: float = 0.0
     bad_market_cut: float = 0.10
     bad_market_trigger: float = 0.80
+    survivor_share: float = 0.70    # a lone survivor's share of the couple's budget
 
 
 @dataclass(frozen=True)
@@ -185,14 +186,14 @@ TEMPLATE = {
     "start_year": 2026,
     "end_age": 95,
     "people": [
-        {"id": "A", "name": "Partner A", "age": 50, "retire_age": 60,
+        {"id": "A", "name": "Partner A", "sex": "female", "age": 50, "retire_age": 60,
          "cpp_start_age": 70, "oas_start_age": 70, "cpp_at_65": None,
          "cpp_years": 25, "cpp_earnings_ratio": 0.9, "years_in_canada_at_65": 40,
          "rrif_start_age": 65, "lif_start_age": None, "unlock_share": 0.5, "tfsa_room": 0,
          "salary": 105000,
          "contributions": {"pension": 8000, "tfsa": 7000, "rrsp": 10000, "nonreg": 0},
          "contributions_when_partner_retired": None},
-        {"id": "B", "name": "Partner B", "age": 48, "retire_age": 58,
+        {"id": "B", "name": "Partner B", "sex": "male", "age": 48, "retire_age": 58,
          "cpp_start_age": 70, "oas_start_age": 70, "cpp_at_65": None,
          "cpp_years": 20, "cpp_earnings_ratio": 0.9, "years_in_canada_at_65": 38,
          "rrif_start_age": 65, "lif_start_age": None, "unlock_share": 0.5, "tfsa_room": 0,
@@ -203,7 +204,8 @@ TEMPLATE = {
     "spending": {"base": 80000,
                  "changes": [{"year": 2035, "amount": -10000, "label": "Kids leave home"}],
                  "slow_go_age": 75, "slow_go_share": 0.85, "no_go_age": 85, "no_go_share": 0.70,
-                 "care": 25000, "bad_market_cut": 0.10, "bad_market_trigger": 0.80},
+                 "care": 25000, "bad_market_cut": 0.10, "bad_market_trigger": 0.80,
+                 "survivor_share": 0.70},
     "home": {"value": 900000, "downsize_age": 65, "new_value": 600000, "selling_cost": 0.04,
              "moving_cost": 20000, "property_tax": 6000, "insurance": 2000},
     "returns": {"mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
@@ -277,6 +279,7 @@ def limits(province: str) -> dict:
             "lif_min_age": lif["min_age"].value,
             "unlock_share": lif["unlock_share"].value,
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
+            "survivor_share": (0.4, 1.0),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
             "student_grant_max": rules.STUDENT_GRANT.value["yearly_max"],
             "aip_rrsp_max": aip["rrsp_transfer_max"], "aip_extra_tax": aip["extra_tax"]}
@@ -305,6 +308,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
         f = f"people[{i}]"
         if not 18 <= p.age < plan.end_age:
             _fail(f"{f}.age", f"{p.age} must be 18 or more and below end_age {plan.end_age}")
+        if p.sex is not None and p.sex not in mortality.SEXES:
+            _fail(f"{f}.sex", f"{p.sex!r} is not one of {mortality.SEXES} (or leave it out)")
         if p.retire_age < p.age:
             _fail(f"{f}.retire_age", f"{p.retire_age} is below age {p.age}")
         if p.retire_age >= plan.end_age:
@@ -344,6 +349,9 @@ def validate(plan: PlanInputs) -> PlanInputs:
     for name in ("slow_go_share", "no_go_share", "bad_market_cut", "bad_market_trigger"):
         if not 0 <= getattr(s, name) <= 1:
             _fail(f"spending.{name}", "must be between 0 and 1")
+    lo, hi = lim["survivor_share"]
+    if not lo <= s.survivor_share <= hi:
+        _fail("spending.survivor_share", f"between {lo} and {hi}")
     if s.slow_go_age > s.no_go_age:
         _fail("spending.slow_go_age", "must not be after no_go_age")
     if s.care < 0:
