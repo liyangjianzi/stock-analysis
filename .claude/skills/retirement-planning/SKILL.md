@@ -88,8 +88,12 @@ Library: `from stockanalysis.retirement import load_inputs, run` then
 
 ## Reading the report (explain it in plain words)
 
-- **Chance the money lasts** — share of futures with no short year to `end_age`.
-- **Legacy** — after-tax estate at `end_age` incl. the home (registered money
+- **Chance the money lasts as long as either of you lives** — share of futures with
+  no short year while anyone is alive; deaths are drawn per future from the Alberta
+  life table (the Lifespans tiles show median ages at death). After the first death
+  the survivor spends `survivor_share` of the budget, gets the CPP survivor's
+  pension, and files alone (no splitting): usually the largest tax jump.
+- **Legacy** — after-tax estate at `end_age` (average future) incl. the home (registered money
   and unrealized gains taxed at the top rate at the second death).
 - **Short years / investments at retirement** — average future, and the
   bad-luck future (the 1-in-10 bad run of returns, replayed alone).
@@ -111,6 +115,10 @@ big decisions.
   page (CRA T4127 + TD1/TD1AB forms, Service Canada OAS/CPP pages, the CRA RRIF
   factor chart, Alberta's Superintendent of Pensions interest-rate tables) —
   **never from memory** — bump `TAX_YEAR`, and run `pytest tests/test_retirement_*.py`.
+  The CPP survivor amounts (`rules.CPP["survivor"]`, `death_benefit`) change every
+  January with the rest of `rules.CPP`. The life table in `mortality.py` changes only
+  when Statistics Canada publishes a new three-year table (13-10-0114-01) or the
+  CPP actuarial report revises its improvement rates.
 - Only **RRIF / LIF payments at 65+** are eligible pension income (pension
   credit + splitting); plain RRSP withdrawals are not — hence `rrif_start_age` 65.
 - The OAS repayment is deducted (line 23500) before net and taxable income.
