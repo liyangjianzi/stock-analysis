@@ -351,3 +351,94 @@ def test_a_worker_who_dies_stops_earning_and_the_retired_partner_draws_instead()
     proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), deaths)
     assert proj.income["earned"][1, 0] == 30_000.0 and proj.income["earned"][2, 0] == 0.0
     assert proj.income["tfsa"][2, 0] > 0
+
+
+# -- lifespans: survivor years ------------------------------------------------------
+
+def widowed(a_kw=None, b_kw=None, accounts=(), base=40_000.0, end_age=80, death_a=63, **kw):
+    """A couple where A dies at ``death_a`` and B lives past the horizon; zero returns."""
+    a = person(**{"id": "A", "name": "A", "age": 60, "retire_age": 60, **(a_kw or {})})
+    b = person(**{"id": "B", "name": "B", "age": 60, "retire_age": 60, **(b_kw or {})})
+    p = plan(people=[a, b], accounts=accounts, base=base, end_age=end_age, **kw)
+    deaths = np.array([[death_a], [p.end_age]])
+    return p, engine.simulate(p, np.zeros((engine.steps(p), 1)), deaths)
+
+
+def test_rollover_moves_everything_to_the_survivor_untaxed():
+    # No spending, no returns, no RRIF yet (rrif_start_age 71): nothing should move but owners.
+    p, proj = widowed(accounts=[Account("A", "rrsp", 200_000.0), Account("A", "tfsa", 50_000.0),
+                                Account("B", "tfsa", 10_000.0)], base=0.0)
+    assert proj.investments[3, 0] == pytest.approx(260_000.0)          # the January after A's death
+    assert proj.investments[10, 0] == pytest.approx(260_000.0)         # still all there, now B's
+    assert proj.balances["rrsp"][3, 0] == pytest.approx(200_000.0)     # still registered, untaxed
+    assert (proj.tax[:, 0] == 0).all()
+
+
+def test_the_survivor_can_draw_the_dead_partners_rrsp():
+    # All the money is A's RRSP; after A dies, B must live on it (a dead person's
+    # RRSP is never drawn, so without the rollover B would run short).
+    p, proj = widowed(accounts=[Account("A", "rrsp", 500_000.0)], base=20_000.0)
+    assert proj.income["registered"][3, 0] > 0
+    assert proj.shortfall_years[0] == 0
+
+
+def test_survivor_spends_the_survivor_share_and_care_stays_whole():
+    p, proj = widowed(base=40_000.0, accounts=[Account("B", "tfsa", 2_000_000.0)],
+                      care=5_000.0, no_go_age=60, no_go_share=1.0)
+    assert proj.need[2, 0] == pytest.approx(45_000.0)
+    assert proj.need[3, 0] == pytest.approx(40_000.0 * 0.70 + 5_000.0)
+
+
+def test_cpp_survivor_pension_at_65_is_60_percent_capped_by_the_combined_maximum():
+    s = rules.CPP["survivor"].value
+    p, proj = widowed(a_kw=dict(age=66, cpp_at_65=12_000.0, cpp_start_age=65),
+                      b_kw=dict(age=66, cpp_at_65=6_000.0, cpp_start_age=65),
+                      accounts=[Account("B", "tfsa", 2_000_000.0)], death_a=68, end_age=75)
+    assert proj.income["cpp"][1, 0] == pytest.approx(18_000.0)
+    assert proj.income["cpp"][2, 0] == pytest.approx(6_000.0 + 0.60 * 12_000.0)
+    big = widowed(a_kw=dict(age=66, cpp_at_65=18_000.0, cpp_start_age=65),
+                  b_kw=dict(age=66, cpp_at_65=17_000.0, cpp_start_age=65),
+                  accounts=[Account("B", "tfsa", 2_000_000.0)], death_a=68, end_age=75)[1]
+    assert big.income["cpp"][2, 0] == pytest.approx(12 * s["combined_max_monthly"])
+
+
+def test_a_survivor_under_65_gets_the_flat_rate_plus_37_5_percent():
+    s = rules.CPP["survivor"].value
+    p, proj = widowed(a_kw=dict(age=55, cpp_at_65=12_000.0), b_kw=dict(age=55, cpp_at_65=0.0),
+                      accounts=[Account("B", "tfsa", 2_000_000.0)], death_a=57, end_age=70)
+    assert proj.income["cpp"][2, 0] == pytest.approx(12 * s["flat_monthly"] + 0.375 * 12_000.0)
+
+
+def test_no_survivor_pension_when_the_partner_never_paid_into_cpp():
+    p, proj = widowed(a_kw=dict(age=55, cpp_at_65=0.0), b_kw=dict(age=55, cpp_at_65=0.0),
+                      accounts=[Account("B", "tfsa", 2_000_000.0)], death_a=57, end_age=70)
+    assert (proj.income["cpp"][:, 0] == 0).all()
+
+
+def test_no_pension_splitting_after_the_first_death():
+    # All the RRIF is A's; B dies at 72. With no spending, A's only income is the RRIF
+    # minimum, so A must be taxed exactly as a single filer on it: no split to B.
+    both = dict(age=70, retire_age=60, rrif_start_age=65)
+    p = plan(people=[person(id="A", name="A", **both), person(id="B", name="B", **both)],
+             accounts=[Account("A", "rrsp", 1_000_000.0)], base=0.0, end_age=80)
+    zeros = np.zeros((engine.steps(p), 1))
+    alone = engine.simulate(p, zeros, np.array([[80], [72]]))
+    together = engine.simulate(p, zeros)
+    pension = alone.income["minimums"][3, 0]
+    assert alone.tax[3, 0] == pytest.approx(float(tax.income_tax(pension=pension, age=73)), abs=1.0)
+    assert together.tax[3, 0] < alone.tax[3, 0]                      # splitting helped while both lived
+
+
+def test_the_death_benefit_is_paid_once_to_the_survivor():
+    benefit = rules.CPP["death_benefit"].value
+    p, with_cpp = widowed(a_kw=dict(cpp_at_65=10_000.0), base=0.0)
+    _, without = widowed(a_kw=dict(cpp_at_65=0.0), base=0.0)
+    gap = with_cpp.investments[3, 0] - without.investments[3, 0]
+    assert gap == pytest.approx(benefit, abs=1.0)
+
+
+def test_one_person_plan_ignores_the_survivor_share():
+    p = plan(people=[person(age=60)], accounts=[Account("A", "tfsa", 500_000.0)], base=30_000.0,
+             end_age=80, survivor_share=0.5)
+    proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), np.array([[70]]))
+    assert proj.need[5, 0] == 30_000.0 and proj.end_step[0] == 10

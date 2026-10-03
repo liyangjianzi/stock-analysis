@@ -283,6 +283,45 @@ def _resp_year(school, t, cost_t, resp_bal, resp_in, resp_grant) -> tuple:
     return cost_t - paid, leftover
 
 
+def roll_over(bal, cost, room, restore, lif_gain, alive) -> np.ndarray:
+    """Spousal rollover, untaxed, in place: a dead person's accounts, cost base and
+    last LIF return move to the living partner, and their TFSA room is lost. Runs
+    every January, so money paid to a dead person later is swept too. Returns
+    (P, N) bool: who was rolled into a partner this January."""
+    moved = np.zeros(alive.shape, dtype=bool)
+    for i, j in ((0, 1), (1, 0)):
+        go = ~alive[i] & alive[j]
+        if not go.any():
+            continue
+        for k in ACCOUNTS:
+            bal[k][j] += np.where(go, bal[k][i], 0.0)
+            bal[k][i] = np.where(go, 0.0, bal[k][i])
+        for arr in (cost, lif_gain):
+            arr[j] += np.where(go, arr[i], 0.0)
+            arr[i] = np.where(go, 0.0, arr[i])
+        room[i] = np.where(go, 0.0, room[i])
+        restore[i] = np.where(go, 0.0, restore[i])
+        moved[i] |= go
+    return moved
+
+
+def survivor_cpp(people, ages, alive, own) -> np.ndarray:
+    """(P, N) yearly CPP survivor's pension for a living person whose partner has
+    died: 60% of the partner's CPP at 65 from 65, or the flat rate plus 37.5% before,
+    capped so it plus their own CPP stays within the combined maximum."""
+    s = rules.CPP["survivor"].value
+    out = np.zeros(alive.shape)
+    for i, j in ((0, 1), (1, 0)):                       # j survives i
+        base = cpp_at_65(people[i])
+        if base <= 0:                                   # never paid in: no survivor's pension
+            continue
+        amount = (s["share_65"] * base if ages[j] >= 65
+                  else 12 * s["flat_monthly"] + s["share_under_65"] * base)
+        out[j] = np.where(~alive[i] & alive[j],
+                          np.clip(12 * s["combined_max_monthly"] - own[j], 0.0, amount), 0.0)
+    return out
+
+
 def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None) -> Projection:
     """Project ``plan`` over ``returns``: (T, N) real yearly returns. ``deaths`` is a
     (P, N) array of death ages (see mortality); None lets everyone live all T years."""
@@ -345,6 +384,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         resp_grant = np.full(N, min(school.grants, school.balance - resp_in[0]))
     aip = rules.RESP["aip"].value
     prev_tax, prev_share = np.zeros(N), np.zeros(N)
+    benefit_paid = np.zeros((P, N), dtype=bool)
+    death_benefit = rules.CPP["death_benefit"].value
 
     for t in range(T):
         year = plan.start_year + t
@@ -360,6 +401,15 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         # 1. January 1: TFSA room, LIF start (+ unlocking), downsizing.
         room += limit + restore
         restore[:] = 0.0
+        if P == 2:
+            moved = roll_over(bal, cost, room, restore, lif_gain, alive)
+            first = moved & ~benefit_paid
+            benefit_paid |= moved
+            for i, j in ((0, 1), (1, 0)):              # the CPP death benefit, once, untaxed
+                if cpp_at_65(people[i]) > 0:
+                    paid = np.where(first[i], death_benefit, 0.0)
+                    bal["nonreg"][j] += paid
+                    cost[j] += paid
         rrsp_jan1 = bal["rrsp"].copy()   # before any LIF unlock: that money wasn't here on Jan 1
         for i, p in enumerate(people):
             if lif_step[i] is None and not planned[i] and ages[i] >= lif_age[i]:
@@ -369,8 +419,9 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 lif_step[i] = t
         if home is not None and home.downsize_age is not None and ages[0] == home.downsize_age:
             released = home.value * (1 - home.selling_cost) - home.new_value - home.moving_cost
-            bal["nonreg"] += released / P
-            cost += released / P
+            split = np.where(household, alive / np.maximum(alive.sum(axis=0), 1), 1.0 / P)
+            bal["nonreg"] += released * split
+            cost += released * split
             downsized = True
         if home is not None:
             home_value[t] = home.new_value if downsized else home.value
@@ -419,6 +470,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if not anyone_working:
             need = np.where(invest[t] < spend.bad_market_trigger * retire_ref,
                             need * (1 - spend.bad_market_cut), need)
+        if P == 2:
+            need = np.where(alive.sum(axis=0) == 1, need * spend.survivor_share, need)
         if ages[0] >= spend.no_go_age:
             need = need + spend.care
         if school is not None:
@@ -434,6 +487,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         cpp = np.array([[cpp_year[i] if ages[i] >= p.cpp_start_age else 0.0]
                         for i, p in enumerate(people)]) * alive          # (P, N)
         oas = np.array([[oas_yearly(p, ages[i])] for i, p in enumerate(people)]) * alive
+        if P == 2:
+            cpp = cpp + survivor_cpp(people, ages, alive, cpp)
         is_rrif = [ages[i] >= p.rrif_start_age for i, p in enumerate(people)]
         min_rrif, min_lif, lif_room = (np.zeros((P, N)) for _ in range(3))
         for i, p in enumerate(people):
@@ -461,7 +516,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                  "nonreg": bal["nonreg"], "tfsa": bal["tfsa"]}
         gain_ratio = np.clip(np.divide(bal["nonreg"] - cost, bal["nonreg"], out=np.zeros((P, N)),
                                        where=bal["nonreg"] > 0), 0.0, 1.0)
-        share, tax_est = prev_share, prev_tax.copy()
+        both = alive.all(axis=0)
+        share, tax_est = np.where(both, prev_share, 0.0), prev_tax.copy()
         for _round in range(SPLIT_ROUNDS):
             for _ in range(MAX_ITER):
                 draw, unfunded, surplus = allocate(plan.withdrawal, avail,
@@ -478,7 +534,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                     break
             if P < 2 or max(ages) < split_age:
                 break
-            best = tax.best_split(parts, prov)
+            best = np.where(both, tax.best_split(parts, prov), 0.0)   # never split to the dead
             if np.array_equal(best, share):
                 break
             share = best
