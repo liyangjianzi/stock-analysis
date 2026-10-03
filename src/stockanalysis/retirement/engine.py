@@ -693,11 +693,13 @@ def draw_futures(plan: PlanInputs, paths: int, seed: int) -> tuple:
 def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) -> PlanResult:
     """The plan over ``paths`` simulated futures with drawn lifespans, plus the average
     future (a steady median return) and the bad-luck future (the 10th-percentile path's
-    returns, replayed alone), both with ``average_deaths`` over ``steps(plan)``."""
+    returns, ranked and replayed with ``average_deaths`` over ``steps(plan)``)."""
     r = plan.returns
     R, D = draw_futures(plan, r.paths if paths is None else paths, r.seed if seed is None else seed)
     simulated = simulate(plan, R, D)
     T, g, fixed = steps(plan), median_return(r.mean, r.sd), average_deaths(plan)
     average = simulate(plan, np.full((T, 1), g), fixed)
-    k = bad_luck_index(simulated)
+    # Rank the returns with everyone on the same fixed deaths: ranked on the drawn
+    # lifespans, an early death leaves little money and passes for bad markets.
+    k = bad_luck_index(simulate(plan, R[:T], np.repeat(fixed, R.shape[1], axis=1)))
     return PlanResult(plan, simulated, average, simulate(plan, R[:T, [k]], fixed), g, k)

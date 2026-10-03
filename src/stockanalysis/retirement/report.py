@@ -171,7 +171,7 @@ def income_chart(avg: Projection, bad: Projection) -> go.Figure:
 def money_left_chart(sim: Projection, plan) -> go.Figure:
     """Investments by age as a bad / typical / good band, plus the home's value."""
     ref = plan.people[0]
-    rows = min(sim.investments.shape[0], plan.end_age - ref.age + 1)   # the band stops at end_age
+    rows = min(sim.investments.shape[0], engine.steps(plan) + 1)   # stop when the youngest reaches end_age
     inv = sim.investments[:rows]
     x = [ref.age + t for t in range(rows)]
     with warnings.catch_warnings():                       # a year where every future has ended

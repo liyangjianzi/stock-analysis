@@ -167,7 +167,10 @@ def test_money_left_band_stops_at_end_age_and_ignores_ended_futures(built):
     plan, result, *_ = built
     fig = report.money_left_chart(result.simulated, plan)
     xs = fig.data[0].x
-    assert xs[-1] <= plan.end_age and not any(np.isnan(fig.data[2].y[:3]))
+    # Ends where the average-future charts do: when the youngest reaches end_age
+    # (people[0]'s age on the x axis), not when people[0] does.
+    assert xs[-1] == plan.people[0].age + engine.steps(plan)
+    assert not any(np.isnan(fig.data[2].y[:3]))
 
 
 def test_assumptions_list_lifespan_sources(built):

@@ -463,3 +463,16 @@ def test_success_counts_only_years_someone_is_alive():
     R = np.zeros((engine.life_steps(p), 2))
     proj = engine.simulate(p, R, np.array([[62, 100]]))
     assert proj.shortfall_years[0] == 0 and proj.shortfall_years[1] > 0
+
+
+def test_bad_luck_path_is_ranked_on_returns_not_on_lifespans():
+    # Ranked on drawn deaths, a household that died early has little money left and
+    # looks "unlucky" though its returns weren't; rank on shared fixed deaths instead.
+    p = plan(people=[person(age=60)], accounts=[Account("A", "rrsp", 900_000.0)],
+             base=30_000.0, end_age=95)
+    p = replace(p, returns=Returns(0.05, 0.15, 300, 3))
+    result = engine.run(p)
+    R, _ = engine.draw_futures(p, 300, 3)
+    T = engine.steps(p)
+    fixed = engine.simulate(p, R[:T], np.repeat(engine.average_deaths(p), 300, axis=1))
+    assert result.bad_luck_path == engine.bad_luck_index(fixed)
