@@ -38,7 +38,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import education, rules, tax
+from . import education, mortality, rules, tax
 from .inputs import PlanInputs
 
 
@@ -108,9 +108,20 @@ SHORTFALL_EPS = 1.0   # a gap under a dollar is rounding, not a short year
 
 
 def steps(plan: PlanInputs) -> int:
-    """Years projected: from now until the youngest person reaches ``end_age`` (both
-    spouses are assumed to live to it). Household events still key on people[0]'s age."""
+    """The "plan to" horizon: from now until the youngest person reaches ``end_age``.
+    The average and bad-luck futures and the charts use it. Household events still
+    key on people[0]'s age."""
     return plan.end_age - min(p.age for p in plan.people)
+
+
+def life_steps(plan: PlanInputs) -> int:
+    """The lifespan horizon: until the youngest could reach mortality.OMEGA."""
+    return mortality.OMEGA - min(p.age for p in plan.people)
+
+
+def fixed_deaths(plan: PlanInputs, T: int, N: int) -> np.ndarray:
+    """(P, N) death ages under which everyone lives through all T years."""
+    return np.repeat(np.array([[p.age + T] for p in plan.people], dtype=int), N, axis=1)
 
 
 def stage_share(spending, age: int) -> float:
@@ -142,6 +153,10 @@ class Projection:
     student_grant: np.ndarray | None = None  # (T, N) Canada Student Grants received
     resp: np.ndarray | None = None        # (T + 1, N) RESP balance on January 1, after that year's flows
     school: object | None = None          # the education.Schedule behind them
+    death_ages: np.ndarray | None = None        # (P, N) death ages (see mortality)
+    alive: np.ndarray | None = None             # (T, P, N) alive in each year
+    end_step: np.ndarray | None = None          # (N,) years the household lives; the estate's January 1
+    final_investments: np.ndarray | None = None  # (N,) investments on that January 1, before tax at death
 
     @property
     def paths(self) -> int:
@@ -225,7 +240,7 @@ def _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
     for i in range(len(people)):
         reg = min_rrif[i] + draw["rrsp"][i]
         lif = min_lif[i] + draw["lif"][i]
-        cpp_i = np.full_like(reg, cpp[i])
+        cpp_i = np.zeros_like(reg) + cpp[i]
         if ages[i] >= pension_age:
             pension = (reg if is_rrif[i] else np.zeros_like(reg)) + lif
             ordinary = cpp_i + (np.zeros_like(reg) if is_rrif[i] else reg)
@@ -234,7 +249,7 @@ def _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
             ordinary = cpp_i + reg + lif
         parts.append({"ordinary": ordinary + other[i], "pension": pension, "dividends": eligible[i],
                       "gains": draw["nonreg"][i] * gain_ratio[i],
-                      "oas": np.full_like(reg, oas[i]), "age": ages[i]})
+                      "oas": np.zeros_like(reg) + oas[i], "age": ages[i]})
     return parts
 
 
@@ -268,14 +283,19 @@ def _resp_year(school, t, cost_t, resp_bal, resp_in, resp_grant) -> tuple:
     return cost_t - paid, leftover
 
 
-def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
-    """Project ``plan`` over ``returns``: (T, N) real yearly returns, with T = steps(plan)."""
+def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None) -> Projection:
+    """Project ``plan`` over ``returns``: (T, N) real yearly returns. ``deaths`` is a
+    (P, N) array of death ages (see mortality); None lets everyone live all T years."""
     people, prov, spend, home = plan.people, plan.province, plan.spending, plan.home
-    T = steps(plan)
     returns = np.asarray(returns, dtype=float)
-    if returns.ndim != 2 or returns.shape[0] != T:
-        raise ValueError(f"returns must have shape ({T}, paths); got {returns.shape}")
-    N, P = returns.shape[1], len(people)
+    if returns.ndim != 2 or returns.shape[0] < 1:
+        raise ValueError(f"returns must have shape (years, paths); got {returns.shape}")
+    T, N, P = returns.shape[0], returns.shape[1], len(people)
+    deaths = fixed_deaths(plan, T, N) if deaths is None else np.asarray(deaths, dtype=int)
+    if deaths.shape != (P, N):
+        raise ValueError(f"deaths must have shape ({P}, {N}); got {deaths.shape}")
+    age0 = np.array([[p.age] for p in people])
+    end_step = np.clip((deaths - age0).max(axis=0), 0, T)     # years someone is alive
     owner = {p.id: i for i, p in enumerate(people)}
 
     bal = {k: np.zeros((P, N)) for k in ACCOUNTS}
@@ -304,6 +324,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
     income = {s: np.zeros((T, N)) for s in SOURCES}
     tax_paid, need_rec, saved_rec, room_rec = (np.zeros((T, N)) for _ in range(4))
     invest = np.zeros((T + 1, N))
+    gains_rec = np.zeros((T + 1, N))            # unrealized non-reg gains each January 1
+    alive_rec = np.zeros((T, P, N), dtype=bool)
     balances = {k: np.zeros((T + 1, N)) for k in ACCOUNTS}
     home_value = np.zeros(T + 1)
     retire_ref, retire_step, max_resid, downsized = None, T, 0.0, False
@@ -327,15 +349,20 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
     for t in range(T):
         year = plan.start_year + t
         ages = [p.age + t for p in people]
-        working = [ages[i] < p.retire_age for i, p in enumerate(people)]
-        anyone_working = any(working)
+        alive = (age0 + t) < deaths                                      # (P, N)
+        alive_rec[t] = alive
+        planned = [ages[i] < p.retire_age for i, p in enumerate(people)]  # the plan's calendar
+        working = np.array(planned)[:, None] & alive                     # (P, N) actually earning
+        anyone_working = any(planned)
+        earning = working.any(axis=0)                                    # (N,)
+        household = alive.any(axis=0)                                    # (N,)
 
         # 1. January 1: TFSA room, LIF start (+ unlocking), downsizing.
         room += limit + restore
         restore[:] = 0.0
         rrsp_jan1 = bal["rrsp"].copy()   # before any LIF unlock: that money wasn't here on Jan 1
         for i, p in enumerate(people):
-            if lif_step[i] is None and not working[i] and ages[i] >= lif_age[i]:
+            if lif_step[i] is None and not planned[i] and ages[i] >= lif_age[i]:
                 unlock = p.unlock_share * bal["pension"][i]
                 bal["pension"][i] -= unlock
                 bal["rrsp"][i] += unlock
@@ -364,7 +391,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
                            if plan.education.aip_to_rrsp else 0.0)
                 taxable = growth - to_rrsp
                 resp_tax = aip["extra_tax"] * taxable
-                if working[0]:
+                if planned[0]:
                     resp_tax = resp_tax + tax.extra_tax(people[0].salary or 0.0, ordinary=taxable,
                                                         age=ages[0], province=prov)
                 else:
@@ -379,6 +406,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         for k in ACCOUNTS:
             balances[k][t] = bal[k].sum(axis=0)
         invest[t] = sum(balances[k][t] for k in ACCOUNTS)
+        gains_rec[t] = np.maximum(bal["nonreg"] - cost, 0.0).sum(axis=0)
         if not anyone_working and retire_ref is None:
             retire_ref, retire_step = invest[t].copy(), t
         pension_jan1 = bal["pension"].copy()
@@ -396,15 +424,16 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         if school is not None:
             need = need + school.contribution[t]       # RESP contributions are paid like spending
         # School costs the RESP can't cover come from savings even while anyone works.
+        need = need * household
+        uncovered = uncovered * household
         need_rec[t] = need + uncovered
-        if anyone_working:
-            income["earned"][t] = need
-        cash_need = uncovered if anyone_working else need + uncovered
+        income["earned"][t] = np.where(earning, need, 0.0)
+        cash_need = np.where(earning, uncovered, need + uncovered)
 
         # 3. Guaranteed income: CPP, OAS, RRIF and LIF minimums.
-        cpp = np.array([cpp_year[i] if ages[i] >= p.cpp_start_age else 0.0
-                        for i, p in enumerate(people)])
-        oas = np.array([oas_yearly(p, ages[i]) for i, p in enumerate(people)])
+        cpp = np.array([[cpp_year[i] if ages[i] >= p.cpp_start_age else 0.0]
+                        for i, p in enumerate(people)]) * alive          # (P, N)
+        oas = np.array([[oas_yearly(p, ages[i])] for i, p in enumerate(people)]) * alive
         is_rrif = [ages[i] >= p.rrif_start_age for i, p in enumerate(people)]
         min_rrif, min_lif, lif_room = (np.zeros((P, N)) for _ in range(3))
         for i, p in enumerate(people):
@@ -415,17 +444,18 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
                     min_lif[i] = rules.rrif_min_factor(ages[i] - 1) * pension_jan1[i]
                 cap = np.maximum(lif_gain[i], rules.lif_max_pct(prov, ages[i] - 1) * pension_jan1[i])
                 lif_room[i] = np.maximum(cap - min_lif[i], 0.0)
+        min_rrif, min_lif, lif_room = min_rrif * alive, min_lif * alive, lif_room * alive
         min_rrif = np.minimum(min_rrif, bal["rrsp"])
         min_lif = np.minimum(min_lif, bal["pension"])
         bal["rrsp"] -= min_rrif
         bal["pension"] -= min_lif
         lif_room = np.minimum(lif_room, bal["pension"])
-        guaranteed = cpp.sum() + oas.sum() + (min_rrif + min_lif).sum(axis=0)
-        base_taxable = cpp[:, None] + oas[:, None] + min_rrif + min_lif
+        guaranteed = (cpp + oas + min_rrif + min_lif).sum(axis=0)
+        base_taxable = cpp + oas + min_rrif + min_lif
 
         # 4. Top-up withdrawals, iterated with the household's tax.
         # Earned income covers a worker: never draw on their RRSP/LIF before they retire.
-        retired = np.array([not w for w in working], dtype=float)[:, None]
+        retired = (~working & alive).astype(float)
         base_taxable = base_taxable + taxable_yield * bal["nonreg"] * retired
         avail = {"rrsp": bal["rrsp"] * retired, "lif": lif_room * retired,
                  "nonreg": bal["nonreg"], "tfsa": bal["tfsa"]}
@@ -465,15 +495,17 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         payouts = (y_eligible + y_other) * np.maximum(bal["nonreg"], 0.0)
         drag, worker_income = np.zeros(N), np.zeros(N)
         for i, p in enumerate(people):
-            if not working[i]:
+            w = working[i]
+            if not w.any():
                 continue
             held = np.maximum(bal["nonreg"][i], 0.0)
-            worker_income += salaries[i] + taxable_yield * held
+            worker_income += np.where(w, salaries[i] + taxable_yield * held, 0.0)
             if not payouts[i].any():
                 continue
-            due = np.minimum(tax.extra_tax(p.salary or 0.0, ordinary=y_other * held,
-                                           dividends=y_eligible * held, age=ages[i], province=prov),
-                             held)                      # sold out of the account to pay it
+            due = np.where(w, np.minimum(tax.extra_tax(p.salary or 0.0, ordinary=y_other * held,
+                                                       dividends=y_eligible * held, age=ages[i],
+                                                       province=prov),
+                                         held), 0.0)    # sold out of the account to pay it
             cost[i] -= _pro_rata(cost[i], due, held)
             bal["nonreg"][i] -= due
             drag += due
@@ -481,7 +513,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         last_income = worker_income + sum(
             tax.total_income(ordinary=part["ordinary"], pension=part["pension"], gains=part["gains"],
                              oas=part["oas"], dividends=part["dividends"]) for part in parts)
-        per_person = surplus / P
+        per_person = surplus * alive / np.maximum(alive.sum(axis=0), 1)   # to whoever is alive
         into_tfsa = np.minimum(per_person, room)
         room -= into_tfsa
         bal["tfsa"] += into_tfsa
@@ -490,8 +522,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         for k in ACCOUNTS:
             np.maximum(bal[k], 0.0, out=bal[k])
 
-        income["cpp"][t] = cpp.sum()
-        income["oas"][t] = oas.sum()
+        income["cpp"][t] = cpp.sum(axis=0)
+        income["oas"][t] = oas.sum(axis=0)
         income["minimums"][t] = (min_rrif + min_lif).sum(axis=0)
         income["registered"][t] = (draw["rrsp"] + draw["lif"]).sum(axis=0)
         income["tfsa"][t] = draw["tfsa"].sum(axis=0)
@@ -509,39 +541,54 @@ def simulate(plan: PlanInputs, returns: np.ndarray) -> Projection:
         if school is not None:
             resp_bal *= 1 + r
         for i, p in enumerate(people):
-            if not working[i]:
+            w = working[i]
+            if not w.any():
                 continue
-            partner_working = all(working[j] for j in range(P) if j != i)
-            c = (p.contributions if partner_working or p.contributions_when_partner_retired is None
-                 else p.contributions_when_partner_retired)
-            bal["pension"][i] += c.get("pension", 0.0)
-            bal["rrsp"][i] += c.get("rrsp", 0.0)
-            to_tfsa = np.minimum(c.get("tfsa", 0.0), room[i])
+            others = [working[j] for j in range(P) if j != i]
+            partner = np.logical_and.reduce(others) if others else np.ones(N, dtype=bool)
+            alt = p.contributions_when_partner_retired
+
+            def amount(kind, w=w, partner=partner, alt=alt, p=p):
+                full = p.contributions.get(kind, 0.0)
+                when_alone = full if alt is None else alt.get(kind, 0.0)
+                return np.where(w, np.where(partner, full, when_alone), 0.0)
+
+            bal["pension"][i] += amount("pension")
+            bal["rrsp"][i] += amount("rrsp")
+            to_tfsa = np.minimum(amount("tfsa"), room[i])
             room[i] -= to_tfsa
             bal["tfsa"][i] += to_tfsa
-            extra = c.get("tfsa", 0.0) - to_tfsa + c.get("nonreg", 0.0)
+            extra = amount("tfsa") - to_tfsa + amount("nonreg")
             bal["nonreg"][i] += extra
             cost[i] += extra
 
     for k in ACCOUNTS:
         balances[k][T] = bal[k].sum(axis=0)
     invest[T] = sum(balances[k][T] for k in ACCOUNTS)
+    gains_rec[T] = np.maximum(bal["nonreg"] - cost, 0.0).sum(axis=0)
     if school is not None:
         resp_rec[T] = resp_bal
     if home is not None:
         home_value[T] = home.new_value if downsized else home.value
+    # The estate: the January 1 after the last death, in each future.
+    cols = np.arange(N)
     top = rules.top_marginal_rate(prov)
-    registered = balances["rrsp"][T] + balances["pension"][T]
-    gains = np.maximum(bal["nonreg"] - cost, 0.0).sum(axis=0)
-    death_tax = top * registered + top * rules.CAPITAL_GAINS_INCLUSION.value * gains
+    registered = balances["rrsp"][end_step, cols] + balances["pension"][end_step, cols]
+    death_tax = top * registered + top * rules.CAPITAL_GAINS_INCLUSION.value * gains_rec[end_step, cols]
+    final = invest[end_step, cols].copy()
+    later = np.arange(T + 1)[:, None] > end_step[None, :]       # nobody left: no estate to track
+    invest[later] = np.nan
+    for k in ACCOUNTS:
+        balances[k][later] = np.nan
     return Projection(
         years=[plan.start_year + t for t in range(T)],
         ages=[tuple(p.age + t for p in people) for t in range(T)],
         income=income, tax=tax_paid, need=need_rec, saved=saved_rec, tfsa_room=room_rec,
         investments=invest, balances=balances, home_value=home_value,
-        legacy=invest[T] + home_value[T] - death_tax, death_tax=death_tax,
+        legacy=final + home_value[end_step] - death_tax, death_tax=death_tax,
         retire_step=retire_step, max_residual=max_resid,
-        education=edu_out, student_grant=csg_rec, resp=resp_rec, school=school)
+        education=edu_out, student_grant=csg_rec, resp=resp_rec, school=school,
+        death_ages=deaths, alive=alive_rec, end_step=end_step, final_investments=final)
 
 
 @dataclass
@@ -557,7 +604,7 @@ class PlanResult:
 def bad_luck_index(proj: Projection, pct: float = 0.10) -> int:
     """The path at the ``pct`` point, worst first: ranked by the year the money runs
     out (earliest = worst), then by money left at the end."""
-    order = np.lexsort((proj.investments[-1], proj.first_shortfall_step))
+    order = np.lexsort((proj.final_investments, proj.first_shortfall_step))
     return int(order[int(np.floor(pct * (len(order) - 1)))])
 
 

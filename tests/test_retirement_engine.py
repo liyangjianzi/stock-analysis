@@ -247,6 +247,8 @@ def test_workers_registered_money_is_not_drawn_before_retirement():
 def test_projection_runs_until_the_youngest_reaches_end_age():
     p = plan(people=[person(id="A", age=60), person(id="B", name="B", age=50)], end_age=63)
     assert engine.steps(p) == 13
+    from stockanalysis.retirement import mortality
+    assert engine.life_steps(p) == mortality.OMEGA - min(q.age for q in p.people)
     assert run_flat(p).ages[-1] == (72, 62)
 
 
@@ -302,3 +304,50 @@ def test_no_payouts_leave_working_years_untaxed():
     proj = run_flat(plan(people=[worker], accounts=[Account("A", "nonreg", 500_000.0)],
                          base=40_000.0, end_age=56))
     assert proj.tax[0, 0] == 0.0 and proj.investments[1, 0] == pytest.approx(500_000.0)
+
+
+# -- lifespans: the alive mask ------------------------------------------------------
+
+def couple(**kw):
+    a = person(id="A", name="A", age=60, retire_age=60)
+    b = person(id="B", name="B", age=60, retire_age=60)
+    return plan(people=[a, b], **kw)
+
+
+def test_no_deaths_given_means_everyone_lives_the_whole_horizon():
+    p = couple(accounts=[Account("A", "rrsp", 300_000.0), Account("B", "tfsa", 200_000.0)],
+               base=40_000.0, end_age=75)
+    returns = np.random.default_rng(5).normal(0.03, 0.1, (engine.steps(p), 4))
+    implicit = engine.simulate(p, returns)
+    explicit = engine.simulate(p, returns, engine.fixed_deaths(p, engine.steps(p), 4))
+    for s in engine.SOURCES:
+        np.testing.assert_array_equal(implicit.income[s], explicit.income[s])
+    np.testing.assert_array_equal(implicit.legacy, explicit.legacy)
+    assert implicit.alive.all() and (implicit.end_step == engine.steps(p)).all()
+
+
+def test_after_the_last_death_nothing_is_spent_or_short_and_balances_are_nan():
+    p = couple(accounts=[Account("A", "tfsa", 50_000.0)], base=40_000.0, end_age=80)
+    deaths = np.array([[63], [65]])                     # A lives 3 years, B 5
+    proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), deaths)
+    assert proj.end_step[0] == 5
+    assert (proj.need[5:, 0] == 0).all() and (proj.income["shortfall"][5:, 0] == 0).all()
+    assert np.isnan(proj.investments[6:, 0]).all() and not np.isnan(proj.investments[5, 0])
+    assert proj.final_investments[0] == proj.investments[5, 0]
+
+
+def test_legacy_is_valued_at_the_last_death():
+    p = plan(people=[person(age=60)], accounts=[Account("A", "rrsp", 100_000.0)], base=0.0, end_age=90)
+    proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), np.array([[61]]))
+    assert proj.death_tax[0] == pytest.approx(0.48 * 100_000.0)
+    assert proj.legacy[0] == pytest.approx(52_000.0)
+
+
+def test_a_worker_who_dies_stops_earning_and_the_retired_partner_draws_instead():
+    a = person(id="A", name="A", age=50, retire_age=60)                # works
+    b = person(id="B", name="B", age=62, retire_age=60)                # retired
+    p = plan(people=[a, b], accounts=[Account("B", "tfsa", 500_000.0)], base=30_000.0, end_age=70)
+    deaths = np.array([[52], [80]])                                    # A dies after 2 years
+    proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), deaths)
+    assert proj.income["earned"][1, 0] == 30_000.0 and proj.income["earned"][2, 0] == 0.0
+    assert proj.income["tfsa"][2, 0] > 0
