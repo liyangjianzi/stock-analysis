@@ -53,7 +53,20 @@ table{{border-collapse:collapse;width:100%;background:{SURFACE};font-size:.85rem
 th,td{{padding:6px 8px;border-bottom:1px solid {GRID};text-align:right}}
 th:first-child,td:first-child{{text-align:left}} td{{font-variant-numeric:tabular-nums}}
 .up{{color:{GOOD_TEXT}}} .down{{color:{CRITICAL}}} .flat{{color:{INK_2}}} tr.base td{{font-weight:600}}
-details summary{{cursor:pointer;font-weight:600;margin:.8rem 0}} .years{{overflow-x:auto}}
+details summary{{cursor:pointer;font-weight:600;margin:.8rem 0}}
+.years{{overflow:auto;max-height:70vh;border:1px solid rgba(11,11,11,.10);border-radius:10px}}
+.years table{{font-size:.78rem;white-space:nowrap}}
+.years th,.years td{{padding:3px 7px}}
+.years thead{{position:sticky;top:0;z-index:2}}
+.years thead tr{{background:{PAGE}}} .years th{{color:{INK_2};font-weight:600;vertical-align:bottom}}
+.years th.grp{{text-align:center;color:{MUTED};font-weight:500;border-bottom:1px solid {AXIS}}}
+.years .g{{border-left:1px solid {AXIS}}}
+.years .stick{{position:sticky;left:0;z-index:1;background:inherit;text-align:left}}
+.years tr>.stick:first-child{{width:3.2em;min-width:3.2em}}
+.years .s2{{left:calc(3.2em + 14px);border-right:1px solid {AXIS}}}
+.years tbody tr{{background:{SURFACE}}} .years tbody tr:nth-child(even){{background:{PAGE}}}
+.years tbody tr:hover{{background:{TRACK}}} .years tbody tr.short{{background:#fbe9e9}}
+.years tr.short td:first-child{{box-shadow:inset 3px 0 {CRITICAL}}}
 """
 
 
@@ -276,25 +289,61 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
             "year before; a year with no known prior income gets none.</p>")
 
 
+def _compact(x) -> str:
+    """A table cell: 85.2k / 1.23M, no currency (the caption says C$); zero is a dash."""
+    x = float(x)
+    if round(x) == 0:
+        return "–"
+    sign, x = ("-" if x < 0 else ""), abs(x)
+    if x >= 1e6:
+        return f"{sign}{x / 1e6:.2f}M"
+    if x >= 1e3:
+        return f"{sign}{x / 1e3:.1f}k"
+    return f"{sign}{x:.0f}"
+
+
 def _year_table(proj: Projection) -> str:
-    school = proj.education is not None
-    # Sources are what was drawn that year; the last columns are January 1 balances.
-    head = ["Year", "Ages", "Spending", "Tax", *[f"{LABELS[s]} drawn" if s in DRAWN else LABELS[s]
-                                                 for s in SOURCES], "Saved",
-            "RRSP/RRIF balance", "Pension/LIF balance", "TFSA balance", "Non-registered balance",
-            "Total invested",
-            *(["Education (household)", "Student grants", "RESP"] if school else [])]
+    # (group, header, series). Sources are what was drawn that year; balances are January 1.
+    cols = [("", "Spending", proj.need[:, 0]), ("", "Tax", proj.tax[:, 0]),
+            *[("Income by source", LABELS[s] + (" drawn" if s in DRAWN else ""), proj.income[s][:, 0])
+              for s in SOURCES],
+            ("Income by source", "Saved", proj.saved[:, 0]),
+            *[("January 1 balances", h, proj.balances[k][:, 0]) for k, h in
+              (("rrsp", "RRSP/RRIF"), ("pension", "Pension/LIF"), ("tfsa", "TFSA"), ("nonreg", "Non-reg"))],
+            ("January 1 balances", "Total invested", proj.investments[:, 0])]
+    if proj.education is not None:
+        cols += [("Education", "Household", proj.education[:, 0]),
+                 ("Education", "Student grants", proj.student_grant[:, 0]),
+                 ("Education", "RESP", proj.resp[:, 0])]
+    keep = {"Spending", "Tax", "Total invested"}
+    cols = [c for c in cols if c[1] in keep or np.any(np.round(c[2]) != 0)]   # all-zero columns say nothing
+
+    groups: list = []                  # [group, span], merging neighbours
+    for g, _, _ in cols:
+        if groups and groups[-1][0] == g:
+            groups[-1][1] += 1
+        else:
+            groups.append([g, 1])
+    first = {i for i, (g, _, _) in enumerate(cols) if i == 0 or cols[i - 1][0] != g}
+    def edge(i):                       # a rule where each group starts
+        return " class='g'" if i in first else ""
+
+    top = "<tr><th class='stick' colspan='2'></th>" + "".join(
+        f"<th class='g grp' colspan='{n}'>{_esc(g)}</th>" for g, n in groups) + "</tr>"
+    sub = ("<tr><th class='stick'>Year</th><th class='stick s2'>Ages</th>"
+           + "".join(f"<th{edge(i)}>{_esc(h)}</th>" for i, (_, h, _) in enumerate(cols)) + "</tr>")
+    short = proj.income["shortfall"][:, 0]
     rows = []
     for t, year in enumerate(proj.years):
-        cells = [year, age_label(proj.ages[t]), _money(proj.need[t, 0]), _money(proj.tax[t, 0]),
-                 *[_money(proj.income[s][t, 0]) for s in SOURCES], _money(proj.saved[t, 0]),
-                 *[_money(proj.balances[k][t, 0]) for k in ("rrsp", "pension", "tfsa", "nonreg")],
-                 _money(proj.investments[t, 0]),
-                 *([_money(proj.education[t, 0]), _money(proj.student_grant[t, 0]),
-                    _money(proj.resp[t, 0])] if school else [])]
-        rows.append("<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in cells) + "</tr>")
-    return ("<div class='years'><table><thead><tr>" + "".join(f"<th>{_esc(h)}</th>" for h in head)
-            + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+        cells = "".join(f"<td{edge(i)} title='{_money(v[t])}'>{_compact(v[t])}</td>"
+                        for i, (_, _, v) in enumerate(cols))
+        cls = " class='short'" if round(short[t]) > 0 else ""
+        rows.append(f"<tr{cls}><td class='stick'>{year}</td>"
+                    f"<td class='stick s2'>{_esc(age_label(proj.ages[t]))}</td>{cells}</tr>")
+    return ("<p class='note'>C$, today's dollars; k = thousand, M = million, – = none. Hover a cell "
+            "for the exact amount. Columns that are zero every year are hidden; short years are "
+            "shaded red.</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
+            + "".join(rows) + "</tbody></table></div>")
 
 
 def _rule_value(value) -> str:

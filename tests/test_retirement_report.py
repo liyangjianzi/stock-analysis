@@ -113,3 +113,20 @@ def test_education_section_only_when_the_plan_has_children():
         html = report.build_report(result, baseline, ranked, generated_at="now")
         assert (f'id="{report.EDUCATION_ID}"' in html) is present
         assert ("Canada Student Grants" in html) is present
+
+
+def test_compact_cells():
+    assert report._compact(0) == "–" and report._compact(0.4) == "–"
+    assert report._compact(850) == "850" and report._compact(85_240) == "85.2k"
+    assert report._compact(1_234_567) == "1.23M" and report._compact(-2_500) == "-2.5k"
+
+
+def test_year_table_hides_all_zero_columns_and_keeps_exact_values(built):
+    _, result, _, _ = built
+    avg = result.average
+    table = report._year_table(avg)
+    assert table.count("<tbody><tr") == 1 and table.count("</tr>") == len(avg.years) + 2
+    assert ("⚠ Shortfall" in table) == bool((avg.income["shortfall"][:, 0].round() != 0).any())
+    assert f"title='{report._money(avg.investments[0, 0])}'" in table
+    for always in ("Spending", "Tax", "Total invested"):
+        assert f">{always}</th>" in table
