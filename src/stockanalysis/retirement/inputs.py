@@ -61,6 +61,7 @@ class Person:
     salary: float | None = None  # gross employment income while working; taxes non-reg payouts then
     contributions: dict = field(default_factory=dict)
     contributions_when_partner_retired: dict | None = None
+    sex: str | None = None      # "female" / "male" for the life table; None averages the two
 
 
 @dataclass(frozen=True)

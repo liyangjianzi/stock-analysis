@@ -44,6 +44,10 @@ _OAS_START = "https://www.canada.ca/en/services/benefits/publicpensions/old-age-
 _CPP_AMOUNT = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-benefit/amount.html"
 _CPP_START = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/when-start.html"
 _CPP_HOW_MUCH = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/amount.html"
+_CPP_SURVIVOR = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-survivor-pension.html"
+_CPP_MAXIMUMS = ("https://www.canada.ca/en/employment-social-development/programs/pensions/pension/"
+                 "statistics/2026-quarterly-july-september.html")
+_CPP_DEATH = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-death-benefit.html"
 _RRIF_FACTORS = ("https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/"
                  "completing-slips-summaries/t4rsp-t4rif-information-returns/payments/"
                  "chart-prescribed-factors.html")
@@ -148,6 +152,14 @@ CPP = {
     # General drop-out: up to 17% of the contributory period (max 8 years);
     # the period runs from 18 to a 65 start = 47 years.
     "dropout": Rule({"share": 0.17, "max_years": 8, "contributory_years": 47}, 2026, _CPP_HOW_MUCH),
+    # Survivor's pension: 60% of the contributor's pension at 65+, or a flat rate plus
+    # 37.5% under 65; with the survivor's own retirement pension the two together are
+    # capped. Shares from the survivor page, 2026 amounts from the ESDC maximums table.
+    "survivor": Rule({"share_65": 0.60, "share_under_65": 0.375, "flat_monthly": 238.17,
+                      "combined_max_monthly": 1_531.56}, 2026, _CPP_MAXIMUMS),
+    "survivor_rules": Rule("60% at 65+; flat rate + 37.5% under 65; combined maximum with "
+                           "your own retirement pension", 2026, _CPP_SURVIVOR),
+    "death_benefit": Rule(2_500.0, 2026, _CPP_DEATH),
 }
 
 RRIF = {
