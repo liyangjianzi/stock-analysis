@@ -122,3 +122,11 @@ def test_extra_tax_is_the_tax_on_top_of_a_base():
 
 def test_eligible_dividends_are_taxed_below_ordinary_income():
     assert t(dividends=20_000, age=50) < t(ordinary=20_000, age=50)
+
+
+def test_payroll_premiums_cpp_cpp2_and_ei():
+    # Above both ceilings: the three published maximums.
+    assert float(tax.payroll_premiums(140_000)) == pytest.approx(4_230.45 + 416.0 + 1_123.07, abs=0.01)
+    # $50k: CPP on earnings above the exemption, no CPP2, EI on all of it.
+    assert float(tax.payroll_premiums(50_000)) == pytest.approx(0.0595 * 46_500 + 0.0163 * 50_000, abs=0.01)
+    assert float(tax.payroll_premiums(0)) == 0.0

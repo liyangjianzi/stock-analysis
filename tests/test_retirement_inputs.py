@@ -202,3 +202,12 @@ def test_survivor_share_is_bounded(share):
         inputs.parse(d)
     assert e.value.field == "spending.survivor_share"
     assert inputs.limits("AB")["survivor_share"] == (0.4, 1.0)
+
+
+def test_pension_match_defaults_to_zero_and_must_not_be_negative():
+    assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).people[0].pension_match == 0.0
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["pension_match"] = -0.5
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].pension_match"

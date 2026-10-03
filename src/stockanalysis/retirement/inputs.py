@@ -62,6 +62,7 @@ class Person:
     contributions: dict = field(default_factory=dict)
     contributions_when_partner_retired: dict | None = None
     sex: str | None = None      # "female" / "male" for the life table; None averages the two
+    pension_match: float = 0.0  # employer match as a multiple of your own pension contribution
 
 
 @dataclass(frozen=True)
@@ -333,6 +334,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
                 _fail(f"{f}.{name}", "must not be negative")
         if p.cpp_at_65 is not None and p.cpp_at_65 < 0:
             _fail(f"{f}.cpp_at_65", "must not be negative")
+        if not p.pension_match >= 0:
+            _fail(f"{f}.pension_match", "a multiple of your own contribution, 0 or more")
         if p.salary is not None and p.salary < 0:
             _fail(f"{f}.salary", "must not be negative")
         for label, amounts in (("contributions", p.contributions),

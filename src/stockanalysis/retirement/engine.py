@@ -18,8 +18,12 @@ Each step is one calendar year:
    RRSP (up to the limit) or is taxed with the extra 20%.
 2. The household's after-tax spending need: base, dated changes, stage share,
    the bad-market cut and care costs, plus RESP contributions and any school
-   cost the RESP can't cover. While anyone still works, earned income covers the
-   need and the contributions, and the uncovered school cost comes from savings.
+   cost the RESP can't cover. While anyone works and every worker's salary is
+   known, each salary pays income tax (after RRSP and own-pension deductions) and
+   CPP/EI premiums; take-home pay covers the need, then the planned contributions,
+   and the gap is drawn from savings or the surplus saved. Without a salary,
+   earned income just covers the need and the contributions, and the uncovered
+   school cost comes from savings.
 3. Guaranteed income: CPP, OAS, and the RRIF / LIF minimums.
 4. Top-up withdrawals by strategy, iterated with the couple's tax (the best
    pension-splitting share included) until the two agree within TOL dollars.
@@ -162,6 +166,7 @@ class Projection:
     alive: np.ndarray | None = None             # (T, P, N) alive in each year
     end_step: np.ndarray | None = None          # (N,) years the household lives; the estate's January 1
     final_investments: np.ndarray | None = None  # (N,) investments on that January 1, before tax at death
+    premiums: np.ndarray | None = None          # (T, N) CPP/EI premiums inside ``tax`` (not income tax)
 
     @property
     def paths(self) -> int:
@@ -182,7 +187,9 @@ class Projection:
 
     @property
     def lifetime_tax(self) -> np.ndarray:
-        return self.tax.sum(axis=0) + self.death_tax
+        """Income tax plus tax at death; CPP/EI premiums buy benefits, so they're left out."""
+        paid = self.tax.sum(axis=0) - (0.0 if self.premiums is None else self.premiums.sum(axis=0))
+        return paid + self.death_tax
 
     @property
     def investments_at_retirement(self) -> np.ndarray:
@@ -327,6 +334,51 @@ def survivor_cpp(people, ages, alive, own) -> np.ndarray:
     return out
 
 
+def planned_contributions(people, working) -> dict:
+    """(P, N) planned contributions by account from whoever works this year; the
+    ``contributions_when_partner_retired`` set once the partner stops (or dies)."""
+    P, N = working.shape
+    out = {k: np.zeros((P, N)) for k in ACCOUNTS}
+    for i, p in enumerate(people):
+        w = working[i]
+        if not w.any():
+            continue
+        others = [working[j] for j in range(P) if j != i]
+        partner = np.logical_and.reduce(others) if others else np.ones(N, dtype=bool)
+        alt = p.contributions_when_partner_retired
+        for kind in ACCOUNTS:
+            full = p.contributions.get(kind, 0.0)
+            alone = full if alt is None else alt.get(kind, 0.0)
+            out[kind][i] = np.where(w, np.where(partner, full, alone), 0.0)
+    return out
+
+
+def own_pension(person, contrib_pension):
+    """The part of a pension contribution paid from salary; the rest is the employer's match."""
+    return contrib_pension / (1 + person.pension_match)
+
+
+def payroll(people, ages, working, contrib, province) -> tuple:
+    """Each worker's salary less income tax (after RRSP and own-pension deductions)
+    and CPP/EI premiums. (N,) arrays: (income tax + premiums, premiums, take-home
+    pay, the contributions paid out of it)."""
+    N = working.shape[1]
+    taxes, premiums, home, funded = (np.zeros(N) for _ in range(4))
+    for i, p in enumerate(people):
+        w = working[i]
+        if not w.any():
+            continue
+        own = own_pension(p, contrib["pension"][i])
+        taxable = np.maximum(p.salary - contrib["rrsp"][i] - own, 0.0)
+        income_tax = np.where(w, tax.income_tax(ordinary=taxable, age=ages[i], province=province), 0.0)
+        prem = np.where(w, tax.payroll_premiums(p.salary), 0.0)
+        taxes += income_tax + prem
+        premiums += prem
+        home += np.where(w, p.salary, 0.0) - income_tax - prem
+        funded += contrib["rrsp"][i] + own + contrib["tfsa"][i] + contrib["nonreg"][i]
+    return taxes, premiums, home, funded
+
+
 def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None) -> Projection:
     """Project ``plan`` over ``returns``: (T, N) real yearly returns. ``deaths`` is a
     (P, N) array of death ages (see mortality); None lets everyone live all T years."""
@@ -366,7 +418,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
     taxable_yield = float(tax.total_income(ordinary=y_other, dividends=y_eligible))   # per $ held
 
     income = {s: np.zeros((T, N)) for s in SOURCES}
-    tax_paid, need_rec, saved_rec, room_rec = (np.zeros((T, N)) for _ in range(4))
+    tax_paid, need_rec, saved_rec, room_rec, premium_rec = (np.zeros((T, N)) for _ in range(5))
     invest = np.zeros((T + 1, N))
     gains_rec = np.zeros((T + 1, N))            # unrealized non-reg gains each January 1
     alive_rec = np.zeros((T, P, N), dtype=bool)
@@ -402,6 +454,9 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         anyone_working = any(planned)
         earning = working.any(axis=0)                                    # (N,)
         household = alive.any(axis=0)                                    # (N,)
+        contrib = planned_contributions(people, working)
+        # Salary drives the cash only when every worker's salary is known.
+        salaried = anyone_working and all(p.salary is not None for i, p in enumerate(people) if planned[i])
 
         # 1. January 1: TFSA room, LIF start (+ unlocking), downsizing.
         room += limit + restore
@@ -485,8 +540,15 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         need = need * household
         uncovered = uncovered * household
         need_rec[t] = need + uncovered
-        income["earned"][t] = np.where(earning, need, 0.0)
-        cash_need = np.where(earning, uncovered, need + uncovered)
+        pay_tax = funded = np.zeros(N)
+        if salaried:      # take-home pay covers spending, then contributions; the gap is drawn or saved
+            pay_tax, premium_rec[t], take_home, funded = payroll(people, ages, working, contrib, prov)
+            income["earned"][t] = sum(np.where(working[i], p.salary, 0.0) for i, p in enumerate(people)
+                                      if planned[i])
+            cash_need = need + uncovered + funded - take_home
+        else:             # no salary to go on: earned income just covers spending
+            income["earned"][t] = np.where(earning, need, 0.0)
+            cash_need = np.where(earning, uncovered, need + uncovered)
 
         # 3. Guaranteed income: CPP, OAS, RRIF and LIF minimums.
         cpp = np.array([[cpp_year[i] if ages[i] >= p.cpp_start_age else 0.0]
@@ -563,7 +625,9 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             worker_income += np.where(w, salaries[i] + taxable_yield * held, 0.0)
             if not payouts[i].any():
                 continue
-            due = np.where(w, np.minimum(tax.extra_tax(p.salary or 0.0, ordinary=y_other * held,
+            base = np.maximum((p.salary or 0.0) - contrib["rrsp"][i]
+                              - own_pension(p, contrib["pension"][i]), 0.0)   # after deductions
+            due = np.where(w, np.minimum(tax.extra_tax(base, ordinary=y_other * held,
                                                        dividends=y_eligible * held, age=ages[i],
                                                        province=prov),
                                          held), 0.0)    # sold out of the account to pay it
@@ -575,7 +639,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             tax.total_income(ordinary=part["ordinary"], pension=part["pension"], gains=part["gains"],
                              oas=part["oas"], dividends=part["dividends"]) for part in parts)
         per_person = surplus * alive / np.maximum(alive.sum(axis=0), 1)   # to whoever is alive
-        into_tfsa = np.minimum(per_person, room)
+        into_tfsa = np.minimum(per_person, np.maximum(room - contrib["tfsa"], 0.0))  # planned TFSA first
         room -= into_tfsa
         bal["tfsa"] += into_tfsa
         bal["nonreg"] += per_person - into_tfsa
@@ -591,7 +655,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         # The drag and any leftover-RESP tax are paid out of investments too.
         income["nonreg"][t] = draw["nonreg"].sum(axis=0) + drag + resp_tax
         income["shortfall"][t] = unfunded
-        tax_paid[t], saved_rec[t] = tax_est + drag + resp_tax, surplus
+        tax_paid[t], saved_rec[t] = tax_est + drag + resp_tax + pay_tax, surplus + funded
 
         # 6. Growth, then contributions from whoever still works.
         r = returns[t]
@@ -601,25 +665,15 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             bal[k] *= 1 + r
         if school is not None:
             resp_bal *= 1 + r
-        for i, p in enumerate(people):
-            w = working[i]
-            if not w.any():
+        for i in range(P):
+            if not working[i].any():
                 continue
-            others = [working[j] for j in range(P) if j != i]
-            partner = np.logical_and.reduce(others) if others else np.ones(N, dtype=bool)
-            alt = p.contributions_when_partner_retired
-
-            def amount(kind, w=w, partner=partner, alt=alt, p=p):
-                full = p.contributions.get(kind, 0.0)
-                when_alone = full if alt is None else alt.get(kind, 0.0)
-                return np.where(w, np.where(partner, full, when_alone), 0.0)
-
-            bal["pension"][i] += amount("pension")
-            bal["rrsp"][i] += amount("rrsp")
-            to_tfsa = np.minimum(amount("tfsa"), room[i])
+            bal["pension"][i] += contrib["pension"][i]           # the employer's match included
+            bal["rrsp"][i] += contrib["rrsp"][i]
+            to_tfsa = np.minimum(contrib["tfsa"][i], room[i])
             room[i] -= to_tfsa
             bal["tfsa"][i] += to_tfsa
-            extra = amount("tfsa") - to_tfsa + amount("nonreg")
+            extra = contrib["tfsa"][i] - to_tfsa + contrib["nonreg"][i]
             bal["nonreg"][i] += extra
             cost[i] += extra
 
@@ -649,7 +703,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         legacy=final + home_value[end_step] - death_tax, death_tax=death_tax,
         retire_step=retire_step, max_residual=max_resid,
         education=edu_out, student_grant=csg_rec, resp=resp_rec, school=school,
-        death_ages=deaths, alive=alive_rec, end_step=end_step, final_investments=final)
+        death_ages=deaths, alive=alive_rec, end_step=end_step, final_investments=final,
+        premiums=premium_rec)
 
 
 @dataclass

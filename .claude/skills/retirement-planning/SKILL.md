@@ -126,7 +126,13 @@ big decisions.
   the age on January 1. LIF: no minimum in its first year; max = greater of last
   year's return and the Alberta % × January 1 balance; Alberta allows a one-time
   50% unlock at 50+.
-- Nobody's RRSP / LIF is drawn while they still work (earned income covers them).
+- Nobody's RRSP / LIF is drawn while they still work.
+- With `salary` set for every worker, working years are cash-honest: gross salary
+  is the earned income, income tax + CPP/EI premiums show in Tax, take-home pay
+  covers spending then contributions, and any gap is drawn from savings (any
+  surplus saved). Set `pension_match` so only the employee's share leaves salary.
+  If contributions are set higher than take-home pay allows, the report shows the
+  household drawing savings while still working: point that out.
 
 ## Known simplifications
 

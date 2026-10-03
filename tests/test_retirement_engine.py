@@ -294,18 +294,22 @@ def test_a_workers_payouts_are_taxed_on_top_of_salary_and_sold_from_the_account(
                      end_age=56), nonreg_income=NonregIncome(foreign_dividends=0.02))
     proj = run_flat(p)
     due = float(tax.income_tax(ordinary=160_000, age=50) - tax.income_tax(ordinary=150_000, age=50))
-    assert proj.tax[0, 0] == pytest.approx(due, abs=0.01)
-    assert proj.income["nonreg"][0, 0] == pytest.approx(due, abs=0.01)
-    assert proj.investments[1, 0] == pytest.approx(500_000.0 - due, abs=0.01)
+    pay = float(tax.income_tax(ordinary=150_000, age=50)) + float(tax.payroll_premiums(150_000))
+    assert proj.tax[0, 0] == pytest.approx(pay + due, abs=0.01)        # salary tax + the payout tax
+    assert proj.income["nonreg"][0, 0] == pytest.approx(due, abs=0.01)  # sold from the account
+    assert proj.investments[1, 0] == pytest.approx(500_000.0 - due + proj.saved[0, 0], abs=0.01)
     low = run_flat(replace(p, people=(replace(worker, salary=40_000.0),)))
-    assert low.tax[0, 0] < proj.tax[0, 0]                 # a lower marginal rate
+    low_pay = float(tax.income_tax(ordinary=40_000, age=50)) + float(tax.payroll_premiums(40_000))
+    assert low.tax[0, 0] - low_pay < due                                 # a lower marginal rate
 
 
-def test_no_payouts_leave_working_years_untaxed():
+def test_no_payouts_leave_only_salary_tax_in_working_years():
     worker = person(age=50, retire_age=55, salary=150_000.0)
     proj = run_flat(plan(people=[worker], accounts=[Account("A", "nonreg", 500_000.0)],
                          base=40_000.0, end_age=56))
-    assert proj.tax[0, 0] == 0.0 and proj.investments[1, 0] == pytest.approx(500_000.0)
+    pay = float(tax.income_tax(ordinary=150_000, age=50)) + float(tax.payroll_premiums(150_000))
+    assert proj.tax[0, 0] == pytest.approx(pay, abs=0.01) and proj.income["nonreg"][0, 0] == 0.0
+    assert proj.investments[1, 0] == pytest.approx(500_000.0 + proj.saved[0, 0])
 
 
 # -- lifespans: the alive mask ------------------------------------------------------
@@ -476,3 +480,67 @@ def test_bad_luck_path_is_ranked_on_returns_not_on_lifespans():
     T = engine.steps(p)
     fixed = engine.simulate(p, R[:T], np.repeat(engine.average_deaths(p), 300, axis=1))
     assert result.bad_luck_path == engine.bad_luck_index(fixed)
+
+
+# -- working years: salary drives the cash --------------------------------------------
+
+def worker(**kw):
+    return person(**{"age": 40, "retire_age": 50, "salary": 100_000.0, **kw})
+
+
+def test_earned_income_is_gross_salary_and_tax_includes_salary_tax_and_premiums():
+    w = worker(contributions={"rrsp": 10_000.0, "pension": 5_500.0}, pension_match=1.75)
+    proj = run_flat(plan(people=[w], base=50_000.0, end_age=60))
+    own_pension = 5_500.0 / 2.75                                   # 2,000 of your own; 3,500 employer
+    expected = (float(tax.income_tax(ordinary=100_000.0 - 10_000.0 - own_pension, age=40))
+                + float(tax.payroll_premiums(100_000.0)))
+    assert proj.income["earned"][0, 0] == 100_000.0
+    assert proj.tax[0, 0] == pytest.approx(expected, abs=1.0)
+
+
+def test_take_home_surplus_is_saved_and_the_employer_match_goes_straight_in():
+    w = worker(contributions={"rrsp": 10_000.0, "pension": 5_500.0}, pension_match=1.75)
+    proj = run_flat(plan(people=[w], base=50_000.0, end_age=60))
+    assert proj.saved[0, 0] == pytest.approx(100_000.0 - proj.tax[0, 0] - 50_000.0, abs=1.0)
+    surplus = proj.saved[0, 0] - 10_000.0 - 2_000.0                # beyond your own contributions
+    assert surplus > 0
+    assert proj.investments[1, 0] == pytest.approx(10_000.0 + 5_500.0 + surplus, abs=1.0)
+
+
+def test_a_take_home_shortfall_is_drawn_from_savings():
+    w = worker(salary=60_000.0)
+    proj = run_flat(plan(people=[w], accounts=[Account("A", "tfsa", 1_000_000.0)], base=80_000.0,
+                         end_age=60))
+    assert proj.income["earned"][0, 0] == 60_000.0
+    assert proj.income["tfsa"][0, 0] > 0 and (proj.income["shortfall"][:10, 0] == 0).all()
+
+
+def test_the_employer_match_never_reduces_take_home():
+    matched = run_flat(plan(people=[worker(contributions={"pension": 5_500.0}, pension_match=1.75)],
+                            base=50_000.0, end_age=60))
+    own_only = run_flat(plan(people=[worker(contributions={"pension": 2_000.0})], base=50_000.0,
+                             end_age=60))
+    assert matched.tax[0, 0] == pytest.approx(own_only.tax[0, 0])
+    assert matched.saved[0, 0] == pytest.approx(own_only.saved[0, 0])
+    assert matched.investments[1, 0] - own_only.investments[1, 0] == pytest.approx(3_500.0)
+
+
+def test_without_a_salary_earned_income_still_just_covers_spending():
+    proj = run_flat(plan(people=[worker(salary=None)], base=50_000.0, end_age=60))
+    assert proj.income["earned"][0, 0] == 50_000.0 and proj.tax[0, 0] == 0.0
+
+
+def test_sources_add_up_with_a_salaried_worker_and_a_retired_partner():
+    a = worker(id="A", name="A", contributions={"rrsp": 10_000.0, "tfsa": 7_000.0, "nonreg": 5_000.0})
+    b = person(id="B", name="B", age=62, retire_age=60)
+    p = plan(people=[a, b], accounts=[Account("B", "rrsp", 300_000.0), Account("B", "tfsa", 50_000.0)],
+             base=90_000.0, end_age=70)
+    proj = run_flat(p)
+    total = sum(proj.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)
+
+
+def test_lifetime_tax_leaves_out_cpp_and_ei_premiums():
+    proj = run_flat(plan(people=[worker()], base=50_000.0, end_age=60))
+    premiums = 10 * float(tax.payroll_premiums(100_000.0))           # ten working years
+    assert proj.lifetime_tax[0] == pytest.approx(proj.tax[:, 0].sum() - premiums + proj.death_tax[0], abs=1.0)

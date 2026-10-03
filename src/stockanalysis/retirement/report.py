@@ -387,7 +387,7 @@ def _year_table(proj: Projection) -> str:
                     f"<td class='stick s2'>{_esc(ages)}</td>{cells}</tr>")
     return ("<p class='note'>C$, today's dollars; k = thousand, M = million, – = none. Hover a cell "
             "for the exact amount. Columns that are zero every year are hidden; short years are "
-            "shaded red; † = has died (the survivor's years follow).</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
+            "shaded red; † = has died (the survivor's years follow). Tax includes CPP/EI premiums while working; Saved includes your planned contributions.</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
             + "".join(rows) + "</tbody></table></div>")
 
 
@@ -429,6 +429,13 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
         ("Spending", f"{_money(s.base)} a year after tax; slow-go from {s.slow_go_age} "
                      f"({s.slow_go_share:.0%}), no-go from {s.no_go_age} ({s.no_go_share:.0%}) "
                      f"plus {_money(s.care)} care"),
+        ("Working years", "each salary pays income tax (after RRSP and your own pension "
+                          "contributions) and CPP/EI premiums; take-home pay covers spending, then "
+                          "your planned contributions, and the rest is saved (or drawn from savings "
+                          "when short). An employer pension match goes straight into the pension"
+         if all(p.salary is not None for p in plan.people if p.age < p.retire_age) else
+         "Set each worker's salary for an honest view: without one, earned income is assumed to "
+         "cover spending exactly and salary tax isn't shown"),
         ("Survivor spending", f"{s.survivor_share:.0%} of the couple's budget once one of you has "
                               "died (care costs stay whole)" if len(plan.people) == 2 else "n/a"),
         ("Lifespans", "drawn per future from the Statistics Canada Alberta life table "

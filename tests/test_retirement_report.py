@@ -177,3 +177,16 @@ def test_assumptions_list_lifespan_sources(built):
     html = _html(built)
     assert "pid=1310011401" in html and "actuarial-report-32nd" in html
     assert "Survivor spending" in html
+
+
+def test_report_explains_take_home_pay_and_premiums(built):
+    html = _html(built)
+    assert "Working years" in html and "take-home pay" in html
+    assert "CPP/EI premiums while working" in report._year_table(built[1].average)
+
+
+def test_report_says_to_set_salaries_when_one_is_missing(built):
+    plan, result, baseline, ranked = built
+    no_salary = replace(plan, people=tuple(replace(p, salary=None) for p in plan.people))
+    html = report._assumptions(no_salary, result, None)
+    assert "Set each worker" in html and "salary for an honest view" in html

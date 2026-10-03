@@ -98,7 +98,17 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   never `investments[-1]`. Every comparison draws returns **and** deaths with
   `engine.draw_futures`.
 - **No registered draws while working.** Nobody's RRSP/LIF is drawn while they
-  still work; earned income covers them.
+  still work.
+- **Salary drives the working years** (`engine.payroll`) when every worker has a
+  `salary`: earned income is the gross salary; income tax (on salary less RRSP and
+  the worker's own pension share, `own_pension` = pension ÷ (1 + `pension_match`))
+  plus CPP/CPP2/EI premiums (`tax.payroll_premiums`, `rules.PAYROLL`) go in `tax`;
+  take-home pay covers the need, then the planned contributions (`saved` includes
+  them), and the gap is drawn or the surplus saved, TFSA room going to planned
+  contributions first. The employer's match enters the pension without touching
+  cash. Premiums are recorded in `Projection.premiums` and left out of
+  `lifetime_tax` (they buy CPP/EI). If any worker's salary is missing, that year
+  falls back to the old rule (earned income = the need), and the report says so.
 - **Comparisons share futures.** What-ifs (`scenarios`), the report's
   "current plan" row and the GUI's saved-vs-edited tiles all use the same seed and
   path count. That is what makes a difference the change's effect. Keep it that

@@ -48,6 +48,13 @@ _CPP_SURVIVOR = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/c
 _CPP_MAXIMUMS = ("https://www.canada.ca/en/employment-social-development/programs/pensions/pension/"
                  "statistics/2026-quarterly-july-september.html")
 _CPP_DEATH = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-death-benefit.html"
+_PAYROLL = "https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/payroll/"
+_CPP_PREMIUMS = (_PAYROLL + "payroll-deductions-contributions/canada-pension-plan-cpp/"
+                 "cpp-contribution-rates-maximums-exemptions.html")
+_CPP2_PREMIUMS = (_PAYROLL + "calculating-deductions/making-deductions/"
+                  "second-additional-cpp-contribution-rates-maximums.html")
+_EI_PREMIUMS = (_PAYROLL + "payroll-deductions-contributions/employment-insurance-ei/"
+                "ei-premium-rates-maximums.html")
 _RRIF_FACTORS = ("https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/"
                  "completing-slips-summaries/t4rsp-t4rif-information-returns/payments/"
                  "chart-prescribed-factors.html")
@@ -135,6 +142,14 @@ STUDENT_GRANT = Rule({
 
 # Up to 50% of eligible pension income (RRIF/LIF payments when the transferor
 # is 65+, NOT plain RRSP withdrawals) can be allocated to a spouse.
+# Employee payroll premiums on a salary (outside Quebec). Not income tax: CPP
+# premiums buy the CPP pension.
+PAYROLL = {
+    "cpp": Rule({"rate": 0.0595, "ympe": 74_600, "exemption": 3_500}, 2026, _CPP_PREMIUMS),
+    "cpp2": Rule({"rate": 0.04, "yampe": 85_000}, 2026, _CPP2_PREMIUMS),
+    "ei": Rule({"rate": 0.0163, "max_insurable": 68_900}, 2026, _EI_PREMIUMS),
+}
+
 PENSION_SPLIT = Rule({"max_share": 0.5, "min_age": 65}, 2026, _SPLIT)
 
 OAS = {
@@ -227,7 +242,7 @@ def all_rules() -> list[tuple[str, Rule]]:
             for key, value in obj.items():
                 walk(f"{prefix}.{key}", value)
 
-    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PENSION_SPLIT",
+    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "PENSION_SPLIT",
                  "OAS", "CPP", "RRIF", "TFSA", "LIF"):
         walk(name.lower(), globals()[name])
     return found

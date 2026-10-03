@@ -178,3 +178,8 @@ def test_page_edits_sex_and_survivor_share(server):
     status, st = _req(server, "GET", "/api/plan")
     assert st["limits"]["survivor_share"] == [0.4, 1.0]
     assert "lifespans" in st["saved"]
+
+
+def test_page_edits_the_pension_match(server):
+    status, page = _req(server, "GET", "/")
+    assert "${P}.pension_match" in page.decode()

@@ -65,6 +65,15 @@ def extra_tax(base, *, ordinary=0.0, dividends=0.0, age=0, province="AB") -> np.
             - income_tax(ordinary=base, age=age, province=province))
 
 
+def payroll_premiums(salary) -> np.ndarray:
+    """An employee's yearly CPP, CPP2 and EI premiums on ``salary`` (outside Quebec)."""
+    s = np.asarray(salary, dtype=float)
+    cpp, cpp2, ei = (rules.PAYROLL[k].value for k in ("cpp", "cpp2", "ei"))
+    base = cpp["rate"] * np.clip(s - cpp["exemption"], 0.0, cpp["ympe"] - cpp["exemption"])
+    second = cpp2["rate"] * np.clip(s - cpp["ympe"], 0.0, cpp2["yampe"] - cpp["ympe"])
+    return base + second + ei["rate"] * np.clip(s, 0.0, ei["max_insurable"])
+
+
 def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, age=0,
                province="AB") -> np.ndarray:
     """Federal + provincial income tax plus the OAS recovery tax for one person.
