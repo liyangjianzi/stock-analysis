@@ -211,3 +211,17 @@ def test_pension_match_defaults_to_zero_and_must_not_be_negative():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "people[0].pension_match"
+
+
+def test_espp_parses_and_validates():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["espp"] = {"rate": 0.25, "cap": 25_000, "discount": 0.15}
+    e = inputs.parse(d).people[0].espp
+    assert (e.rate, e.cap, e.discount) == (0.25, 25_000, 0.15)
+    assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).people[0].espp is None
+    for bad in ({"rate": 1.5, "cap": 1, "discount": 0.1}, {"rate": 0.1, "cap": -1, "discount": 0.1},
+                {"rate": 0.1, "cap": 1, "discount": 1.0}):
+        d["people"][0]["espp"] = bad
+        with pytest.raises(inputs.PlanError) as err:
+            inputs.parse(d)
+        assert err.value.field.startswith("people[0].espp")

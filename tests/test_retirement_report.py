@@ -190,3 +190,9 @@ def test_report_says_to_set_salaries_when_one_is_missing(built):
     no_salary = replace(plan, people=tuple(replace(p, salary=None) for p in plan.people))
     html = report._assumptions(no_salary, result, None)
     assert "Set each worker" in html and "salary for an honest view" in html
+
+
+def test_report_shows_the_refund_check_when_given(built):
+    html = _html(built, refunds=(2_000.0, [("2026-03-23", 2_000.0)]))
+    assert "Tax refund check" in html and "2026-03-23" in html
+    assert "Tax refund check" not in _html(built)

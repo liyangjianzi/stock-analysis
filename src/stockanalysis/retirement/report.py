@@ -22,7 +22,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from ..report import save_report  # noqa: F401  (re-exported: the same writer as the other reports)
-from . import engine, mortality, rules
+from . import engine, mortality, refund, rules
 from .engine import SOURCES, PlanResult, Projection
 from .inputs import STRATEGY_LABELS
 
@@ -411,7 +411,31 @@ def _education_facts(plan, s) -> list:
             ("Canada Student Grant", grant), *rows]
 
 
-def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
+def _refund_check(plan, refunds) -> str:
+    """The model's expected refund beside the refunds found in the bank CSVs."""
+    if refunds is None or refunds[0] is None:
+        return ""
+    actual, deposits = refunds
+    expected = refund.expected_refund(plan)
+    total = sum(r for _, r in expected)
+    rows = "".join(f"<tr><td>Expected for {_esc(n)} (model)</td><td>{_money(r)}</td></tr>" for n, r in expected)
+    rows += "".join(f"<tr><td>Deposited {_esc(d)} (bank)</td><td>{_money(a)}</td></tr>" for d, a in deposits)
+    rows += (f"<tr class='base'><td>Model vs bank</td><td>{_money(total)} vs {_money(actual)}</td></tr>")
+    gap = actual - total
+    note = ("The model's refund comes from RRSP contributions alone. "
+            + (f"The bank shows {_money(gap)} more: likely a deduction or credit the plan doesn't "
+               "know about (childcare, donations, over-withholding), so the plan's tax may be a "
+               "little high." if gap > 0.1 * max(total, 1.0) else
+               f"The bank shows {_money(-gap)} less: withholding may already allow for the RRSP, or "
+               "a contribution was smaller than planned." if gap < -0.1 * max(total, 1.0) else
+               "They agree, so the plan's tax looks right."))
+    return ("<h2>Tax refund check</h2><p class='note'>Payroll withholds tax as if there were no RRSP "
+            "contribution and the spring refund gives it back; the plan already charges the true tax, "
+            "so this only checks it. Never changes the projection.</p>"
+            f"<table><tbody>{rows}</tbody></table><p class='note'>{note}</p>")
+
+
+def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=None) -> str:
     people = "".join(
         f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{_esc(p.sex or 'not set (average table)')}</td>"
         f"<td>{p.retire_age}</td>"
@@ -469,15 +493,18 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
         f"<th>RRIF from</th><th>LIF from</th><th>TFSA room carried in</th><th>Salary</th></tr></thead>"
         f"<tbody>{people}</tbody></table>"
         "<table><tbody>" + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in facts)
-        + "</tbody></table><h2>Canadian rules used</h2>"
+        + "</tbody></table>"
+        + _refund_check(plan, refunds) +
+        "<h2>Canadian rules used</h2>"
         "<table><thead><tr><th>Rule</th><th>Value</th><th>Year</th><th>Official source</th></tr>"
         f"</thead><tbody>{rules_rows}</tbody></table>")
 
 
 def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str,
                  holdings_source: str | None = None, previous: dict | None = None,
-                 today: dt.date | None = None) -> str:
-    """The whole page as a string. ``previous`` is the last run's summary, for the change."""
+                 today: dt.date | None = None, refunds: tuple | None = None) -> str:
+    """The whole page as a string. ``previous`` is the last run's summary, for the change;
+    ``refunds`` is ``refund.actual_refunds(...)`` for the refund check."""
     plan, sim, avg, bad = result.inputs, result.simulated, result.average, result.bad_luck
     today = today or dt.date.today()
     banner = ""
@@ -502,7 +529,7 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
          + _fig(money_left_chart(sim, plan), False)),
         ("years", "", "<details><summary>Year-by-year table (average future)</summary>"
                       f"{_year_table(avg)}</details>"),
-        ("assumptions", "Assumptions &amp; rules", _assumptions(plan, result, holdings_source)),
+        ("assumptions", "Assumptions &amp; rules", _assumptions(plan, result, holdings_source, refunds)),
     ]
     body = "".join(f'<section id="{sid}">' + (f"<h2>{title}</h2>" if title else "") + content
                    + "</section>" for sid, title, content in sections)

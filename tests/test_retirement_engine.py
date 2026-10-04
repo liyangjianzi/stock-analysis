@@ -544,3 +544,43 @@ def test_lifetime_tax_leaves_out_cpp_and_ei_premiums():
     proj = run_flat(plan(people=[worker()], base=50_000.0, end_age=60))
     premiums = 10 * float(tax.payroll_premiums(100_000.0))           # ten working years
     assert proj.lifetime_tax[0] == pytest.approx(proj.tax[:, 0].sum() - premiums + proj.death_tax[0], abs=1.0)
+
+
+# -- ESPP --------------------------------------------------------------------------
+
+from stockanalysis.retirement.inputs import Espp  # noqa: E402
+
+
+def test_espp_buys_discounted_shares_into_nonreg_and_the_discount_is_taxed():
+    espp = Espp(rate=0.25, cap=25_000.0, discount=0.15)
+    with_plan = run_flat(plan(people=[worker(salary=140_000.0, espp=espp)], base=50_000.0, end_age=60))
+    without = run_flat(plan(people=[worker(salary=140_000.0)], base=50_000.0, end_age=60))
+    fmv = 25_000.0 / 0.85                                       # 25% of 140k is capped at 25k
+    benefit = fmv - 25_000.0
+    assert with_plan.income["earned"][0, 0] == pytest.approx(140_000.0 + benefit)
+    expected_tax = (float(tax.income_tax(ordinary=140_000.0 + benefit, age=40))
+                    + float(tax.payroll_premiums(140_000.0)))
+    assert with_plan.tax[0, 0] == pytest.approx(expected_tax, abs=1.0)
+    gain = with_plan.investments[1, 0] - without.investments[1, 0]
+    assert gain == pytest.approx(fmv - 25_000.0 - (with_plan.tax[0, 0] - without.tax[0, 0]), abs=1.0)
+
+
+def test_espp_purchase_is_rate_times_salary_below_the_cap():
+    espp = Espp(rate=0.10, cap=25_000.0, discount=0.15)
+    proj = run_flat(plan(people=[worker(salary=100_000.0, espp=espp)], base=50_000.0, end_age=60))
+    assert proj.income["earned"][0, 0] == pytest.approx(100_000.0 + 10_000.0 / 0.85 - 10_000.0)
+
+
+def test_sources_add_up_with_an_espp():
+    espp = Espp(rate=0.25, cap=25_000.0, discount=0.15)
+    p = plan(people=[worker(salary=140_000.0, espp=espp, contributions={"rrsp": 10_000.0})],
+             accounts=[Account("A", "tfsa", 100_000.0)], base=60_000.0, end_age=60)
+    proj = run_flat(p)
+    total = sum(proj.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)
+
+
+def test_no_salary_means_no_espp():
+    espp = Espp(rate=0.25, cap=25_000.0, discount=0.15)
+    proj = run_flat(plan(people=[worker(salary=None, espp=espp)], base=50_000.0, end_age=60))
+    assert proj.income["earned"][0, 0] == 50_000.0 and proj.investments[1, 0] == 0.0

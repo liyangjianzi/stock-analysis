@@ -19,6 +19,7 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 |---|---|
 | `rules.py` | Every statutory value as `Rule(value, year, source)`: federal/Alberta tax, OAS, CPP, RRIF factors, TFSA, Alberta LIF. `TAX_YEAR`, `is_stale` |
 | `mortality.py` | Lifespans: the Statistics Canada Alberta life table (`QX`, 2021/2023) and CPP-report improvement (`IMPROVEMENT`) as `Rule`s; `qx`, `death_cdf`, `draw_death_ages` (own seed stream), `median_death_age`. Death age = the age on the January 1 after the last year lived; `OMEGA = 111` |
+| `refund.py` | The tax-refund check, display only: `expected_refund(plan)` (first-year tax withheld without the RRSP deduction minus true tax) vs `actual_refunds(path)` ("TAX REFUND" deposits in the bank CSVs' last 12 months; `retirement/bank/`, gitignored). Never feeds the projection |
 | `tax.py` | Vectorized person tax, household tax, the 5%-step pension-split search (`best_split`) |
 | `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `TEMPLATE` is the invented `--init` plan |
 | `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None)`); `draw_futures` (returns over `life_steps` + death ages); `run` simulates the drawn futures and adds the average future (steady median return) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
@@ -109,6 +110,15 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   cash. Premiums are recorded in `Projection.premiums` and left out of
   `lifetime_tax` (they buy CPP/EI). If any worker's salary is missing, that year
   falls back to the old rule (earned income = the need), and the report says so.
+- **ESPP** (`people[].espp`: `rate`, `cap`, `discount`; `engine.espp_purchase`): each
+  working year min(rate × salary, cap) is paid from take-home pay and buys shares
+  worth paid ÷ (1 − discount) into the worker's non-registered account at that cost
+  base; the discount is a taxable benefit (income tax, not CPP/EI), added to earned
+  income and to `saved` so the sources still add up. Needs a salary.
+- **Bank CSVs are private.** `cli.generate(bank=None)` and `PlannerApp(bank=None)`
+  default to no bank file; only the real CLI (`--bank`, default
+  `config.DEFAULT_RETIREMENT_BANK`) and `gui.serve` pass the owner's folder. Tests
+  pass `--bank /nonexistent-bank`; never let a test read `retirement/bank/`.
 - **Comparisons share futures.** What-ifs (`scenarios`), the report's
   "current plan" row and the GUI's saved-vs-edited tiles all use the same seed and
   path count. That is what makes a difference the change's effect. Keep it that

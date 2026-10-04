@@ -43,6 +43,14 @@ KEYWORDS = (
 
 
 @dataclass(frozen=True)
+class Espp:
+    """An employee share purchase plan (the employer's terms, not a tax rule)."""
+    rate: float          # share of salary put in
+    cap: float           # most put in a year (C$)
+    discount: float      # off the market price; the discount is taxed as salary
+
+
+@dataclass(frozen=True)
 class Person:
     id: str
     name: str
@@ -63,6 +71,7 @@ class Person:
     contributions_when_partner_retired: dict | None = None
     sex: str | None = None      # "female" / "male" for the life table; None averages the two
     pension_match: float = 0.0  # employer match as a multiple of your own pension contribution
+    espp: Espp | None = None    # shares bought from salary into the non-registered account
 
 
 @dataclass(frozen=True)
@@ -231,7 +240,7 @@ def _build(d: dict) -> PlanInputs:
         spending["changes"] = tuple(SpendingChange(**c) for c in spending.get("changes", []))
         return PlanInputs(
             province=d["province"], start_year=int(d["start_year"]), end_age=int(d["end_age"]),
-            people=tuple(Person(**p) for p in d["people"]),
+            people=tuple(_person(p) for p in d["people"]),
             spending=Spending(**spending),
             home=None if d.get("home") is None else Home(**d["home"]),
             returns=Returns(**d.get("returns", {})),
@@ -246,6 +255,13 @@ def _build(d: dict) -> PlanInputs:
         raise ValueError(f"plan.json is missing the field {e}") from e
     except TypeError as e:
         raise ValueError(f"plan.json has an unexpected or missing field: {e}") from e
+
+
+def _person(d: dict) -> Person:
+    d = dict(d)
+    if d.get("espp") is not None:
+        d["espp"] = Espp(**d["espp"])
+    return Person(**d)
 
 
 class PlanError(ValueError):
@@ -336,6 +352,13 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"{f}.cpp_at_65", "must not be negative")
         if not p.pension_match >= 0:
             _fail(f"{f}.pension_match", "a multiple of your own contribution, 0 or more")
+        if p.espp is not None:
+            if not 0 <= p.espp.rate <= 1:
+                _fail(f"{f}.espp.rate", "a share of salary between 0 and 1")
+            if not p.espp.cap >= 0:
+                _fail(f"{f}.espp.cap", "must not be negative")
+            if not 0 <= p.espp.discount < 1:
+                _fail(f"{f}.espp.discount", "between 0 and 1 (e.g. 0.15)")
         if p.salary is not None and p.salary < 0:
             _fail(f"{f}.salary", "must not be negative")
         for label, amounts in (("contributions", p.contributions),

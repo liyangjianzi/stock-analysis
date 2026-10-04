@@ -133,6 +133,11 @@ big decisions.
   surplus saved). Set `pension_match` so only the employee's share leaves salary.
   If contributions are set higher than take-home pay allows, the report shows the
   household drawing savings while still working: point that out.
+- An ESPP (`people[].espp`) buys discounted employer shares from salary into the
+  non-registered account; don't also enter it as a `nonreg` contribution.
+- The report's **Tax refund check** compares the model's expected refund with the
+  bank CSVs' refund deposits (`retirement/bank/`, private; `--bank PATH`). A large
+  gap means a missing deduction or credit; it never changes the projection.
 
 ## Known simplifications
 

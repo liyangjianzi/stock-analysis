@@ -358,25 +358,39 @@ def own_pension(person, contrib_pension):
     return contrib_pension / (1 + person.pension_match)
 
 
-def payroll(people, ages, working, contrib, province) -> tuple:
-    """Each worker's salary less income tax (after RRSP and own-pension deductions)
-    and CPP/EI premiums. (N,) arrays: (income tax + premiums, premiums, take-home
-    pay, the contributions paid out of it)."""
-    N = working.shape[1]
-    taxes, premiums, home, funded = (np.zeros(N) for _ in range(4))
+def espp_purchase(person) -> tuple:
+    """(paid from salary, market value of the shares) for one year of the ESPP."""
+    if person.espp is None or person.salary is None:
+        return 0.0, 0.0
+    paid = min(person.espp.rate * person.salary, person.espp.cap)
+    return paid, paid / (1 - person.espp.discount)
+
+
+def payroll(people, ages, working, contrib, province) -> dict:
+    """Each worker's salary less income tax (after RRSP and own-pension deductions,
+    with the ESPP discount added as a taxable benefit) and CPP/EI premiums. (N,)
+    arrays, plus ``espp`` (P, N): the market value of the shares bought."""
+    P, N = working.shape
+    out = {k: np.zeros(N) for k in ("tax", "premiums", "take_home", "funded", "benefit")}
+    out["espp"] = np.zeros((P, N))
     for i, p in enumerate(people):
         w = working[i]
         if not w.any():
             continue
         own = own_pension(p, contrib["pension"][i])
-        taxable = np.maximum(p.salary - contrib["rrsp"][i] - own, 0.0)
+        paid, value = espp_purchase(p)
+        benefit = value - paid
+        taxable = np.maximum(p.salary + benefit - contrib["rrsp"][i] - own, 0.0)
         income_tax = np.where(w, tax.income_tax(ordinary=taxable, age=ages[i], province=province), 0.0)
         prem = np.where(w, tax.payroll_premiums(p.salary), 0.0)
-        taxes += income_tax + prem
-        premiums += prem
-        home += np.where(w, p.salary, 0.0) - income_tax - prem
-        funded += contrib["rrsp"][i] + own + contrib["tfsa"][i] + contrib["nonreg"][i]
-    return taxes, premiums, home, funded
+        out["tax"] += income_tax + prem
+        out["premiums"] += prem
+        out["take_home"] += np.where(w, p.salary, 0.0) - income_tax - prem
+        out["funded"] += (contrib["rrsp"][i] + own + contrib["tfsa"][i] + contrib["nonreg"][i]
+                          + np.where(w, paid, 0.0))
+        out["benefit"] += np.where(w, benefit, 0.0)
+        out["espp"][i] = np.where(w, value, 0.0)
+    return out
 
 
 def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None) -> Projection:
@@ -540,12 +554,15 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         need = need * household
         uncovered = uncovered * household
         need_rec[t] = need + uncovered
-        pay_tax = funded = np.zeros(N)
+        pay_tax = funded = benefit = np.zeros(N)
+        espp_shares = np.zeros((P, N))
         if salaried:      # take-home pay covers spending, then contributions; the gap is drawn or saved
-            pay_tax, premium_rec[t], take_home, funded = payroll(people, ages, working, contrib, prov)
-            income["earned"][t] = sum(np.where(working[i], p.salary, 0.0) for i, p in enumerate(people)
-                                      if planned[i])
-            cash_need = need + uncovered + funded - take_home
+            pay = payroll(people, ages, working, contrib, prov)
+            pay_tax, premium_rec[t], funded = pay["tax"], pay["premiums"], pay["funded"]
+            benefit, espp_shares = pay["benefit"], pay["espp"]
+            income["earned"][t] = benefit + sum(np.where(working[i], p.salary, 0.0)
+                                                for i, p in enumerate(people) if planned[i])
+            cash_need = need + uncovered + funded - pay["take_home"]
         else:             # no salary to go on: earned income just covers spending
             income["earned"][t] = np.where(earning, need, 0.0)
             cash_need = np.where(earning, uncovered, need + uncovered)
@@ -655,7 +672,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         # The drag and any leftover-RESP tax are paid out of investments too.
         income["nonreg"][t] = draw["nonreg"].sum(axis=0) + drag + resp_tax
         income["shortfall"][t] = unfunded
-        tax_paid[t], saved_rec[t] = tax_est + drag + resp_tax + pay_tax, surplus + funded
+        tax_paid[t], saved_rec[t] = tax_est + drag + resp_tax + pay_tax, surplus + funded + benefit
 
         # 6. Growth, then contributions from whoever still works.
         r = returns[t]
@@ -673,9 +690,9 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             to_tfsa = np.minimum(contrib["tfsa"][i], room[i])
             room[i] -= to_tfsa
             bal["tfsa"][i] += to_tfsa
-            extra = contrib["tfsa"][i] - to_tfsa + contrib["nonreg"][i]
+            extra = contrib["tfsa"][i] - to_tfsa + contrib["nonreg"][i] + espp_shares[i]
             bal["nonreg"][i] += extra
-            cost[i] += extra
+            cost[i] += extra                                     # ESPP shares at market value
 
     for k in ACCOUNTS:
         balances[k][T] = bal[k].sum(axis=0)

@@ -336,6 +336,13 @@ function advancedPanel() {
                nullable: true, placeholder: `max(${limits.lif_min_age}, retire age)`})}
       ${number(`${P}.pension_match`, "Employer pension match (× your contribution)", {min: 0, step: 0.05, optional: true, placeholder: "0",
                help: "e.g. 1.75 if your employer adds $1.75 for every $1 you put in; only your part comes out of salary"})}
+      ${p.espp ? `
+        ${number(`${P}.espp.rate`, "ESPP: share of salary (%)", {min: 0, max: 1, step: 0.01, unit: "%"})}
+        ${number(`${P}.espp.cap`, "ESPP: most per year (C$)", {min: 0, step: 500})}
+        ${number(`${P}.espp.discount`, "ESPP: discount (%)", {min: 0, max: 0.5, step: 0.01, unit: "%",
+                 help: "The discount is taxed as salary; the shares go to the non-registered account"})}
+        <div class="field"><button data-remove-espp="${i}">Remove ESPP</button></div>`
+        : `<div class="field"><button data-add-espp="${i}">+ Add an ESPP</button></div>`}
       ${number(`${P}.unlock_share`, "LIF one-time unlock (%)", {min: 0, max: limits.unlock_share, step: 0.01, unit: "%"})}
       ${number(`${P}.tfsa_room`, "Unused TFSA room from past years (C$)", {min: 0, step: 500})}
       </div>
@@ -473,6 +480,8 @@ document.addEventListener("click", e => {
   if (el.id === "opt-afford") runOptimizer(el, "affordability", r => afford = r, {target});
   if (el.id === "opt-benefits") runOptimizer(el, "benefits", r => benefits = r, {});
   if (el.dataset.apply) applyOptimizer(el.dataset.apply);
+  if (el.dataset.addEspp != null) { draft.people[Number(el.dataset.addEspp)].espp = {rate: 0.1, cap: 25000, discount: 0.15}; edited(); }
+  if (el.dataset.removeEspp != null) { draft.people[Number(el.dataset.removeEspp)].espp = null; edited(); }
   if (el.id === "add-education") { draft.education = {kids: [newKid(1)]}; edited(); }
   if (el.id === "add-kid") { draft.education.kids.push(newKid(draft.education.kids.length + 1)); edited(); }
   if (el.dataset.removeKid != null) { draft.education.kids.splice(Number(el.dataset.removeKid), 1); edited(); }

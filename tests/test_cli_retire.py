@@ -13,7 +13,7 @@ import pytest
 from stockanalysis import cli, holdings
 from stockanalysis.retirement import inputs, optimize
 
-FAST = ["--paths", "40", "--scenario-paths", "20"]
+FAST = ["--paths", "40", "--scenario-paths", "20", "--bank", "/nonexistent-bank"]  # never the owner's
 
 
 def _plan(tmp_path, *, balances=True) -> Path:

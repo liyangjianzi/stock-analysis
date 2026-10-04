@@ -183,3 +183,9 @@ def test_page_edits_sex_and_survivor_share(server):
 def test_page_edits_the_pension_match(server):
     status, page = _req(server, "GET", "/")
     assert "${P}.pension_match" in page.decode()
+
+
+def test_page_edits_the_espp(server):
+    status, page = _req(server, "GET", "/")
+    page = page.decode()
+    assert "${P}.espp.rate" in page and "data-add-espp" in page and "data-remove-espp" in page
