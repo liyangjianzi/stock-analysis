@@ -283,6 +283,8 @@ function educationPanel() {
         ${number("education.contributed", "Contributed so far (C$)", {min: 0, step: 1000, nullable: true, placeholder: "estimated from the grants"})}
         ${number("education.grants", "Grants received so far (C$)", {min: 0, step: 100, nullable: true, placeholder: "estimated"})}
       </div>
+      ${number("education.childcare", "Child care paid a year (C$, already in spending)", {min: 0, step: 500, optional: true, placeholder: "0",
+               help: "Day camps, after-school care, babysitting for children under 16: deducted by the lower earner"})}
       ${check("education.student_grant", `Apply for the Canada Student Grant (up to ${money(limits.student_grant_max)} a student-year when last year's family income is low)`, eduDefaults.student_grant)}
       <p class="note">Family income is your taxable income: RRSP/RRIF withdrawals count, TFSA withdrawals don't.
         Drawing "proportionally" (Investing tab) can keep it low enough during school years.</p>
@@ -334,6 +336,8 @@ function advancedPanel() {
       ${number(`${P}.years_in_canada_at_65`, "Years in Canada by 65", {min: 0, max: 40, step: 1})}
       ${number(`${P}.lif_start_age`, "LIF starts at (optional)", {min: limits.lif_min_age, max: limits.convert_by_age, step: 1,
                nullable: true, placeholder: `max(${limits.lif_min_age}, retire age)`})}
+      ${number(`${P}.rrsp_room`, "RRSP deduction limit (C$, from your Notice of Assessment)", {min: 0, step: 500, nullable: true,
+               placeholder: "not checked", help: "Contributions above your room go to the TFSA instead; room grows 18% of salary less the pension adjustment"})}
       ${number(`${P}.pension_match`, "Employer pension match (× your contribution)", {min: 0, step: 0.05, optional: true, placeholder: "0",
                help: "e.g. 1.75 if your employer adds $1.75 for every $1 you put in; only your part comes out of salary"})}
       ${p.espp ? `

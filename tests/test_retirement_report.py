@@ -196,3 +196,17 @@ def test_report_shows_the_refund_check_when_given(built):
     html = _html(built, refunds=(2_000.0, [("2026-03-23", 2_000.0)]))
     assert "Tax refund check" in html and "2026-03-23" in html
     assert "Tax refund check" not in _html(built)
+
+
+def test_report_says_whether_rrsp_room_is_checked(built):
+    plan, result, *_ = built
+    unset = report._assumptions(plan, result, None)
+    assert "RRSP room" in unset and "Notice of Assessment" in unset
+    room = replace(plan, people=tuple(replace(p, rrsp_room=10_000.0) for p in plan.people))
+    assert "tracked from" in report._assumptions(room, result, None)
+
+
+def test_child_benefit_shows_in_the_year_table_when_paid(built):
+    _, result, *_ = built
+    avg = result.average
+    assert ("Child benefit" in report._year_table(avg)) == bool((avg.income["ccb"][:, 0] > 0.5).any())

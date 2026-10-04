@@ -225,3 +225,18 @@ def test_espp_parses_and_validates():
         with pytest.raises(inputs.PlanError) as err:
             inputs.parse(d)
         assert err.value.field.startswith("people[0].espp")
+
+
+def test_rrsp_room_and_childcare_are_optional_and_not_negative():
+    plan = inputs.parse(copy.deepcopy(inputs.TEMPLATE))
+    assert plan.people[0].rrsp_room is None
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["rrsp_room"] = -1
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].rrsp_room"
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["education"] = {"kids": [{"name": "K", "age": 10}], "childcare": -5}
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "education.childcare"

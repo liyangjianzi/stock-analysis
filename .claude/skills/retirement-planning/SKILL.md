@@ -134,6 +134,10 @@ big decisions.
   surplus saved). Set `pension_match` so only the employee's share leaves salary.
   If contributions are set higher than take-home pay allows, the report shows the
   household drawing savings while still working: point that out.
+- Ask for each person's **RRSP deduction limit** (Notice of Assessment) and set
+  `people[].rrsp_room`; without it, contributions above the room are wrongly counted
+  as deductible. The Canada Child Benefit is modelled for `education.kids` under 18;
+  `education.childcare` adds the child care deduction (lower earner, under 16).
 - An ESPP (`people[].espp`) buys discounted employer shares from salary into the
   non-registered account; don't also enter it as a `nonreg` contribution.
 - The report's **Tax refund check** compares the model's expected refund with the

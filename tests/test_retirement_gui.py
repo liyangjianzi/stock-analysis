@@ -197,3 +197,8 @@ def test_drawdown_endpoint_returns_the_table(server):
     assert set(r["best"]) == {"legacy", "tax", "success"} and r["current"]["target"] is None
     page = _req(server, "GET", "/")[1].decode()
     assert "opt-drawdown" in page and 'name="drawdown-goal"' in page
+
+
+def test_page_edits_rrsp_room_and_childcare(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert "${P}.rrsp_room" in page and "education.childcare" in page

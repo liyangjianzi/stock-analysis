@@ -39,3 +39,11 @@ def test_actual_refunds_reads_only_refund_deposits_in_the_last_12_months(tmp_pat
 def test_no_bank_files_means_no_refunds(tmp_path):
     assert refund.actual_refunds(tmp_path) == (None, [])
     assert refund.actual_refunds(tmp_path / "missing") == (None, [])
+
+
+def test_expected_refund_uses_the_capped_rrsp_contribution():
+    rows = refund.expected_refund(plan_with(rrsp_room=4_000.0))
+    own = 5_500.0 / 2.75
+    withheld = float(tax.income_tax(ordinary=100_000.0 - own, age=40))
+    owed = float(tax.income_tax(ordinary=100_000.0 - own - 4_000.0, age=40))
+    assert rows == [("A", pytest.approx(withheld - owed))]

@@ -21,10 +21,14 @@ REFUND_MARK = "TAX REFUND"      # how the bank labels a CRA refund deposit
 
 def expected_refund(plan: PlanInputs) -> list:
     """(name, refund) for each person working in the first year with a salary: tax
-    withheld without the RRSP deduction (own pension deducted at source, the ESPP
-    discount included) minus the tax truly owed."""
+    withheld without the RRSP and child care deductions (own pension deducted at
+    source, the ESPP discount included) minus the tax truly owed. The RRSP part is
+    capped by ``rrsp_room`` when it is set."""
     working = np.array([[p.age < p.retire_age] for p in plan.people])
+    alive = np.ones_like(working)
     contrib = engine.planned_contributions(plan.people, working)
+    kids = [k.age for k in plan.education.kids] if plan.education is not None else []
+    care = engine.childcare_claims(plan.people, plan.education, kids, working, alive)
     rows = []
     for i, p in enumerate(plan.people):
         if not working[i, 0] or p.salary is None:
@@ -32,7 +36,8 @@ def expected_refund(plan: PlanInputs) -> list:
         paid, value = engine.espp_purchase(p)
         base = p.salary + (value - paid) - float(engine.own_pension(p, contrib["pension"][i, 0]))
         withheld = float(tax.income_tax(ordinary=base, age=p.age, province=plan.province))
-        owed = float(tax.income_tax(ordinary=max(base - contrib["rrsp"][i, 0], 0.0), age=p.age,
+        rrsp = min(contrib["rrsp"][i, 0], np.inf if p.rrsp_room is None else p.rrsp_room)
+        owed = float(tax.income_tax(ordinary=max(base - rrsp - care[i, 0], 0.0), age=p.age,
                                     province=plan.province))
         rows.append((p.name, withheld - owed))
     return rows

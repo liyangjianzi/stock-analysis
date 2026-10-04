@@ -72,6 +72,7 @@ class Person:
     sex: str | None = None      # "female" / "male" for the life table; None averages the two
     pension_match: float = 0.0  # employer match as a multiple of your own pension contribution
     espp: Espp | None = None    # shares bought from salary into the non-registered account
+    rrsp_room: float | None = None  # "RRSP deduction limit" from the Notice of Assessment; None: not checked
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,7 @@ class Education:
     contribute: bool = True             # contribute each January while it still earns the grant
     aip_to_rrsp: bool = True            # leftover growth to the RRSP (up to the limit) first
     student_grant: bool = True          # apply for the Canada Student Grant (income-tested)
+    childcare: float = 0.0              # yearly child care paid (already in spending); deducted on line 21400
 
 
 @dataclass(frozen=True)
@@ -352,6 +354,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"{f}.cpp_at_65", "must not be negative")
         if not p.pension_match >= 0:
             _fail(f"{f}.pension_match", "a multiple of your own contribution, 0 or more")
+        if p.rrsp_room is not None and not p.rrsp_room >= 0:
+            _fail(f"{f}.rrsp_room", "must not be negative")
         if p.espp is not None:
             if not 0 <= p.espp.rate <= 1:
                 _fail(f"{f}.espp.rate", "a share of salary between 0 and 1")
@@ -411,6 +415,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
         for living, cost in e.costs.items():
             if living not in LIVING or not cost >= 0:
                 _fail(f"education.costs.{living}", f"a yearly cost (not negative) for one of {LIVING}")
+        if not e.childcare >= 0:
+            _fail("education.childcare", "must not be negative")
         for name in ("resp_balance", "contributed", "grants"):
             if getattr(e, name) is not None and not getattr(e, name) >= 0:
                 _fail(f"education.{name}", "must not be negative")

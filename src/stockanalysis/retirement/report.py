@@ -33,8 +33,8 @@ CRITICAL, GOOD_TEXT, TRACK, BAND = "#d03b3b", "#006300", "#cde2fb", "rgba(42,120
 FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 LABELS = {"earned": "Earned income", "cpp": "CPP", "oas": "OAS", "minimums": "RRIF/LIF minimums",
           "registered": "Registered", "tfsa": "TFSA", "nonreg": "Non-registered",
-          "shortfall": "⚠ Shortfall"}
-COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "shortfall": CRITICAL}
+          "ccb": "Child benefit", "shortfall": "⚠ Shortfall"}
+COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "ccb": MUTED, "shortfall": CRITICAL}
 DRAWN = ("registered", "tfsa", "nonreg")   # year-table sources that are withdrawals from an account
 SECTION_IDS = ("summary", "suggestions", "income", "money-left", "years", "assumptions")
 EDUCATION_ID = "education"          # only when the plan has children's education
@@ -460,6 +460,14 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
          if all(p.salary is not None for p in plan.people if p.age < p.retire_age) else
          "Set each worker's salary for an honest view: without one, earned income is assumed to "
          "cover spending exactly and salary tax isn't shown"),
+        ("RRSP room", "tracked from your Notice of Assessment: contributions above it go to the TFSA, "
+                      "and it grows 18% of salary (up to the yearly limit) less the pension adjustment"
+         if any(p.rrsp_room is not None for p in plan.people) else
+         "not checked: set people[].rrsp_room to the \"RRSP deduction limit\" on your Notice of "
+         "Assessment, or contributions above your room are counted as deductible"),
+        *([("Child care", f"{_money(plan.education.childcare)} a year (part of spending), deducted by the "
+                          "lower earner while a child is under 16")]
+          if plan.education is not None and plan.education.childcare > 0 else []),
         ("Survivor spending", f"{s.survivor_share:.0%} of the couple's budget once one of you has "
                               "died (care costs stay whole)" if len(plan.people) == 2 else "n/a"),
         ("Lifespans", "drawn per future from the Statistics Canada Alberta life table "

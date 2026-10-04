@@ -115,6 +115,17 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   worth paid ÷ (1 − discount) into the worker's non-registered account at that cost
   base; the discount is a taxable benefit (income tax, not CPP/EI), added to earned
   income and to `saved` so the sources still add up. Needs a salary.
+- **Child benefit, child care, RRSP room** (`tax.child_benefit` / `childcare_deduction` /
+  `rrsp_new_room`; `rules.CCB`, `CHILDCARE`, `RRSP_LIMIT`). The CCB is its own income
+  source (`"ccb"`), tax-free, from the `education.kids` under 18, tested on last year's
+  **net** family income (`last_net`: total income + the ESPP benefit − RRSP, own
+  pension and child care deductions), not `last_income` (line 15000, which the
+  student grant uses). Child care (`education.childcare`, already inside spending) is
+  deducted by the lower earner among the living parents via `engine.childcare_claims`,
+  capped per child under 16 and at two-thirds of their salary, so it stops when that
+  spouse stops working. `people[].rrsp_room` (None: not enforced): contributions
+  above it go to the TFSA (then non-registered); each working year adds
+  `rrsp_new_room(salary, total pension contributions)`. The refund check uses both.
 - **Bank CSVs are private.** `cli.generate(bank=None)` and `PlannerApp(bank=None)`
   default to no bank file; only the real CLI (`--bank`, default
   `config.DEFAULT_RETIREMENT_BANK`) and `gui.serve` pass the owner's folder. Tests

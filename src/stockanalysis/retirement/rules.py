@@ -142,6 +142,30 @@ STUDENT_GRANT = Rule({
 
 # Up to 50% of eligible pension income (RRIF/LIF payments when the transferor
 # is 65+, NOT plain RRSP withdrawals) can be allocated to a spouse.
+_CCB = ("https://www.canada.ca/en/revenue-agency/services/child-family-benefits/"
+        "canada-child-benefit-overview/canada-child-benefit-we-calculate-your-ccb.html")
+_RRSP_LIMITS = ("https://www.canada.ca/en/revenue-agency/services/tax/registered-plans-administrators/"
+                "pspa/mp-rrsp-dpsp-tfsa-limits-ympe.html")
+_CHILDCARE = ("https://www.canada.ca/en/revenue-agency/services/tax/technical-information/income-tax/"
+              "income-tax-folios-index/series-1-individuals/folio-3-family-unit-issues/"
+              "income-tax-folio-s1-f3-c1-child-care-expense-deduction.html")
+
+# Canada Child Benefit, July 2026 - June 2027 (on 2025 family net income). Reduction
+# per number of children (4 = 4 or more): (rate in the first band, the amount at
+# the second threshold, rate above it).
+CCB = Rule({"under_6": 8_157, "6_to_17": 6_883, "threshold_1": 38_237, "threshold_2": 82_847,
+            "reduction": {1: (0.07, 3_123, 0.032), 2: (0.135, 6_022, 0.057),
+                          3: (0.19, 8_476, 0.08), 4: (0.23, 10_260, 0.095)}}, 2026, _CCB)
+
+# RRSP room: 18% of last year's earned income up to the dollar limit, less the
+# pension adjustment.
+RRSP_LIMIT = Rule({"rate": 0.18, "dollar_limit": 33_810}, 2026, _RRSP_LIMITS)
+
+# Child care expense deduction (line 21400): per child, claimed by the lower-income
+# spouse, capped at two-thirds of their earned income. Unchanged since 2015 (the folio
+# gives them for "2015 and subsequent tax years"), so they apply to 2026.
+CHILDCARE = Rule({"under_7": 8_000, "7_to_15": 5_000, "earned_share": 2 / 3}, 2026, _CHILDCARE)
+
 # Employee payroll premiums on a salary (outside Quebec). Not income tax: CPP
 # premiums buy the CPP pension.
 PAYROLL = {
@@ -242,7 +266,7 @@ def all_rules() -> list[tuple[str, Rule]]:
             for key, value in obj.items():
                 walk(f"{prefix}.{key}", value)
 
-    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "PENSION_SPLIT",
+    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "CCB", "RRSP_LIMIT", "CHILDCARE", "PENSION_SPLIT",
                  "OAS", "CPP", "RRIF", "TFSA", "LIF"):
         walk(name.lower(), globals()[name])
     return found

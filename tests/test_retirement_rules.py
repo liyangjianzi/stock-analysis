@@ -70,3 +70,12 @@ def test_payroll_maximums_match_the_published_2026_figures():
     assert cpp["rate"] * (cpp["ympe"] - cpp["exemption"]) == pytest.approx(4_230.45, abs=0.01)
     assert cpp2["rate"] * (cpp2["yampe"] - cpp["ympe"]) == pytest.approx(416.0, abs=0.01)
     assert ei["rate"] * ei["max_insurable"] == pytest.approx(1_123.07, abs=0.01)
+
+
+def test_ccb_second_band_starts_where_the_first_ends():
+    c = rules.CCB.value
+    span = c["threshold_2"] - c["threshold_1"]
+    for n, (rate1, base2, _) in c["reduction"].items():
+        assert rate1 * span == pytest.approx(base2, abs=1.0), n      # e.g. 7% x 44,610 = 3,123
+    assert rules.RRSP_LIMIT.value["dollar_limit"] == 33_810
+    assert rules.CHILDCARE.value["under_7"] == 8_000 and rules.CHILDCARE.value["7_to_15"] == 5_000

@@ -584,3 +584,60 @@ def test_no_salary_means_no_espp():
     espp = Espp(rate=0.25, cap=25_000.0, discount=0.15)
     proj = run_flat(plan(people=[worker(salary=None, espp=espp)], base=50_000.0, end_age=60))
     assert proj.income["earned"][0, 0] == 50_000.0 and proj.investments[1, 0] == 0.0
+
+
+# -- child benefit, childcare, RRSP room ------------------------------------------------
+
+from stockanalysis.retirement.inputs import Education, Kid  # noqa: E402
+
+
+def with_kids(p, ages, childcare=0.0):
+    kids = tuple(Kid(name=f"K{i}", age=a) for i, a in enumerate(ages))
+    return replace(p, education=Education(kids=kids, resp_balance=0.0, contributed=0.0, grants=0.0,
+                                          contribute=False, student_grant=False, childcare=childcare))
+
+
+def test_child_benefit_is_paid_on_last_years_income_until_18():
+    p = with_kids(plan(accounts=[Account("A", "tfsa", 1_000_000.0)], base=40_000.0, end_age=65),
+                  ages=(10, 16))
+    proj = run_flat(p)
+    assert proj.income["ccb"][0, 0] == 0.0                        # a retired household's last income is unknown
+    assert proj.income["ccb"][1, 0] == pytest.approx(2 * 6_883)   # TFSA draws: no income last year
+    assert proj.income["ccb"][2, 0] == pytest.approx(6_883)       # the older one turned 18
+    total = sum(proj.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)
+
+
+def test_childcare_is_deducted_by_the_lower_earner_while_both_work():
+    a = worker(id="A", name="A", salary=140_000.0)
+    b = worker(id="B", name="B", salary=60_000.0, retire_age=42)        # stops working after 2 years
+    base = plan(people=[a, b], base=60_000.0, end_age=50)
+    none = run_flat(with_kids(base, ages=(10,)))
+    some = run_flat(with_kids(base, ages=(10,), childcare=6_000.0))
+    # 6,000 paid, but a child aged 7-15 allows 5,000.
+    saving = float(tax.income_tax(ordinary=60_000.0, age=40) - tax.income_tax(ordinary=55_000.0, age=40))
+    assert none.tax[0, 0] - some.tax[0, 0] == pytest.approx(saving, abs=1.0)
+    assert some.tax[2, 0] == pytest.approx(none.tax[2, 0])               # B retired: no earned income
+
+
+def test_rrsp_contributions_are_capped_by_room_and_the_excess_goes_to_the_tfsa():
+    w = worker(salary=100_000.0, contributions={"rrsp": 20_000.0}, rrsp_room=5_000.0)
+    proj = run_flat(plan(people=[w], base=40_000.0, end_age=50))
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(5_000.0)
+    assert proj.balances["tfsa"][1, 0] == pytest.approx(7_000.0)          # this year's TFSA limit
+    expected = float(tax.income_tax(ordinary=95_000.0, age=40)) + float(tax.payroll_premiums(100_000.0))
+    assert proj.tax[0, 0] == pytest.approx(expected, abs=1.0)
+    # Next year: 18% of the salary is new room.
+    assert proj.balances["rrsp"][2, 0] == pytest.approx(5_000.0 + 18_000.0)
+
+
+def test_without_rrsp_room_contributions_are_not_capped():
+    w = worker(salary=100_000.0, contributions={"rrsp": 20_000.0})
+    proj = run_flat(plan(people=[w], base=40_000.0, end_age=50))
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(20_000.0)
+
+
+def test_child_benefit_tests_net_income_after_rrsp_and_pension_deductions():
+    w = worker(salary=100_000.0, contributions={"rrsp": 20_000.0})
+    proj = run_flat(with_kids(plan(people=[w], base=40_000.0, end_age=50), ages=(10,)))
+    assert proj.income["ccb"][1, 0] == pytest.approx(float(tax.child_benefit(80_000.0, 0, 1)))

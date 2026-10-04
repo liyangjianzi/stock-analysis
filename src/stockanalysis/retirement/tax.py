@@ -74,6 +74,37 @@ def payroll_premiums(salary) -> np.ndarray:
     return base + second + ei["rate"] * np.clip(s, 0.0, ei["max_insurable"])
 
 
+def child_benefit(income, under_6: int, six_to_17: int) -> np.ndarray:
+    """Yearly Canada Child Benefit for the children's count on family net ``income``."""
+    c = rules.CCB.value
+    n = under_6 + six_to_17
+    if n == 0:
+        return np.zeros(np.shape(income))
+    rate1, base2, rate2 = c["reduction"][min(n, 4)]
+    inc = np.asarray(income, dtype=float)
+    over1 = np.clip(inc - c["threshold_1"], 0.0, c["threshold_2"] - c["threshold_1"])
+    over2 = np.maximum(inc - c["threshold_2"], 0.0)
+    cut = np.where(inc > c["threshold_2"], base2 + rate2 * over2, rate1 * over1)
+    full = under_6 * c["under_6"] + six_to_17 * c["6_to_17"]
+    return np.maximum(full - np.nan_to_num(cut, posinf=np.inf), 0.0)
+
+
+def childcare_deduction(expenses, kid_ages, earned) -> np.ndarray:
+    """Line 21400: ``expenses`` capped per child under 16 and at two-thirds of the
+    claimant's ``earned`` income."""
+    c = rules.CHILDCARE.value
+    limit = sum(c["under_7"] if a < 7 else c["7_to_15"] for a in kid_ages if a < 16)
+    return np.minimum(np.minimum(expenses, limit), c["earned_share"] * np.asarray(earned, dtype=float))
+
+
+def rrsp_new_room(salary, pension_adjustment) -> np.ndarray:
+    """A year's new RRSP room: 18% of the salary up to the dollar limit, less the
+    pension adjustment (all pension contributions, the employer's included)."""
+    r = rules.RRSP_LIMIT.value
+    room = np.minimum(r["rate"] * np.asarray(salary, dtype=float), r["dollar_limit"])
+    return np.maximum(room - pension_adjustment, 0.0)
+
+
 def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, age=0,
                province="AB") -> np.ndarray:
     """Federal + provincial income tax plus the OAS recovery tax for one person.
