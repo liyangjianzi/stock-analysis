@@ -12,6 +12,7 @@ A stdlib ``http.server`` on 127.0.0.1 serves one self-contained page
 - ``POST /api/reload-balances``  re-read the holdings file
 - ``POST /api/optimize/affordability``  highest spending / earliest retirement at a target
 - ``POST /api/optimize/benefits``       best CPP / OAS start ages (~20 s)
+- ``POST /api/optimize/drawdown``       every yearly RRSP-draw target, best per goal (~15 s)
 - ``GET  /reports/<path>``       files under the output root (browsers won't follow
                                  ``file://`` links from an http page)
 
@@ -149,6 +150,13 @@ class PlannerApp:
         res = optimize.best_benefit_ages(plan, paths=self.preview_paths)
         return dataclasses.asdict(dataclasses.replace(res, plan=None))   # the ages are in people
 
+    def drawdown(self, d: dict) -> dict:
+        plan, _ = self.with_balances(inputs.parse(d))
+        t = optimize.rrsp_drawdown(plan, paths=self.preview_paths)
+        return {"rows": [dataclasses.asdict(r) for r in t.rows],
+                "current": dataclasses.asdict(t.current),
+                "best": {g: dataclasses.asdict(t.best(g)) for g in optimize.GOALS}}
+
     def plan_state(self) -> dict:
         raw = self.read_raw()
         try:
@@ -278,6 +286,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(self.app.affordability(body["plan"], float(body.get("target", 0.9))))
             if self.path == "/api/optimize/benefits":
                 return self._json(self.app.benefits(body["plan"]))
+            if self.path == "/api/optimize/drawdown":
+                return self._json(self.app.drawdown(body["plan"]))
             if self.path == "/api/reload-balances":
                 self.app.reload_balances()
                 return self._json(self.app.plan_state())

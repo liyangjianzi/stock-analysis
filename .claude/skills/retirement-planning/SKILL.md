@@ -39,7 +39,8 @@ stock-analysis retire --optimize --target 85
 ```
 
 Prints the highest safe base spending, the earliest safe retirement (everyone
-moved together) and the best CPP/OAS start ages, ranked by the average future's
+moved together), the best yearly RRSP draw for each goal (most legacy, least
+lifetime tax, safest; GUI: "How much to draw from RRSPs") and the best CPP/OAS start ages, ranked by the average future's
 after-tax legacy. It takes about 20 s and writes no report. The GUI's
 **Optimize** tab runs the same tools and adds a table of what every other start
 age costs. When the gain is under 0.5% of the legacy, call it a near tie and say

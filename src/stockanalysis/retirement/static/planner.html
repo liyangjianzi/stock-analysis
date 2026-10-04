@@ -110,7 +110,7 @@ let eduDefaults = {}, kidDefaults = {};   // from the server: inputs.defaults()
 let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
 let gen = 0, inflight = false, timer = null;
 // Optimizer results, with the draft they were computed for (shown as out of date after an edit).
-let target = 0.9, afford = null, benefits = null;
+let target = 0.9, afford = null, benefits = null, drawdown = null, goal = "legacy";
 
 // ---- helpers --------------------------------------------------------------
 const $ = id => document.getElementById(id);
@@ -403,6 +403,24 @@ function optimizePanel() {
       ${gain < 0.005 * Math.abs(r.legacy) ? `<p class="note">The difference is under 0.5% of the legacy, a near tie:
          choose on other grounds, such as health or wanting the income sooner.</p>` : ""}${stale(benefits)}`;
   }
+  let dd = "";
+  if (drawdown && drawdown.error) dd = `<p class="note" style="color:var(--bad)">${esc(drawdown.error)}</p>`;
+  else if (drawdown) {
+    const r = drawdown.result, pick = r.best[goal], now = r.current;
+    const sign = (x, f) => (x >= 0 ? "+" : "−") + f(Math.abs(x));
+    const riskier = now.success - pick.success > 0.01;
+    dd = `<div class="answer"><span>Draw up to</span><b>${money(pick.target)} each</b>
+        <span class="note">legacy ${short(pick.legacy)} (${sign(pick.legacy - now.legacy, short)} vs now) ·
+          lifetime tax ${short(pick.lifetime_tax)} (${sign(pick.lifetime_tax - now.lifetime_tax, short)}) ·
+          ${pct(pick.success, 1)} chance (now ${pct(now.success, 1)})</span>
+        <button data-apply="drawdown">Use this</button></div>
+      ${riskier ? `<p class="note" style="color:var(--bad)">This lowers the chance the money lasts by more than a point.</p>` : ""}
+      <table class="ages"><tr><td>Each draws up to</td><td>Legacy</td><td>Lifetime tax</td><td>Chance</td><td>Tax, first retired year</td></tr>
+      ${[now, ...r.rows].map(x => `<tr class="${x === pick || (x.target != null && x.target === pick.target) ? "best" : ""}">
+          <td>${x.target == null ? esc(x.label) : money(x.target)}</td><td>${short(x.legacy)}</td>
+          <td>${short(x.lifetime_tax)}</td><td>${pct(x.success, 1)}</td><td>${short(x.first_retired_tax)}</td></tr>`).join("")}
+      </table>${stale(drawdown)}`;
+  }
   return `<div class="card"><h3>What can we afford?</h3>
       <div class="field"><label>Chance the money lasts to aim for <b id="target-out">${pct(target)}</b></label>
         <input type="range" id="target" min="75" max="99" step="1" value="${Math.round(target * 100)}" style="width:100%"></div>
@@ -417,6 +435,16 @@ function optimizePanel() {
       <p class="note">Tries every CPP (${limits.cpp_start_age.join("–")}) and OAS (${limits.oas_start_age.join("–")}) start age for each person and keeps the ones that
         leave the most money after tax on average over 300 drawn lifespans (about 20 seconds), so
         starting later counts only in the futures where you live to collect it.</p>
+    </div>
+    <div class="card"><h3>How much to draw from RRSPs</h3>
+      <div class="field">${[["legacy", "Most legacy"], ["tax", "Least lifetime tax"], ["success", "Safest"]].map(([k, l]) =>
+        `<label class="radio"><input type="radio" name="drawdown-goal" value="${k}" ${goal === k ? "checked" : ""}> ${l}</label>`).join("")}</div>
+      <button id="opt-drawdown">Find the best yearly RRSP draw</button>
+      <div id="drawdown-out">${dd}</div>
+      <p class="note">Tries each yearly target from $0 to $100k per person: each of you tops taxable income up to it
+        with RRSP money, which draws most before CPP, OAS and the RRIF minimums start. Legacy and lifetime tax are
+        averages over 300 drawn lifespans at a steady return; the chance is over the same futures as above
+        (about 15 seconds). Changing the goal re-picks instantly.</p>
     </div>`;
 }
 const PANELS = {people: peoplePanel, spending: spendingPanel, education: educationPanel, home: homePanel,
@@ -453,6 +481,7 @@ document.addEventListener("change", e => {
   const el = e.target;
   if (el.hasAttribute("data-structural")) render();     // other controls' limits depend on it
   if (el.name === "strategy") { draft.withdrawal.strategy = el.value; edited(); }
+  if (el.name === "drawdown-goal") { goal = el.value; render(); }
   if (el.id === "downsize") {
     const age0 = draft.people[0].age;
     draft.home.downsize_age = el.checked ? Math.max(age0, Math.min(65, draft.end_age - 1)) : null;
@@ -479,6 +508,7 @@ document.addEventListener("click", e => {
   }
   if (el.id === "opt-afford") runOptimizer(el, "affordability", r => afford = r, {target});
   if (el.id === "opt-benefits") runOptimizer(el, "benefits", r => benefits = r, {});
+  if (el.id === "opt-drawdown") runOptimizer(el, "drawdown", r => drawdown = r, {});
   if (el.dataset.apply) applyOptimizer(el.dataset.apply);
   if (el.dataset.addEspp != null) { draft.people[Number(el.dataset.addEspp)].espp = {rate: 0.1, cap: 25000, discount: 0.15}; edited(); }
   if (el.dataset.removeEspp != null) { draft.people[Number(el.dataset.removeEspp)].espp = null; edited(); }
@@ -507,6 +537,10 @@ async function runOptimizer(button, kind, keep, extra) {
 function applyOptimizer(kind) {
   if (kind === "spending") draft.spending.base = afford.result.max_spending;
   if (kind === "retire") draft.people.forEach(p => { p.retire_age += afford.result.retire_shift; });
+  if (kind === "drawdown") {
+    draft.withdrawal.strategy = "steady_income";
+    draft.withdrawal.steady_income_target = drawdown.result.best[goal].target;
+  }
   if (kind === "benefits") benefits.result.people.forEach((c, i) => {
     draft.people[i].cpp_start_age = c.best[0];
     draft.people[i].oas_start_age = c.best[1];

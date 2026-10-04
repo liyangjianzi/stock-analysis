@@ -127,4 +127,12 @@ def _print_optimize(plan, target: float, *, paths: int, seed) -> int:
         print(f"{c.name}: CPP {c.current[0]} -> {c.best[0]}, OAS {c.current[1]} -> {c.best[1]}")
     print(f"Expected legacy (over lifespans): C${b.legacy:,.0f} -> C${b.best_legacy:,.0f}; "
           f"chance the money lasts {b.success:.0%} -> {b.best_success:.0%}")
+    d = optimize.rrsp_drawdown(plan, paths=paths, seed=seed)
+    now = d.current
+    print(f"RRSP draw ({now.label}): legacy C${now.legacy:,.0f}, lifetime tax C${now.lifetime_tax:,.0f}, "
+          f"{now.success:.0%}")
+    for goal, name in (("legacy", "most legacy"), ("tax", "least lifetime tax"), ("success", "safest")):
+        r = d.best(goal)
+        print(f"RRSP draw for {name}: up to C${r.target:,.0f} each -> legacy C${r.legacy:,.0f}, "
+              f"lifetime tax C${r.lifetime_tax:,.0f}, {r.success:.0%}")
     return 0

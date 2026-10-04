@@ -189,3 +189,11 @@ def test_page_edits_the_espp(server):
     status, page = _req(server, "GET", "/")
     page = page.decode()
     assert "${P}.espp.rate" in page and "data-add-espp" in page and "data-remove-espp" in page
+
+
+def test_drawdown_endpoint_returns_the_table(server):
+    status, r = _req(server, "POST", "/api/optimize/drawdown", {"plan": inputs.TEMPLATE})
+    assert status == 200 and len(r["rows"]) == len(optimize.DRAWDOWN_TARGETS)
+    assert set(r["best"]) == {"legacy", "tax", "success"} and r["current"]["target"] is None
+    page = _req(server, "GET", "/")[1].decode()
+    assert "opt-drawdown" in page and 'name="drawdown-goal"' in page

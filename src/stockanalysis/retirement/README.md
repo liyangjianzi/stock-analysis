@@ -84,9 +84,17 @@ differences between candidates come from the change, not luck.
   20 s. The page shows the cost of every other start age, because the choice is
   often nearly a tie.
 
+- **How much to draw from RRSPs:** tries every yearly target from $0 to $100k per
+  person (each of you tops taxable income up to it with RRSP money, so most is drawn
+  before CPP, OAS and the RRIF minimums start), next to your current setting. Each
+  target shows the expected legacy and lifetime tax over 300 drawn lifespans and the
+  chance the money lasts; pick the goal (most legacy, least lifetime tax, safest)
+  and the best target is highlighted. **Use this** switches the plan to that
+  steady-income target. About 15 s.
+
 In the GUI, **Use this** copies an answer into the plan you're editing; **Save**
 keeps it. Library: `optimize.affordability(plan, target=0.9)` and
-`optimize.best_benefit_ages(plan)`.
+`optimize.best_benefit_ages(plan)`, `optimize.rrsp_drawdown(plan).best("legacy")`.
 
 ## plan.json
 
@@ -213,17 +221,13 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 Considered on 2026-09-30, after the planning tools; not built yet, roughly in
 order of value:
 
-1. **Drawing the RRSP down early.** Between retirement and 65, draw the RRSP in
-   amounts that stay in a low tax bracket, before CPP, OAS and RRIF minimums stack
-   up. It could beat `rrsp_first` / `steady_income` on lifetime tax and the OAS
-   clawback.
-2. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
+1. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
    bad-market cut.
-3. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
+2. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
    50, downsize at 60", each with its gauge and legacy.
-4. **Historical replay.** Run the plan through actual Canadian/US return
+3. **Historical replay.** Run the plan through actual Canadian/US return
    sequences (1970→) beside the random futures.
-5. **One-time money events.** Inheritances, a car every 10 years, part-time work
+4. **One-time money events.** Inheritances, a car every 10 years, part-time work
    income. (Education is modelled; see above.)
 
 Treat results as estimates, not guarantees. Check the real CPP statement, and see

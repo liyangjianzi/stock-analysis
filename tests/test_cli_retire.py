@@ -87,4 +87,5 @@ def test_optimize_prints_the_answers_without_a_report(tmp_path, monkeypatch, cap
     printed = capsys.readouterr().out
     assert "target 80%" in printed and "Highest spending" in printed and "Earliest retirement" in printed
     assert "Partner A: CPP" in printed and "Expected legacy (over lifespans)" in printed
+    assert "RRSP draw for most legacy" in printed and "least lifetime tax" in printed
     assert not out.exists()

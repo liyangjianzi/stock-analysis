@@ -4,6 +4,8 @@
   lasts at or above a target.
 - :func:`earliest_retirement`: the earliest retirement, every person shifted by the
   same number of years, that keeps that chance.
+- :func:`rrsp_drawdown`: every yearly RRSP-draw (``steady_income``) target, with
+  expected legacy, lifetime tax and the chance the money lasts; ``best(goal)`` picks.
 - :func:`best_benefit_ages`: the CPP and OAS start ages that leave the largest
   expected after-tax legacy over drawn lifespans (a steady median return), then
   compared with today's ages on the simulated futures.
@@ -38,13 +40,17 @@ def _success(plan: PlanInputs, F: tuple) -> float:
     return engine.simulate(plan, *F).success
 
 
+def _lifespan_run(plan: PlanInputs, deaths: np.ndarray):
+    """The plan at a steady median return over each of ``deaths``' lifespans."""
+    r = plan.returns
+    g = engine.median_return(r.mean, r.sd)
+    return engine.simulate(plan, np.full((engine.life_steps(plan), deaths.shape[1]), g), deaths)
+
+
 def _expected_legacy(plan: PlanInputs, deaths: np.ndarray) -> float:
     """Mean after-tax legacy over ``deaths`` at a steady median return: what a start
     age is worth once you might not live to collect it."""
-    r = plan.returns
-    g = engine.median_return(r.mean, r.sd)
-    proj = engine.simulate(plan, np.full((engine.life_steps(plan), deaths.shape[1]), g), deaths)
-    return float(proj.legacy.mean())
+    return float(_lifespan_run(plan, deaths).legacy.mean())
 
 
 def _with_spending(plan: PlanInputs, base: float) -> PlanInputs:
@@ -188,3 +194,74 @@ def _search(plan: PlanInputs, cpp_ages, oas_ages, rounds: int, run, score) -> tu
         if not moved or len(plan.people) == 1:
             break
     return best, grids
+
+
+# -- how much to draw from RRSPs ----------------------------------------------------
+
+DRAWDOWN_TARGETS = tuple(range(0, 100_001, 5_000))   # steady_income targets tried, C$ per person
+GOALS = ("legacy", "tax", "success")
+
+
+@dataclass(frozen=True)
+class DrawdownRow:
+    target: float | None            # steady_income target per person; None: the plan as it stands
+    label: str
+    success: float                  # chance the money lasts, shared futures
+    legacy: float                   # expected after-tax legacy over lifespans
+    lifetime_tax: float             # expected lifetime tax over the same lifespans
+    first_retired_tax: float        # average future, the first year nobody works
+
+
+@dataclass(frozen=True)
+class DrawdownTable:
+    rows: tuple                     # one DrawdownRow per target, lowest first
+    current: DrawdownRow
+
+    def best(self, goal: str) -> DrawdownRow:
+        """The row that does best on ``goal`` (most legacy / least tax / highest
+        success); ties keep the lower target, i.e. less drawn."""
+        if goal not in GOALS:
+            raise ValueError(f"goal must be one of {GOALS}")
+        key = {"legacy": lambda r: -r.legacy, "tax": lambda r: r.lifetime_tax,
+               "success": lambda r: -r.success}[goal]
+        return min(self.rows, key=key)          # min keeps the first (lowest) of equals
+
+
+def _with_target(plan: PlanInputs, target: float) -> PlanInputs:
+    return replace(plan, withdrawal=replace(plan.withdrawal, strategy="steady_income",
+                                            steady_income_target=float(target)))
+
+
+def _drawdown_row(plan: PlanInputs, F: tuple, deaths: np.ndarray, target, label: str) -> DrawdownRow:
+    life = _lifespan_run(plan, deaths)
+    r = plan.returns
+    T = engine.steps(plan)
+    avg = engine.simulate(plan, np.full((T, 1), engine.median_return(r.mean, r.sd)),
+                          engine.average_deaths(plan))
+    first = float(avg.tax[avg.retire_step, 0]) if avg.retire_step < T else 0.0
+    return DrawdownRow(target, label, _success(plan, F), float(life.legacy.mean()),
+                       float(life.lifetime_tax.mean()), first)
+
+
+def _drawdown_point(args) -> DrawdownRow:
+    plan, F, deaths, target = args
+    return _drawdown_row(_with_target(plan, target), F, deaths, target, f"${target / 1000:.0f}k each")
+
+
+def rrsp_drawdown(plan: PlanInputs, *, paths: int = 1_000, seed: int | None = None,
+                  targets=DRAWDOWN_TARGETS, workers: int | None = None) -> DrawdownTable:
+    """Every ``steady_income`` target (each person's taxable income topped up with RRSP
+    money, which draws most before CPP, OAS and the RRIF minimums fill the room) and
+    the plan as it stands, on the same futures and lifespans. Pick with ``best``."""
+    s = plan.returns.seed if seed is None else seed
+    F = _futures(plan, paths, s)
+    D = mortality.draw_death_ages(plan.people, plan.start_year, LIFESPAN_DRAWS, s)
+    w = plan.withdrawal
+    now = ("Now: RRSP first" if w.strategy == "rrsp_first" else
+           "Now: proportional" if w.strategy == "proportional" else
+           f"Now: ${w.steady_income_target / 1000:.0f}k each")
+    current = _drawdown_row(plan, F, D, None, now)
+    with nullcontext() if workers == 1 else ProcessPoolExecutor(workers) as pool:
+        run = pool.map if pool else map
+        rows = tuple(run(_drawdown_point, [(plan, F, D, t) for t in targets]))
+    return DrawdownTable(rows, current)
