@@ -242,10 +242,13 @@ def allocate(withdrawal, avail: dict, required: np.ndarray, base_taxable: np.nda
     return draw, need, surplus
 
 
-def _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio, payouts) -> list:
+def _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio, payouts,
+           work=None) -> list:
     """Each person's taxable pieces. RRIF/LIF payments are eligible pension income at
     65+; plain RRSP withdrawals and anything before 65 are ordinary income.
-    ``payouts`` is (eligible dividends, foreign dividends + interest), each (P, N)."""
+    ``payouts`` is (eligible dividends, foreign dividends + interest), each (P, N).
+    ``work`` (from ``payroll``) adds each worker's salary, ESPP benefit and
+    deductions, so draws and pension splitting are taxed on top of the salary."""
     eligible, other = payouts
     pension_age = rules.PENSION_SPLIT.value["min_age"]
     parts = []
@@ -259,9 +262,13 @@ def _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
         else:
             pension = np.zeros_like(reg)
             ordinary = cpp_i + reg + lif
-        parts.append({"ordinary": ordinary + other[i], "pension": pension, "dividends": eligible[i],
-                      "gains": draw["nonreg"][i] * gain_ratio[i],
-                      "oas": np.zeros_like(reg) + oas[i], "age": ages[i]})
+        part = {"ordinary": ordinary + other[i], "pension": pension, "dividends": eligible[i],
+                "gains": draw["nonreg"][i] * gain_ratio[i],
+                "oas": np.zeros_like(reg) + oas[i], "age": ages[i]}
+        if work is not None:
+            part.update(salary=work["salary"][i], deductions=work["deductions"][i])
+            part["ordinary"] = part["ordinary"] + work["benefit_by"][i]
+        parts.append(part)
     return parts
 
 
@@ -386,31 +393,33 @@ def childcare_claims(people, education, kid_ages, working, alive) -> np.ndarray:
     return out
 
 
-def payroll(people, ages, working, contrib, province, childcare=None) -> dict:
-    """Each worker's salary less income tax (after RRSP and own-pension deductions,
-    with the ESPP discount added as a taxable benefit) and CPP/EI premiums. (N,)
-    arrays, plus ``espp`` (P, N): the market value of the shares bought."""
+def payroll(people, ages, working, contrib, childcare=None) -> dict:
+    """Each worker's pay before income tax, which the household tax computes on top of
+    everything else: (N,) ``premiums`` (CPP/EI), ``pay`` (salary less premiums),
+    ``funded`` (contributions paid out of it), ``benefit`` (ESPP discount); (P, N)
+    ``salary``, ``benefit_by``, ``deductions`` (RRSP, own pension, child care) for the
+    tax parts, and ``espp`` (the shares' market value)."""
     P, N = working.shape
-    out = {k: np.zeros(N) for k in ("tax", "premiums", "take_home", "funded", "benefit")}
-    out["espp"] = np.zeros((P, N))
+    out = {k: np.zeros(N) for k in ("premiums", "pay", "funded", "benefit")}
+    for k in ("salary", "benefit_by", "deductions", "espp"):
+        out[k] = np.zeros((P, N))
     for i, p in enumerate(people):
         w = working[i]
         if not w.any():
             continue
         own = own_pension(p, contrib["pension"][i])
         paid, value = espp_purchase(p)
-        benefit = value - paid
         care = 0.0 if childcare is None else childcare[i]
-        taxable = np.maximum(p.salary + benefit - contrib["rrsp"][i] - own - care, 0.0)
-        income_tax = np.where(w, tax.income_tax(ordinary=taxable, age=ages[i], province=province), 0.0)
         prem = np.where(w, tax.payroll_premiums(p.salary), 0.0)
-        out["tax"] += income_tax + prem
+        out["salary"][i] = np.where(w, p.salary, 0.0)
+        out["benefit_by"][i] = np.where(w, value - paid, 0.0)
+        out["deductions"][i] = np.where(w, contrib["rrsp"][i] + own + care, 0.0)
+        out["espp"][i] = np.where(w, value, 0.0)
         out["premiums"] += prem
-        out["take_home"] += np.where(w, p.salary, 0.0) - income_tax - prem
+        out["pay"] += out["salary"][i] - prem
         out["funded"] += (contrib["rrsp"][i] + own + contrib["tfsa"][i] + contrib["nonreg"][i]
                           + np.where(w, paid, 0.0))
-        out["benefit"] += np.where(w, benefit, 0.0)
-        out["espp"][i] = np.where(w, value, 0.0)
+        out["benefit"] += out["benefit_by"][i]
     return out
 
 
@@ -584,16 +593,16 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         need_rec[t] = need + uncovered
         pay_tax = funded = benefit = deducted = np.zeros(N)
         espp_shares = np.zeros((P, N))
+        pay = None
         if salaried:      # take-home pay covers spending, then contributions; the gap is drawn or saved
             care = childcare_claims(people, plan.education, kid_ages, working, alive)
-            pay = payroll(people, ages, working, contrib, prov, care)
-            deducted = care.sum(axis=0) + sum(contrib["rrsp"][i] + own_pension(p, contrib["pension"][i])
-                                              for i, p in enumerate(people))
-            pay_tax, premium_rec[t], funded = pay["tax"], pay["premiums"], pay["funded"]
+            pay = payroll(people, ages, working, contrib, care)
+            deducted = pay["deductions"].sum(axis=0)
+            pay_tax, premium_rec[t], funded = pay["premiums"], pay["premiums"], pay["funded"]
             benefit, espp_shares = pay["benefit"], pay["espp"]
             income["earned"][t] = benefit + sum(np.where(working[i], p.salary, 0.0)
                                                 for i, p in enumerate(people) if planned[i])
-            cash_need = need + uncovered + funded - pay["take_home"]
+            cash_need = need + uncovered + funded - pay["pay"]   # income tax: in the household tax
         else:             # no salary to go on: earned income just covers spending
             income["earned"][t] = np.where(earning, need, 0.0)
             cash_need = np.where(earning, uncovered, need + uncovered)
@@ -643,7 +652,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 other = y_other * kept
                 other[0] = other[0] + aip_income                        # leftover RESP growth
                 parts = _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
-                               (y_eligible * kept, other))
+                               (y_eligible * kept, other), pay)
                 new_tax = tax.household_tax(parts, share, prov)
                 resid = float(np.abs(new_tax - tax_est).max())
                 tax_est = new_tax
@@ -656,6 +665,18 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 break
             share = best
         max_resid = max(max_resid, resid)
+        if salaried:
+            # Take-home pay and savings can't fund every planned contribution: the household
+            # contributes less (pro rata), it doesn't run short. (Tax keeps the planned
+            # deductions: a small approximation in those years only.)
+            cut = np.minimum(unfunded, funded)
+            if cut.any():
+                keep = 1 - np.divide(cut, funded, out=np.zeros(N), where=funded > 0)
+                for k in ACCOUNTS:
+                    contrib[k] = contrib[k] * keep
+                espp_shares = espp_shares * keep
+                income["earned"][t] -= benefit * (1 - keep)
+                benefit, funded, unfunded = benefit * keep, funded - cut, unfunded - cut
         prev_share, prev_tax = share, tax_est
 
         # 5. Apply the draws; save any surplus (TFSA room first).
@@ -675,8 +696,11 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             worker_income += np.where(w, salaries[i] + taxable_yield * held, 0.0)
             if not payouts[i].any():
                 continue
-            base = np.maximum((p.salary or 0.0) - contrib["rrsp"][i]
-                              - own_pension(p, contrib["pension"][i]), 0.0)   # after deductions
+            if pay is not None:                         # the same base the household tax uses
+                base = np.maximum(pay["salary"][i] + pay["benefit_by"][i] - pay["deductions"][i], 0.0)
+            else:
+                base = np.maximum((p.salary or 0.0) - contrib["rrsp"][i]
+                                  - own_pension(p, contrib["pension"][i]), 0.0)
             due = np.where(w, np.minimum(tax.extra_tax(base, ordinary=y_other * held,
                                                        dividends=y_eligible * held, age=ages[i],
                                                        province=prov),
@@ -688,7 +712,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         last_income = worker_income + sum(
             tax.total_income(ordinary=part["ordinary"], pension=part["pension"], gains=part["gains"],
                              oas=part["oas"], dividends=part["dividends"]) for part in parts)
-        last_net = last_income + benefit - deducted    # + the ESPP benefit, - RRSP / pension / child care
+        last_net = last_income - deducted       # less RRSP / pension / child care (the ESPP benefit is in)
         per_person = surplus * alive / np.maximum(alive.sum(axis=0), 1)   # to whoever is alive
         into_tfsa = np.minimum(per_person, np.maximum(room - contrib["tfsa"], 0.0))  # planned TFSA first
         room -= into_tfsa

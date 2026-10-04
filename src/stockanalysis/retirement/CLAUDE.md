@@ -101,15 +101,20 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 - **No registered draws while working.** Nobody's RRSP/LIF is drawn while they
   still work.
 - **Salary drives the working years** (`engine.payroll`) when every worker has a
-  `salary`: earned income is the gross salary; income tax (on salary less RRSP and
-  the worker's own pension share, `own_pension` = pension ÷ (1 + `pension_match`))
-  plus CPP/CPP2/EI premiums (`tax.payroll_premiums`, `rules.PAYROLL`) go in `tax`;
-  take-home pay covers the need, then the planned contributions (`saved` includes
-  them), and the gap is drawn or the surplus saved, TFSA room going to planned
-  contributions first. The employer's match enters the pension without touching
-  cash. Premiums are recorded in `Projection.premiums` and left out of
-  `lifetime_tax` (they buy CPP/EI). If any worker's salary is missing, that year
-  falls back to the old rule (earned income = the need), and the report says so.
+  `salary`: earned income is the gross salary. Its **income tax is part of the
+  household tax**: `_parts` gives each worker `salary` (CPP/EI credits, the enhanced
+  CPP + CPP2 deduction and the Canada employment amount, via `tax.income_tax(salary=)`)
+  and `deductions` (RRSP, own pension share = pension ÷ (1 + `pension_match`), child
+  care), so withdrawals and pension splitting are taxed on top of the salary.
+  `payroll` returns pay before income tax (salary − CPP/EI premiums); premiums go in
+  `tax` too, are recorded in `Projection.premiums` and left out of `lifetime_tax`.
+  Take-home pay covers the need, then the planned contributions (`saved` includes
+  them); the gap is drawn or the surplus saved, TFSA room going to planned
+  contributions first. **Contributions the household can't fund are cut pro rata,
+  never counted as a shortfall** (tax keeps the planned deductions in those years, a
+  small approximation). The employer's match enters the pension without touching
+  cash. If any worker's salary is missing, that year falls back to the old rule
+  (earned income = the need), and the report says so.
 - **ESPP** (`people[].espp`: `rate`, `cap`, `discount`; `engine.espp_purchase`): each
   working year min(rate × salary, cap) is paid from take-home pay and buys shares
   worth paid ÷ (1 − discount) into the worker's non-registered account at that cost

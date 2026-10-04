@@ -160,3 +160,21 @@ def test_new_rrsp_room_is_18_percent_less_the_pension_adjustment():
     assert float(tax.rrsp_new_room(140_000, 13_680)) == pytest.approx(0.18 * 140_000 - 13_680)
     assert float(tax.rrsp_new_room(300_000, 0)) == 33_810                       # the dollar limit
     assert float(tax.rrsp_new_room(50_000, 20_000)) == 0.0                      # never negative
+
+
+def test_salary_gets_payroll_credits_the_enhanced_cpp_deduction_and_the_employment_amount():
+    # $100k salary, age 40, AB (T4127 2026): base CPP 4.95% and EI earn credits at the
+    # lowest rates; enhanced CPP (1.00%) + CPP2 are deducted; the Canada employment
+    # amount is a federal credit.
+    pensionable = 74_600 - 3_500
+    base_cpp, ei = 0.0495 * pensionable, 1_123.07
+    deduct = 0.01 * pensionable + 0.04 * (85_000 - 74_600)
+    net = 100_000 - deduct
+    fed = tax.bracket_tax(net, rules.FEDERAL["brackets"].value) - 0.14 * (16_452 + base_cpp + ei + 1_501)
+    ab = tax.bracket_tax(net, rules.PROVINCIAL["AB"]["brackets"].value) - 0.08 * (22_769 + base_cpp + ei)
+    assert float(tax.income_tax(salary=100_000, age=40)) == pytest.approx(float(fed + ab), abs=0.01)
+
+
+def test_deductions_lower_net_income():
+    with_ded = float(tax.income_tax(ordinary=80_000, deductions=10_000, age=40))
+    assert with_ded == pytest.approx(float(tax.income_tax(ordinary=70_000, age=40)))

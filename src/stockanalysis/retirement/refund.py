@@ -34,12 +34,15 @@ def expected_refund(plan: PlanInputs) -> list:
         if not working[i, 0] or p.salary is None:
             continue
         paid, value = engine.espp_purchase(p)
-        base = p.salary + (value - paid) - float(engine.own_pension(p, contrib["pension"][i, 0]))
-        withheld = float(tax.income_tax(ordinary=base, age=p.age, province=plan.province))
+        own = float(engine.own_pension(p, contrib["pension"][i, 0]))
         rrsp = min(contrib["rrsp"][i, 0], np.inf if p.rrsp_room is None else p.rrsp_room)
-        owed = float(tax.income_tax(ordinary=max(base - rrsp - care[i, 0], 0.0), age=p.age,
-                                    province=plan.province))
-        rows.append((p.name, withheld - owed))
+
+        def owed(deductions, p=p, benefit=value - paid):
+            return float(tax.income_tax(salary=p.salary, ordinary=benefit, deductions=deductions,
+                                        age=p.age, province=plan.province))
+
+        withheld = owed(own)
+        rows.append((p.name, withheld - owed(own + rrsp + care[i, 0])))
     return rows
 
 
@@ -56,6 +59,14 @@ def _rows(path: Path):
                     continue                          # a header or a malformed line
 
 
+def _amount(cell: str):
+    """A bank amount like "1,234.56" or "$765.44"; None if it isn't a number."""
+    try:
+        return float(cell.replace(",", "").replace("$", "").strip())
+    except ValueError:
+        return None
+
+
 def actual_refunds(path) -> tuple:
     """(total, [(date, amount)]) of refund deposits in the 12 months up to the latest
     transaction in the bank CSVs at ``path`` (a file or a folder); (None, []) if none."""
@@ -67,7 +78,9 @@ def actual_refunds(path) -> tuple:
     found = []
     for d, desc, credit in rows:
         if REFUND_MARK in desc.upper() and d > start and credit.strip():
-            found.append((d.isoformat(), float(credit)))
+            amount = _amount(credit)
+            if amount is not None:
+                found.append((d.isoformat(), amount))
     if not found:
         return None, []
     return sum(a for _, a in found), sorted(found)

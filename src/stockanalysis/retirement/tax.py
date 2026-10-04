@@ -65,13 +65,21 @@ def extra_tax(base, *, ordinary=0.0, dividends=0.0, age=0, province="AB") -> np.
             - income_tax(ordinary=base, age=age, province=province))
 
 
-def payroll_premiums(salary) -> np.ndarray:
-    """An employee's yearly CPP, CPP2 and EI premiums on ``salary`` (outside Quebec)."""
+def payroll_parts(salary) -> tuple:
+    """(premiums credited at the lowest rate: base CPP + EI, premiums deducted from
+    income: enhanced CPP + CPP2) on ``salary`` (outside Quebec)."""
     s = np.asarray(salary, dtype=float)
     cpp, cpp2, ei = (rules.PAYROLL[k].value for k in ("cpp", "cpp2", "ei"))
-    base = cpp["rate"] * np.clip(s - cpp["exemption"], 0.0, cpp["ympe"] - cpp["exemption"])
+    first = cpp["rate"] * np.clip(s - cpp["exemption"], 0.0, cpp["ympe"] - cpp["exemption"])
+    base = first * cpp["base_rate"] / cpp["rate"]
     second = cpp2["rate"] * np.clip(s - cpp["ympe"], 0.0, cpp2["yampe"] - cpp["ympe"])
-    return base + second + ei["rate"] * np.clip(s, 0.0, ei["max_insurable"])
+    return base + ei["rate"] * np.clip(s, 0.0, ei["max_insurable"]), first - base + second
+
+
+def payroll_premiums(salary) -> np.ndarray:
+    """An employee's yearly CPP, CPP2 and EI premiums on ``salary`` (outside Quebec)."""
+    credited, deducted = payroll_parts(salary)
+    return credited + deducted
 
 
 def child_benefit(income, under_6: int, six_to_17: int) -> np.ndarray:
@@ -106,7 +114,7 @@ def rrsp_new_room(salary, pension_adjustment) -> np.ndarray:
 
 
 def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, age=0,
-               province="AB") -> np.ndarray:
+               province="AB", salary=0.0, deductions=0.0) -> np.ndarray:
     """Federal + provincial income tax plus the OAS recovery tax for one person.
 
     ``ordinary``: taxable income that is not eligible pension income (CPP, plain
@@ -115,14 +123,20 @@ def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, 
     split). ``gains``: realized capital gains (the inclusion rate is applied here).
     ``oas``: OAS received. ``dividends``: eligible Canadian dividends *received*;
     the grossed-up amount counts as income (so it also raises the OAS recovery and
-    trims the age amount) and earns the dividend tax credits.
+    trims the age amount) and earns the dividend tax credits. ``salary``: employment
+    income; its base CPP and EI premiums earn credits, its enhanced CPP and CPP2 are
+    deducted, and it earns the Canada employment amount. ``deductions``: RRSP,
+    pension and child care deductions (they lower net income).
     """
-    ordinary, pension, gains, oas, dividends = (np.asarray(x, dtype=float)
-                                                for x in (ordinary, pension, gains, oas, dividends))
+    ordinary, pension, gains, oas, dividends, salary = (
+        np.asarray(x, dtype=float) for x in (ordinary, pension, gains, oas, dividends, salary))
     grossed_up = dividends * (1 + rules.DIVIDENDS["eligible_gross_up"].value)
-    gross = total_income(ordinary=ordinary, pension=pension, gains=gains, oas=oas, dividends=dividends)
-    recovery = oas_recovery(gross, oas)
-    net = gross - recovery           # line 23600: after deducting the OAS repayment
+    gross = total_income(ordinary=ordinary + salary, pension=pension, gains=gains, oas=oas,
+                         dividends=dividends)
+    credited, deducted = payroll_parts(salary)
+    before = np.maximum(gross - deductions - deducted, 0.0)
+    recovery = oas_recovery(before, oas)
+    net = before - recovery          # line 23600: after deducting the OAS repayment
     over_65 = np.asarray(age) >= 65
 
     fed = rules.FEDERAL
@@ -130,8 +144,9 @@ def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, 
     phase = np.clip((net - bpa["phase_start"]) / (bpa["phase_end"] - bpa["phase_start"]), 0.0, 1.0)
     fed_bpa = bpa["max"] - (bpa["max"] - bpa["min"]) * phase
     fed_pension = np.where(over_65, np.minimum(pension, fed["pension_amount"].value), 0.0)
+    employment = np.minimum(salary, fed["employment_amount"].value)
     fed_credits = fed["credit_rate"].value * (fed_bpa + age_amount(net, age, fed["age_amount"].value)
-                                              + fed_pension)
+                                              + fed_pension + credited + employment)
     fed_credits = fed_credits + rules.DIVIDENDS["federal_credit"].value * grossed_up
     federal = np.maximum(0.0, bracket_tax(net, fed["brackets"].value) - fed_credits)
 
@@ -139,7 +154,7 @@ def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, 
     prov_pension = np.where(over_65, np.minimum(pension, prov["pension_amount"].value), 0.0)
     prov_credits = prov["credit_rate"].value * (prov["bpa"].value
                                                 + age_amount(net, age, prov["age_amount"].value)
-                                                + prov_pension)
+                                                + prov_pension + credited)
     supplemental = prov.get("supplemental_credit")
     if supplemental is not None:
         s = supplemental.value
@@ -162,7 +177,8 @@ def _split(a: dict, b: dict, share):
 def _person(part: dict, pension, province: str) -> np.ndarray:
     return income_tax(ordinary=part["ordinary"], pension=pension, gains=part["gains"],
                       oas=part["oas"], dividends=part.get("dividends", 0.0), age=part["age"],
-                      province=province)
+                      province=province, salary=part.get("salary", 0.0),
+                      deductions=part.get("deductions", 0.0))
 
 
 def household_tax(parts: list, share, province: str = "AB") -> np.ndarray:

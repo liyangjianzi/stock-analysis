@@ -19,8 +19,8 @@ def plan_with(**kw) -> PlanInputs:
 def test_expected_refund_is_the_tax_on_the_rrsp_contribution():
     rows = refund.expected_refund(plan_with())
     own = 5_500.0 / 2.75
-    withheld = float(tax.income_tax(ordinary=100_000.0 - own, age=40))
-    owed = float(tax.income_tax(ordinary=100_000.0 - own - 10_000.0, age=40))
+    withheld = float(tax.income_tax(salary=100_000.0, deductions=own, age=40))
+    owed = float(tax.income_tax(salary=100_000.0, deductions=own + 10_000.0, age=40))
     assert rows == [("A", pytest.approx(withheld - owed))]
 
 
@@ -44,6 +44,15 @@ def test_no_bank_files_means_no_refunds(tmp_path):
 def test_expected_refund_uses_the_capped_rrsp_contribution():
     rows = refund.expected_refund(plan_with(rrsp_room=4_000.0))
     own = 5_500.0 / 2.75
-    withheld = float(tax.income_tax(ordinary=100_000.0 - own, age=40))
-    owed = float(tax.income_tax(ordinary=100_000.0 - own - 4_000.0, age=40))
+    withheld = float(tax.income_tax(salary=100_000.0, deductions=own, age=40))
+    owed = float(tax.income_tax(salary=100_000.0, deductions=own + 4_000.0, age=40))
     assert rows == [("A", pytest.approx(withheld - owed))]
+
+
+def test_amounts_with_commas_or_dollar_signs_are_read_and_junk_is_skipped(tmp_path):
+    (tmp_path / "a.csv").write_text(
+        '"2026-03-23","TAX REFUND       RIT","","1,234.56","9000"\n'
+        '"2026-03-24","TAX REFUND       RIT","","$765.44","9765"\n'
+        '"2026-03-25","TAX REFUND       RIT","","n/a","9765"\n')
+    total, rows = refund.actual_refunds(tmp_path)
+    assert total == pytest.approx(2_000.0) and len(rows) == 2

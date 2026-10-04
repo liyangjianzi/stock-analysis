@@ -294,12 +294,12 @@ def test_a_workers_payouts_are_taxed_on_top_of_salary_and_sold_from_the_account(
                      end_age=56), nonreg_income=NonregIncome(foreign_dividends=0.02))
     proj = run_flat(p)
     due = float(tax.income_tax(ordinary=160_000, age=50) - tax.income_tax(ordinary=150_000, age=50))
-    pay = float(tax.income_tax(ordinary=150_000, age=50)) + float(tax.payroll_premiums(150_000))
+    pay = float(tax.income_tax(salary=150_000, age=50)) + float(tax.payroll_premiums(150_000))
     assert proj.tax[0, 0] == pytest.approx(pay + due, abs=0.01)        # salary tax + the payout tax
     assert proj.income["nonreg"][0, 0] == pytest.approx(due, abs=0.01)  # sold from the account
     assert proj.investments[1, 0] == pytest.approx(500_000.0 - due + proj.saved[0, 0], abs=0.01)
     low = run_flat(replace(p, people=(replace(worker, salary=40_000.0),)))
-    low_pay = float(tax.income_tax(ordinary=40_000, age=50)) + float(tax.payroll_premiums(40_000))
+    low_pay = float(tax.income_tax(salary=40_000, age=50)) + float(tax.payroll_premiums(40_000))
     assert low.tax[0, 0] - low_pay < due                                 # a lower marginal rate
 
 
@@ -307,7 +307,7 @@ def test_no_payouts_leave_only_salary_tax_in_working_years():
     worker = person(age=50, retire_age=55, salary=150_000.0)
     proj = run_flat(plan(people=[worker], accounts=[Account("A", "nonreg", 500_000.0)],
                          base=40_000.0, end_age=56))
-    pay = float(tax.income_tax(ordinary=150_000, age=50)) + float(tax.payroll_premiums(150_000))
+    pay = float(tax.income_tax(salary=150_000, age=50)) + float(tax.payroll_premiums(150_000))
     assert proj.tax[0, 0] == pytest.approx(pay, abs=0.01) and proj.income["nonreg"][0, 0] == 0.0
     assert proj.investments[1, 0] == pytest.approx(500_000.0 + proj.saved[0, 0])
 
@@ -492,7 +492,7 @@ def test_earned_income_is_gross_salary_and_tax_includes_salary_tax_and_premiums(
     w = worker(contributions={"rrsp": 10_000.0, "pension": 5_500.0}, pension_match=1.75)
     proj = run_flat(plan(people=[w], base=50_000.0, end_age=60))
     own_pension = 5_500.0 / 2.75                                   # 2,000 of your own; 3,500 employer
-    expected = (float(tax.income_tax(ordinary=100_000.0 - 10_000.0 - own_pension, age=40))
+    expected = (float(tax.income_tax(salary=100_000.0, deductions=10_000.0 + own_pension, age=40))
                 + float(tax.payroll_premiums(100_000.0)))
     assert proj.income["earned"][0, 0] == 100_000.0
     assert proj.tax[0, 0] == pytest.approx(expected, abs=1.0)
@@ -558,7 +558,7 @@ def test_espp_buys_discounted_shares_into_nonreg_and_the_discount_is_taxed():
     fmv = 25_000.0 / 0.85                                       # 25% of 140k is capped at 25k
     benefit = fmv - 25_000.0
     assert with_plan.income["earned"][0, 0] == pytest.approx(140_000.0 + benefit)
-    expected_tax = (float(tax.income_tax(ordinary=140_000.0 + benefit, age=40))
+    expected_tax = (float(tax.income_tax(salary=140_000.0, ordinary=benefit, age=40))
                     + float(tax.payroll_premiums(140_000.0)))
     assert with_plan.tax[0, 0] == pytest.approx(expected_tax, abs=1.0)
     gain = with_plan.investments[1, 0] - without.investments[1, 0]
@@ -615,7 +615,7 @@ def test_childcare_is_deducted_by_the_lower_earner_while_both_work():
     none = run_flat(with_kids(base, ages=(10,)))
     some = run_flat(with_kids(base, ages=(10,), childcare=6_000.0))
     # 6,000 paid, but a child aged 7-15 allows 5,000.
-    saving = float(tax.income_tax(ordinary=60_000.0, age=40) - tax.income_tax(ordinary=55_000.0, age=40))
+    saving = float(tax.income_tax(salary=60_000.0, age=40) - tax.income_tax(salary=60_000.0, deductions=5_000.0, age=40))
     assert none.tax[0, 0] - some.tax[0, 0] == pytest.approx(saving, abs=1.0)
     assert some.tax[2, 0] == pytest.approx(none.tax[2, 0])               # B retired: no earned income
 
@@ -625,7 +625,7 @@ def test_rrsp_contributions_are_capped_by_room_and_the_excess_goes_to_the_tfsa()
     proj = run_flat(plan(people=[w], base=40_000.0, end_age=50))
     assert proj.balances["rrsp"][1, 0] == pytest.approx(5_000.0)
     assert proj.balances["tfsa"][1, 0] == pytest.approx(7_000.0)          # this year's TFSA limit
-    expected = float(tax.income_tax(ordinary=95_000.0, age=40)) + float(tax.payroll_premiums(100_000.0))
+    expected = float(tax.income_tax(salary=100_000.0, deductions=5_000.0, age=40)) + float(tax.payroll_premiums(100_000.0))
     assert proj.tax[0, 0] == pytest.approx(expected, abs=1.0)
     # Next year: 18% of the salary is new room.
     assert proj.balances["rrsp"][2, 0] == pytest.approx(5_000.0 + 18_000.0)
@@ -641,3 +641,26 @@ def test_child_benefit_tests_net_income_after_rrsp_and_pension_deductions():
     w = worker(salary=100_000.0, contributions={"rrsp": 20_000.0})
     proj = run_flat(with_kids(plan(people=[w], base=40_000.0, end_age=50), ages=(10,)))
     assert proj.income["ccb"][1, 0] == pytest.approx(float(tax.child_benefit(80_000.0, 0, 1)))
+
+
+def test_contributions_take_home_cannot_fund_are_cut_not_counted_as_short():
+    # 70k salary, 50k spending, 15k RRSP + 7k TFSA planned and no savings: the household
+    # contributes what's left, it doesn't run short.
+    w = worker(salary=70_000.0, contributions={"rrsp": 15_000.0, "tfsa": 7_000.0})
+    proj = run_flat(plan(people=[w], base=50_000.0, end_age=50))
+    assert (proj.income["shortfall"][:, 0] == 0).all() and proj.success == 1.0
+    assert 0 < proj.balances["rrsp"][1, 0] + proj.balances["tfsa"][1, 0] < 22_000.0
+    total = sum(proj.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)
+
+
+def test_a_workers_withdrawals_are_taxed_on_top_of_the_salary():
+    w = worker(salary=100_000.0)
+    p = plan(people=[w], accounts=[Account("A", "nonreg", 500_000.0, cost=0.0)], base=120_000.0,
+             end_age=50)
+    proj = run_flat(p)
+    drawn = proj.income["nonreg"][0, 0]
+    assert drawn > 0
+    extra = float(tax.income_tax(salary=100_000.0, gains=drawn, age=40) - tax.income_tax(salary=100_000.0, age=40))
+    pay = float(tax.income_tax(salary=100_000.0, age=40)) + float(tax.payroll_premiums(100_000.0))
+    assert proj.tax[0, 0] == pytest.approx(pay + extra, abs=2.0)

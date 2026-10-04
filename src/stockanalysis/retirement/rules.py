@@ -88,6 +88,8 @@ FEDERAL = {
     # 65+; reduced by 15% of net income above the threshold (zero at $107,819).
     "age_amount": Rule({"amount": 9_208, "threshold": 46_432, "rate": 0.15}, 2026, _TD1),
     "pension_amount": Rule(2_000, 2026, _PENSION_AMOUNT),
+    # Canada employment amount (T4127 table 8.2): a credit on employment income.
+    "employment_amount": Rule(1_501, 2026, _T4127),
 }
 
 PROVINCIAL = {
@@ -169,7 +171,10 @@ CHILDCARE = Rule({"under_7": 8_000, "7_to_15": 5_000, "earned_share": 2 / 3}, 20
 # Employee payroll premiums on a salary (outside Quebec). Not income tax: CPP
 # premiums buy the CPP pension.
 PAYROLL = {
-    "cpp": Rule({"rate": 0.0595, "ympe": 74_600, "exemption": 3_500}, 2026, _CPP_PREMIUMS),
+    # Of the 5.95%, the base 4.95% earns a credit at the lowest rate and the first
+    # additional 1.00% is deducted from income (T4127 K2 / F5); CPP2 is all deducted.
+    "cpp": Rule({"rate": 0.0595, "base_rate": 0.0495, "ympe": 74_600, "exemption": 3_500},
+                2026, _CPP_PREMIUMS),
     "cpp2": Rule({"rate": 0.04, "yampe": 85_000}, 2026, _CPP2_PREMIUMS),
     "ei": Rule({"rate": 0.0163, "max_insurable": 68_900}, 2026, _EI_PREMIUMS),
 }
