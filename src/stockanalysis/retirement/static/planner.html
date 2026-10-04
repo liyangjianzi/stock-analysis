@@ -202,6 +202,27 @@ function peoplePanel() {
     </div>`;
   }).join("");
 }
+function eventsCard() {
+  const people = draft.people.map(p => [p.id, p.name]);
+  const rows = (draft.events || []).map((e, j) => {
+    const num = (key, step) => `<input type="number" data-path="events.${j}.${key}" data-nullable step="${step}"
+        value="${e[key] ?? ""}" placeholder="–">`;
+    const sel = (key, opts) => `<select data-path="events.${j}.${key}">${opts.map(([k, l]) =>
+        `<option value="${k}" ${(e[key] ?? "") === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+    return `<tr><td><input type="text" data-path="events.${j}.label" value="${esc(e.label || "")}"></td>
+      <td>${sel("kind", [["cash", "Money in / out"], ["income", "Yearly income"]])}</td>
+      <td>${num("amount", 1000)}</td><td>${num("year", 1)}</td><td>${num("every", 1)}</td><td>${num("until", 1)}</td>
+      <td>${e.kind === "income" ? sel("person", people) : ""}</td>
+      <td><button class="x" data-remove-event="${j}" title="Remove">×</button></td></tr>`;
+  }).join("");
+  return `<div class="card"><h3>One-time money and side income</h3>
+      <table class="changes"><tr class="note"><td>What</td><td>Kind</td><td>C$ (− = out)</td><td>Year</td>
+        <td>Every N yrs</td><td>Until</td><td>Whose</td><td></td></tr>${rows}</table>
+      <button id="add-event" style="margin-top:6px">+ Add an event</button>
+      <p class="note">Money in (e.g. an inheritance) is untaxed and saved; money out (a car, a renovation) is
+        spent that year, repeating every N years until the end year. Yearly income (part-time work) is taxed
+        like salary each year from the start to the end year.</p></div>`;
+}
 function spendingPanel() {
   const s = draft.spending;
   const rows = (s.changes || []).map((c, j) => `<tr>
@@ -209,7 +230,7 @@ function spendingPanel() {
       <td><input type="number" data-path="spending.changes.${j}.amount" step="1000" value="${c.amount}"></td>
       <td><input type="text" data-path="spending.changes.${j}.label" value="${esc(c.label || "")}"></td>
       <td><button class="x" data-remove-change="${j}" title="Remove">×</button></td></tr>`).join("");
-  return `<div class="card"><h3>Yearly spending</h3>
+  return eventsCard() + `<div class="card"><h3>Yearly spending</h3>
       ${slider("spending.base", "After-tax spending (today's C$)", {min: 0, max: 300000, step: 1000, unit: "$"})}
       <h4>Dated changes</h4>
       <table class="changes"><tr class="note"><td>Year</td><td>Change (C$/yr)</td><td>What</td><td></td></tr>${rows}</table>
@@ -505,6 +526,12 @@ document.addEventListener("click", e => {
     document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === activeTab));
     document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "panel-" + activeTab));
   }
+  if (el.id === "add-event") {
+    draft.events = draft.events || [];
+    draft.events.push({label: "", kind: "cash", amount: -10000, year: draft.start_year + 1});
+    edited();
+  }
+  if (el.dataset.removeEvent != null) { draft.events.splice(Number(el.dataset.removeEvent), 1); edited(); }
   if (el.id === "add-change") {
     draft.spending.changes = draft.spending.changes || [];
     draft.spending.changes.push({year: draft.start_year + 1, amount: 0, label: ""});

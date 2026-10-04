@@ -204,3 +204,8 @@ def test_drawdown_endpoint_returns_the_table(server):
 def test_page_edits_rrsp_room_and_childcare(server):
     page = _req(server, "GET", "/")[1].decode()
     assert "${P}.rrsp_room" in page and "education.childcare" in page
+
+
+def test_page_edits_money_events(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert 'id="add-event"' in page and "data-remove-event" in page and "events.${j}.${key}" in page and 'num("amount"' in page

@@ -147,6 +147,12 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   and the bad-market cut starts the first year nobody earns in each future
   (`bad_ref`), a worker's death included. `retire_ref` / `retire_step` stay on the
   plan's calendar (they feed "investments at retirement").
+- **Money events** (`plan.events`, `engine.event_flows(plan, year)`): money in is
+  untaxed cash (source `"other"`), money out is added to the need, both while
+  someone is alive; `kind="income"` is taxed like salary for its person while they
+  live (it joins `work["salary"]` in the tax parts, with CPP/EI premiums) but is not
+  "working": no contributions, RRSP draws continue. Income without an end runs one
+  year; cash repeats every `every` years to `until`.
 - **No CPP survivor reduction under 45.** Service Canada removed it in 2019; the
   survivor's pension depends only on the survivor being under or over 65.
 

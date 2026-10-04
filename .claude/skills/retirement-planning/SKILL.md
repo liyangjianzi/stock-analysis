@@ -138,6 +138,9 @@ big decisions.
   `people[].rrsp_room`; without it, contributions above the room are wrongly counted
   as deductible. The Canada Child Benefit is modelled for `education.kids` under 18;
   `education.childcare` adds the child care deduction (lower earner, under 16).
+- Big one-off costs (cars, renovations, weddings), inheritances and part-time work
+  go in `events` (see the package README); don't fake them with permanent spending
+  changes.
 - An ESPP (`people[].espp`) buys discounted employer shares from salary into the
   non-registered account; don't also enter it as a `nonreg` contribution.
 - The report's **Tax refund check** compares the model's expected refund with the

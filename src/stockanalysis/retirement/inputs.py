@@ -163,6 +163,27 @@ class Education:
     childcare: float = 0.0              # yearly child care paid (already in spending); deducted on line 21400
 
 
+EVENT_KINDS = ("cash", "income")
+
+
+@dataclass(frozen=True)
+class Event:
+    """A one-time or repeating amount (``kind="cash"``: + money in, untaxed; − money
+    out, spent) or temporary income (``kind="income"``: a yearly amount taxed like
+    salary for ``person``). It starts in calendar ``year`` or at an ``age`` (the
+    person's, else people[0]'s), repeats ``every`` N years, and ends at ``until`` /
+    ``until_age`` (inclusive); income runs every year in between."""
+    label: str
+    amount: float
+    year: int | None = None
+    age: int | None = None
+    every: int | None = None
+    until: int | None = None
+    until_age: int | None = None
+    kind: str = "cash"
+    person: str | None = None
+
+
 @dataclass(frozen=True)
 class Account:
     owner: str
@@ -184,6 +205,7 @@ class PlanInputs:
     accounts: tuple = ()
     nonreg_income: NonregIncome = NonregIncome()
     education: Education | None = None
+    events: tuple = ()
     holdings: dict = field(default_factory=dict)
     scenarios: dict = field(default_factory=dict)
 
@@ -250,6 +272,7 @@ def _build(d: dict) -> PlanInputs:
             accounts=tuple(Account(**a) for a in d.get("balances") or []),
             nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
             education=_education(d.get("education")),
+            events=tuple(Event(**e) for e in d.get("events") or []),
             holdings=dict(d.get("holdings") or {}),
             scenarios=dict(d.get("scenarios") or {}),
         )
@@ -436,6 +459,22 @@ def validate(plan: PlanInputs) -> PlanInputs:
             if kid.cesg_received is not None and not (
                     0 <= kid.cesg_received <= rules.RESP["cesg"].value["lifetime_max"]):
                 _fail(f"{f}.cesg_received", "between 0 and the lifetime grant maximum")
+    for j, ev in enumerate(plan.events):
+        f = f"events[{j}]"
+        if ev.kind not in EVENT_KINDS:
+            _fail(f"{f}.kind", f"{ev.kind!r} is not one of {EVENT_KINDS}")
+        if (ev.year is None) == (ev.age is None):
+            _fail(f"{f}.year", "give exactly one of year or age")
+        if ev.every is not None and ev.every < 1:
+            _fail(f"{f}.every", "repeat every 1 year or more")
+        if ev.until is not None and ev.year is not None and ev.until < ev.year:
+            _fail(f"{f}.until", "must not be before the start year")
+        if ev.until_age is not None and ev.age is not None and ev.until_age < ev.age:
+            _fail(f"{f}.until_age", "must not be before the start age")
+        if ev.kind == "income" and not ev.amount >= 0:
+            _fail(f"{f}.amount", "yearly income must not be negative")
+        if ev.person is not None and ev.person not in ids:
+            _fail(f"{f}.person", f"{ev.person!r} is not one of the people {ids}")
     for j, a in enumerate(plan.accounts):
         if a.owner not in ids:
             _fail(f"balances[{j}].owner", f"{a.owner!r} is not one of the people {ids}")

@@ -108,7 +108,8 @@ def oas_yearly(person, age: int) -> float:
     return 12 * monthly * share * (1 + deferral["per_month"] * months)
 
 
-SOURCES = ("earned", "cpp", "oas", "minimums", "registered", "tfsa", "nonreg", "ccb", "shortfall")
+SOURCES = ("earned", "cpp", "oas", "minimums", "registered", "tfsa", "nonreg", "ccb", "other",
+           "shortfall")
 ACCOUNTS = ("rrsp", "pension", "tfsa", "nonreg")
 MAX_ITER = 40         # tax <-> withdrawal fixed-point rounds per split share
 SPLIT_ROUNDS = 3      # re-optimise the pension split at most this often per year
@@ -393,6 +394,30 @@ def childcare_claims(people, education, kid_ages, working, alive) -> np.ndarray:
     return out
 
 
+def event_flows(plan: PlanInputs, year: int) -> tuple:
+    """(money in, money out, (P,) yearly income) from ``plan.events`` in calendar ``year``."""
+    owner = {p.id: i for i, p in enumerate(plan.people)}
+    inflow = outflow = 0.0
+    income = np.zeros(len(plan.people))
+    for ev in plan.events:
+        i = owner.get(ev.person, 0)
+        ref = plan.people[i]
+        start = ev.year if ev.year is not None else plan.start_year + ev.age - ref.age
+        end = (ev.until if ev.until is not None else
+               plan.start_year + ev.until_age - ref.age if ev.until_age is not None else None)
+        if year < start or (end is not None and year > end):
+            continue
+        if ev.kind == "income":
+            if end is not None or year == start:          # every year to the end, else just once
+                income[i] += ev.amount
+        elif year == start or (ev.every is not None and (year - start) % ev.every == 0):
+            if ev.amount >= 0:
+                inflow += ev.amount
+            else:
+                outflow -= ev.amount
+    return inflow, outflow, income
+
+
 def payroll(people, ages, working, contrib, childcare=None) -> dict:
     """Each worker's pay before income tax, which the household tax computes on top of
     everything else: (N,) ``premiums`` (CPP/EI), ``pay`` (salary less premiums),
@@ -605,7 +630,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if school is not None:
             need = need + school.contribution[t]       # RESP contributions are paid like spending
         # School costs the RESP can't cover come from savings even while anyone works.
-        need = need * household
+        inflow, outflow, event_income = event_flows(plan, year)
+        need = (need + outflow) * household               # a one-time cost is spent like the rest
         uncovered = uncovered * household
         need_rec[t] = need + uncovered
         pay_tax = funded = benefit = deducted = np.zeros(N)
@@ -648,7 +674,12 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         bal["rrsp"] -= min_rrif
         bal["pension"] -= min_lif
         lif_room = np.minimum(lif_room, bal["pension"])
-        guaranteed = (cpp + oas + min_rrif + min_lif).sum(axis=0) + ccb
+        # Temporary income (events): taxed like salary for its person while they live;
+        # money in is untaxed. Both are cash this year.
+        side_pay = event_income[:, None] * alive
+        side_premiums = tax.payroll_premiums(side_pay)
+        extra_cash = inflow * household + (side_pay - side_premiums).sum(axis=0)
+        guaranteed = (cpp + oas + min_rrif + min_lif).sum(axis=0) + ccb + extra_cash
         base_taxable = cpp + oas + min_rrif + min_lif
 
         # 4. Top-up withdrawals, iterated with the household's tax.
@@ -659,6 +690,11 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                  "nonreg": bal["nonreg"], "tfsa": bal["tfsa"]}
         gain_ratio = np.clip(np.divide(bal["nonreg"] - cost, bal["nonreg"], out=np.zeros((P, N)),
                                        where=bal["nonreg"] > 0), 0.0, 1.0)
+        work = pay                                         # what the tax parts add per person
+        if side_pay.any():
+            work = {k: np.zeros((P, N)) for k in ("salary", "benefit_by", "deductions")} if pay is None \
+                else dict(pay)
+            work["salary"] = work["salary"] + side_pay
         both = alive.all(axis=0)
         share, tax_est = np.where(both, prev_share, 0.0), prev_tax.copy()
         for _round in range(SPLIT_ROUNDS):
@@ -669,7 +705,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 other = y_other * kept
                 other = other + aip_share * aip_income                  # leftover RESP growth
                 parts = _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
-                               (y_eligible * kept, other), pay)
+                               (y_eligible * kept, other), work)
                 new_tax = tax.household_tax(parts, share, prov)
                 resid = float(np.abs(new_tax - tax_est).max())
                 tax_est = new_tax
@@ -729,6 +765,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         last_income = worker_income + sum(
             tax.total_income(ordinary=part["ordinary"], pension=part["pension"], gains=part["gains"],
                              oas=part["oas"], dividends=part["dividends"]) for part in parts)
+        last_income = last_income + side_pay.sum(axis=0)          # temporary income from events
         last_net = last_income - deducted       # less RRSP / pension / child care (the ESPP benefit is in)
         per_person = surplus * alive / np.maximum(alive.sum(axis=0), 1)   # to whoever is alive
         into_tfsa = np.minimum(per_person, np.maximum(room - contrib["tfsa"], 0.0))  # planned TFSA first
@@ -747,8 +784,12 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         # The drag and any leftover-RESP tax are paid out of investments too.
         income["nonreg"][t] = draw["nonreg"].sum(axis=0) + drag + resp_tax
         income["ccb"][t] = ccb
+        income["other"][t] = inflow * household
+        income["earned"][t] += side_pay.sum(axis=0)
+        premium_rec[t] += side_premiums.sum(axis=0)
         income["shortfall"][t] = unfunded
-        tax_paid[t], saved_rec[t] = tax_est + drag + resp_tax + pay_tax, surplus + funded + benefit
+        tax_paid[t] = tax_est + drag + resp_tax + pay_tax + side_premiums.sum(axis=0)
+        saved_rec[t] = surplus + funded + benefit
 
         # 6. Growth, then contributions from whoever still works.
         r = returns[t]

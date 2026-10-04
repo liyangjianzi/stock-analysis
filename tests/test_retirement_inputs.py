@@ -251,3 +251,36 @@ def test_ages_past_the_life_table_are_rejected():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "people[0].age"
+
+
+# -- one-time money events -------------------------------------------------------
+
+def test_events_parse_and_default_to_none():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["events"] = [{"label": "Car", "amount": -40_000, "year": 2030, "every": 10},
+                   {"label": "Part-time", "kind": "income", "amount": 30_000, "person": "B",
+                    "age": 60, "until_age": 64}]
+    plan = inputs.parse(d)
+    car, work = plan.events
+    assert (car.label, car.amount, car.year, car.every, car.kind) == ("Car", -40_000, 2030, 10, "cash")
+    assert (work.kind, work.person, work.age, work.until_age) == ("income", "B", 60, 64)
+    no_events = copy.deepcopy(inputs.TEMPLATE)
+    no_events.pop("events", None)
+    assert inputs.parse(no_events).events == ()
+
+
+@pytest.mark.parametrize("bad, field", [
+    ({"label": "x", "amount": 1}, "events[0].year"),                                  # no start
+    ({"label": "x", "amount": 1, "year": 2030, "age": 60}, "events[0].year"),          # both starts
+    ({"label": "x", "amount": 1, "year": 2030, "every": 0}, "events[0].every"),
+    ({"label": "x", "amount": 1, "year": 2030, "until": 2029}, "events[0].until"),
+    ({"label": "x", "amount": 1, "year": 2030, "kind": "gift"}, "events[0].kind"),
+    ({"label": "x", "amount": -1, "year": 2030, "kind": "income"}, "events[0].amount"),
+    ({"label": "x", "amount": 1, "year": 2030, "kind": "income", "person": "Z"}, "events[0].person"),
+])
+def test_bad_events_name_the_field(bad, field):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["events"] = [bad]
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == field

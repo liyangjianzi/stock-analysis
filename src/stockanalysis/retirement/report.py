@@ -33,8 +33,8 @@ CRITICAL, GOOD_TEXT, TRACK, BAND = "#d03b3b", "#006300", "#cde2fb", "rgba(42,120
 FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 LABELS = {"earned": "Earned income", "cpp": "CPP", "oas": "OAS", "minimums": "RRIF/LIF minimums",
           "registered": "Registered", "tfsa": "TFSA", "nonreg": "Non-registered",
-          "ccb": "Child benefit", "shortfall": "⚠ Shortfall"}
-COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "ccb": MUTED, "shortfall": CRITICAL}
+          "ccb": "Child benefit", "other": "One-time money", "shortfall": "⚠ Shortfall"}
+COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "ccb": MUTED, "other": AXIS, "shortfall": CRITICAL}
 DRAWN = ("registered", "tfsa", "nonreg")   # year-table sources that are withdrawals from an account
 SECTION_IDS = ("summary", "suggestions", "income", "money-left", "years", "assumptions")
 EDUCATION_ID = "education"          # only when the plan has children's education
@@ -437,6 +437,18 @@ def _refund_check(plan, refunds) -> str:
             f"<table><tbody>{rows}</tbody></table><p class='note'>{note}</p>")
 
 
+def _event_text(plan, ev) -> str:
+    who = next((p.name for p in plan.people if p.id == ev.person), plan.people[0].name)
+    start = str(ev.year) if ev.year is not None else f"{who} at {ev.age}"
+    end = (f" to {ev.until}" if ev.until is not None else
+           f" to {who} at {ev.until_age}" if ev.until_age is not None else "")
+    if ev.kind == "income":
+        return f"{ev.label}: {_money(ev.amount)} a year for {who}, {start}{end}, taxed like salary"
+    repeat = f", every {ev.every} years" if ev.every else ""
+    sign = "in (untaxed, saved)" if ev.amount >= 0 else "out (spent)"
+    return f"{ev.label}: {_money(abs(ev.amount))} {sign}, {start}{repeat}{end}"
+
+
 def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=None) -> str:
     people = "".join(
         f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{_esc(p.sex or 'not set (average table)')}</td>"
@@ -470,6 +482,8 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
         *([("Child care", f"{_money(plan.education.childcare)} a year (part of spending), deducted by the "
                           "lower earner while a child is under 16")]
           if plan.education is not None and plan.education.childcare > 0 else []),
+        *([("Money events", "; ".join(_event_text(plan, ev) for ev in plan.events))]
+          if plan.events else []),
         ("Survivor spending", f"{s.survivor_share:.0%} of the couple's budget once one of you has "
                               "died (care costs stay whole)" if len(plan.people) == 2 else "n/a"),
         ("Lifespans", "drawn per future from the Statistics Canada Alberta life table "

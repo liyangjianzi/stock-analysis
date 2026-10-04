@@ -171,6 +171,12 @@ contributed before the year the child turns 15).
   under 18, on last year's net family income, as its own income bar. Set
   `education.childcare` (yearly child care already in your spending) to get the
   child care deduction, claimed by the lower earner while a child is under 16.
+- **Money events** (`events` in plan.json; GUI: Spending tab): one-off or repeating
+  amounts in (untaxed, saved) or out (spent that year), e.g.
+  `{"label": "Car", "amount": -40000, "year": 2030, "every": 10}`, and temporary
+  income taxed like salary, e.g. `{"label": "Part-time", "kind": "income",
+  "amount": 30000, "person": "B", "age": 60, "until_age": 64}`. Money in shows as
+  "One-time money" in the income chart.
 - **Tax refund check:** the refund the model expects from your RRSP contributions
   beside the "TAX REFUND" deposits in your bank CSVs (`--bank`, default
   `retirement/bank/`, private). A gap points to a deduction or credit the plan
@@ -224,15 +230,11 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 
 Re-planned on 2026-10-03, in build order (the owner's choice):
 
-1. **One-time money events.** One-off amounts in or out (an inheritance, a
-   renovation), repeating ones (a car every 10 years) and temporary income
-   (part-time work, taxed like salary).
-2. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
+1. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
    bad-market cut, with the report showing how much spending varies.
-3. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
+2. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
    50, downsize at 60", each with its gauge and legacy, on the same futures.
-4. **Historical replay.** Run the plan through actual Canadian/US return
-   sequences (1970→) beside the random futures.
+Skipped by the owner (2026-10-04): historical replay.
 
 Treat results as estimates, not guarantees. Check the real CPP statement, and see
 a fee-only planner before big decisions.

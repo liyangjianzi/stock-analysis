@@ -717,3 +717,50 @@ def test_leftover_resp_growth_into_the_rrsp_respects_rrsp_room():
                                        student_grant=False))
     proj = run_flat(p)
     assert proj.balances["rrsp"][1, 0] == pytest.approx(10_000.0)
+
+
+# -- one-time money events ----------------------------------------------------------
+
+from stockanalysis.retirement.inputs import Event  # noqa: E402
+
+
+def test_money_in_is_saved_untaxed():
+    p = replace(plan(base=0.0, end_age=65), events=(Event("Inheritance", 100_000.0, year=2027),))
+    proj = run_flat(p)
+    assert proj.income["other"][1, 0] == 100_000.0 and proj.tax[1, 0] == 0.0
+    assert proj.investments[2, 0] - proj.investments[1, 0] == pytest.approx(100_000.0)
+
+
+def test_money_out_repeats_every_n_years_until_the_end_year():
+    car = Event("Car", -40_000.0, year=2027, every=3, until=2032)
+    proj = run_flat(replace(plan(accounts=[Account("A", "tfsa", 2_000_000.0)], base=30_000.0, end_age=70),
+                            events=(car,)))
+    assert [proj.need[t, 0] for t in (0, 1, 2, 4, 7)] == [30_000.0, 70_000.0, 30_000.0, 70_000.0, 30_000.0]
+
+
+def test_temporary_income_is_taxed_like_salary_and_stops():
+    job = Event("Part-time", 30_000.0, kind="income", year=2027, until=2028)
+    proj = run_flat(replace(plan(base=0.0, end_age=65), events=(job,)))
+    assert proj.income["earned"][1, 0] == 30_000.0 and proj.income["earned"][3, 0] == 0.0
+    expected = float(tax.income_tax(salary=30_000.0, age=61)) + float(tax.payroll_premiums(30_000.0))
+    assert proj.tax[1, 0] == pytest.approx(expected, abs=1.0)
+
+
+def test_income_by_age_belongs_to_its_person_and_stops_at_death():
+    a = person(id="A", name="A", age=60)
+    b = person(id="B", name="B", age=60)
+    job = Event("B works", 20_000.0, kind="income", person="B", age=62, until_age=65)
+    p = replace(plan(people=[a, b], accounts=[Account("A", "tfsa", 1_000_000.0)], base=30_000.0,
+                     end_age=70), events=(job,))
+    proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), np.array([[90], [64]]))
+    assert [proj.income["earned"][t, 0] for t in (1, 2, 3, 4)] == [0.0, 20_000.0, 20_000.0, 0.0]
+
+
+def test_sources_add_up_with_events():
+    events = (Event("In", 50_000.0, year=2027), Event("Out", -20_000.0, year=2028),
+              Event("Job", 25_000.0, kind="income", year=2026, until=2029))
+    p = replace(plan(accounts=[Account("A", "rrsp", 300_000.0), Account("A", "tfsa", 50_000.0)],
+                     base=40_000.0, end_age=70), events=events)
+    proj = run_flat(p)
+    total = sum(proj.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)

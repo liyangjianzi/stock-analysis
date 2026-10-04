@@ -231,3 +231,12 @@ def test_refund_note_counts_child_care_and_names_the_tax_year(built):
     plan = built[0]
     note = report._refund_check(plan, (99_000.0, [("2026-03-23", 99_000.0)]))
     assert "previous tax year" in note and "childcare" not in note.replace("child care", "")
+
+
+def test_assumptions_list_the_money_events(built):
+    from stockanalysis.retirement.inputs import Event
+    plan, result, *_ = built
+    p = replace(plan, events=(Event("Car", -40_000.0, year=2030, every=10),
+                              Event("Part-time", 30_000.0, kind="income", person="B", age=60, until_age=64)))
+    html = report._assumptions(p, result, None)
+    assert "Car" in html and "every 10 years" in html and "Part-time" in html and "a year" in html
