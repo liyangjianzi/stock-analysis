@@ -244,10 +244,17 @@ function spendingPanel() {
       ${number("spending.care", "Care costs in the last years (C$/yr)", {min: 0, step: 1000})}
       ${draft.people.length === 2 ? slider("spending.survivor_share", "A survivor alone spends", {min: limits.survivor_share[0], max: limits.survivor_share[1], step: 0.01, unit: "%"}) : ""}
     </div></div>
-    <div class="card"><h3>When markets fall</h3><div class="grid2">
+    <div class="card"><h3>When markets move</h3>
+      ${[["bad_market", "One cut when markets fall"], ["guardrails", "Guardrails: cut or raise in steps"]].map(([k, l]) =>
+        `<label class="radio"><input type="radio" name="spending-rule" value="${k}" ${(s.rule || "bad_market") === k ? "checked" : ""}> ${l}</label>`).join("")}
+      <div class="grid2">${(s.rule || "bad_market") === "guardrails" ? `
+      ${slider("spending.guardrail_band", "Act when the withdrawal rate moves", {min: limits.guardrail_band[0], max: limits.guardrail_band[1], step: 0.01, unit: "%",
+               help: "Above the starting rate by this much: cut. Below by this much: raise."})}
+      ${slider("spending.guardrail_step", "…by a step of", {min: limits.guardrail_step[0], max: limits.guardrail_step[1], step: 0.01, unit: "%"})}
+      ${number("spending.guardrail_stop_years", "No cuts in the last years", {min: 0, step: 1})}` : `
       ${slider("spending.bad_market_cut", "Cut spending by", {min: 0, max: 0.3, step: 0.01, unit: "%"})}
       ${slider("spending.bad_market_trigger", "…when investments drop below", {min: 0.5, max: 1, step: 0.01, unit: "%",
-               help: "Share of their value on retirement day."})}
+               help: "Share of their value on retirement day."})}`}
     </div></div>`;
 }
 const newKid = n => ({...kidDefaults, name: `Child ${n}`, age: 10});
@@ -507,6 +514,7 @@ document.addEventListener("change", e => {
   if (el.hasAttribute("data-structural")) render();     // other controls' limits depend on it
   if (el.name === "strategy") { draft.withdrawal.strategy = el.value; edited(); }
   if (el.name === "drawdown-goal") { goal = el.value; render(); }
+  if (el.name === "spending-rule") { draft.spending.rule = el.value; edited(); }
   if (el.id === "downsize") {
     const age0 = draft.people[0].age;
     draft.home.downsize_age = el.checked ? Math.max(age0, Math.min(65, draft.end_age - 1)) : null;

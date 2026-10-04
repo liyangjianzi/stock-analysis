@@ -764,3 +764,36 @@ def test_sources_add_up_with_events():
     proj = run_flat(p)
     total = sum(proj.income[s] for s in engine.SOURCES)
     np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)
+
+
+# -- guardrail spending ---------------------------------------------------------------
+
+def _guarded(rate_path, end_age=100, **kw):
+    p = plan(people=[person(age=60)], accounts=[Account("A", "tfsa", 1_000_000.0)], base=40_000.0,
+             end_age=end_age, rule="guardrails", bad_market_cut=0.10, bad_market_trigger=0.80, **kw)
+    return engine.simulate(p, np.full((engine.steps(p), 1), rate_path))
+
+
+def test_guardrails_cut_spending_in_steps_when_the_withdrawal_rate_climbs():
+    proj = _guarded(-0.25)
+    # 4% to start; after one -25% year the rate is 5.6% (> 4.8%): cut 10%, and again.
+    assert proj.need[0, 0] == 40_000.0
+    assert proj.need[1, 0] == pytest.approx(36_000.0)           # the bad-market cut doesn't stack
+    assert proj.need[2, 0] == pytest.approx(32_400.0)
+    assert proj.spend_adjust[2, 0] == pytest.approx(0.81)
+
+
+def test_guardrails_raise_spending_after_strong_years():
+    proj = _guarded(0.30)
+    assert proj.need[1, 0] == pytest.approx(40_000.0)            # 3.21%: not yet below 3.2%
+    assert proj.need[2, 0] == pytest.approx(44_000.0)
+
+
+def test_no_guardrail_cuts_in_the_last_years():
+    proj = _guarded(-0.25, end_age=70)                           # every year is within the last 15
+    assert proj.need[1, 0] == pytest.approx(40_000.0) and proj.need[2, 0] == pytest.approx(40_000.0)
+
+
+def test_the_default_rule_never_adjusts_spending():
+    proj = run_flat(plan(accounts=[Account("A", "tfsa", 1_000_000.0)], base=40_000.0, end_age=70))
+    assert (proj.spend_adjust == 1.0).all()

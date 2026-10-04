@@ -284,3 +284,15 @@ def test_bad_events_name_the_field(bad, field):
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == field
+
+
+def test_guardrail_settings_default_and_validate():
+    s = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).spending
+    assert (s.rule, s.guardrail_band, s.guardrail_step, s.guardrail_stop_years) == ("bad_market", 0.20, 0.10, 15)
+    for key, bad in (("rule", "yolo"), ("guardrail_band", 0.0), ("guardrail_step", 0.6),
+                     ("guardrail_stop_years", -1)):
+        d = copy.deepcopy(inputs.TEMPLATE)
+        d["spending"][key] = bad
+        with pytest.raises(inputs.PlanError) as e:
+            inputs.parse(d)
+        assert e.value.field == f"spending.{key}"

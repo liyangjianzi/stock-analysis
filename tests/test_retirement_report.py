@@ -240,3 +240,15 @@ def test_assumptions_list_the_money_events(built):
                               Event("Part-time", 30_000.0, kind="income", person="B", age=60, until_age=64)))
     html = report._assumptions(p, result, None)
     assert "Car" in html and "every 10 years" in html and "Part-time" in html and "a year" in html
+
+
+def test_guardrail_spending_range_is_reported(built):
+    plan, result, baseline, ranked = built
+    guarded_plan = replace(plan, spending=replace(plan.spending, rule="guardrails"))
+    guarded = engine.run(guarded_plan, paths=40, seed=1)
+    flex = report.spending_flex(guarded)
+    assert 0 < flex["bad_low"] <= flex["typical_low"] <= 2
+    html = report.build_report(guarded, baseline, ranked, generated_at="x",
+                               today=dt.date(rules.TAX_YEAR, 6, 1))
+    assert "Spending with guardrails" in html
+    assert "Spending with guardrails" not in _html(built)

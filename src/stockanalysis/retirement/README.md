@@ -171,6 +171,12 @@ contributed before the year the child turns 15).
   under 18, on last year's net family income, as its own income bar. Set
   `education.childcare` (yearly child care already in your spending) to get the
   child care deduction, claimed by the lower earner while a child is under 16.
+- **Guardrail spending** (`spending.rule: "guardrails"`; GUI: Spending tab, "When
+  markets move"): instead of one cut in a bad market, once nobody earns the plan
+  compares each year's withdrawal rate with the first one; 20% above it spending is
+  cut 10% (not in the last 15 years), 20% below it spending is raised 10%
+  (`guardrail_band`, `guardrail_step`, `guardrail_stop_years`). The report shows the
+  lowest spending level reached in the typical and the 1-in-10 bad future.
 - **Money events** (`events` in plan.json; GUI: Spending tab): one-off or repeating
   amounts in (untaxed, saved) or out (spent that year), e.g.
   `{"label": "Car", "amount": -40000, "year": 2030, "every": 10}`, and temporary
@@ -230,9 +236,7 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 
 Re-planned on 2026-10-03, in build order (the owner's choice):
 
-1. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
-   bad-market cut, with the report showing how much spending varies.
-2. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
+1. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
    50, downsize at 60", each with its gauge and legacy, on the same futures.
 Skipped by the owner (2026-10-04): historical replay.
 

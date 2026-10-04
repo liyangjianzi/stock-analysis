@@ -18,7 +18,7 @@ def test_variant_keys_for_the_template(plan):
     keys = {k for k, _, _ in scenarios.variants(plan)}
     assert keys == {"withdraw_proportional", "withdraw_steady_income", "spend_less",
                     "retire_later_A", "retire_later_B", "downsize_never", "downsize_70",
-                    "cheaper_home"}
+                    "cheaper_home", "spend_guardrails"}
 
 
 def test_each_variant_changes_exactly_one_field(plan):
@@ -60,3 +60,13 @@ def test_suggestion_baseline_matches_the_gauge_at_the_same_paths(plan):
     from stockanalysis.retirement import engine
     baseline, _ = scenarios.rank(plan, paths=60, seed=3)
     assert baseline.success == engine.run(plan, paths=60, seed=3).simulated.success
+
+
+def test_guardrails_are_offered_as_a_what_if_both_ways():
+    from dataclasses import replace
+    from stockanalysis.retirement import inputs as _inputs
+    p = _inputs.parse(_inputs.TEMPLATE)
+    keys = [k for k, _, _ in scenarios.variants(p)]
+    assert "spend_guardrails" in keys
+    guarded = replace(p, spending=replace(p.spending, rule="guardrails"))
+    assert "spend_bad_market" in [k for k, _, _ in scenarios.variants(guarded)]

@@ -168,6 +168,7 @@ class Projection:
     end_step: np.ndarray | None = None          # (N,) years the household lives; the estate's January 1
     final_investments: np.ndarray | None = None  # (N,) investments on that January 1, before tax at death
     premiums: np.ndarray | None = None          # (T, N) CPP/EI premiums inside ``tax`` (not income tax)
+    spend_adjust: np.ndarray | None = None      # (T, N) guardrail spending factor (1 = as planned)
 
     @property
     def paths(self) -> int:
@@ -495,6 +496,10 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
     home_value = np.zeros(T + 1)
     retire_ref, retire_step, max_resid, downsized = None, T, 0.0, False
     bad_ref = np.full(N, np.nan)            # investments the first year nobody earns, per future
+    guard = spend.rule == "guardrails"
+    adjust, start_rate = np.ones(N), np.full(N, np.nan)   # guardrails: spending factor, first rate
+    adjust_rec = np.ones((T, N))
+    stop_age = plan.end_age - spend.guardrail_stop_years   # people[0]'s age: no cuts from here
     school = education.schedule(plan, T)
     edu_out = resp_rec = csg_rec = None
     # Last year's family income (line 15000), for the student grant. A missing salary
@@ -620,9 +625,25 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if downsized:
             level -= (home.property_tax + home.insurance) * (1 - home.new_value / home.value)
         need = np.full(N, max(level, 0.0) * stage_share(spend, ages[0]))
-        # The bad-market cut, once nobody earns (a worker's death counts, not just the plan).
-        need = np.where(~earning & (invest[t] < spend.bad_market_trigger * bad_ref),
-                        need * (1 - spend.bad_market_cut), need)
+        if guard:
+            # Guyton-Klinger: once nobody earns, compare this year's withdrawal rate with the
+            # first one; above the upper guardrail cut spending a step (not in the last
+            # years), below the lower one raise it a step.
+            retired_now = ~earning & household
+            rate = np.divide(need * adjust, invest[t], out=np.full(N, np.inf), where=invest[t] > 0)
+            first = retired_now & np.isnan(start_rate)
+            start_rate = np.where(first, rate, start_rate)
+            act = retired_now & ~first
+            cut = act & (rate > start_rate * (1 + spend.guardrail_band)) & (ages[0] < stop_age)
+            rise = act & (rate < start_rate * (1 - spend.guardrail_band))
+            adjust = np.where(cut, adjust * (1 - spend.guardrail_step),
+                              np.where(rise, adjust * (1 + spend.guardrail_step), adjust))
+            need = need * adjust
+        else:
+            # The bad-market cut, once nobody earns (a worker's death counts, not just the plan).
+            need = np.where(~earning & (invest[t] < spend.bad_market_trigger * bad_ref),
+                            need * (1 - spend.bad_market_cut), need)
+        adjust_rec[t] = adjust
         if P == 2:
             need = np.where(alive.sum(axis=0) == 1, need * spend.survivor_share, need)
         if ages[0] >= spend.no_go_age:
@@ -841,7 +862,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         retire_step=retire_step, max_residual=max_resid,
         education=edu_out, student_grant=csg_rec, resp=resp_rec, school=school,
         death_ages=deaths, alive=alive_rec, end_step=end_step, final_investments=final,
-        premiums=premium_rec)
+        premiums=premium_rec, spend_adjust=adjust_rec)
 
 
 @dataclass

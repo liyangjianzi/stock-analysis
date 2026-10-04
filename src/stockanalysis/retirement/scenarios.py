@@ -33,6 +33,12 @@ def variants(plan: PlanInputs) -> list:
                         replace(plan, withdrawal=replace(plan.withdrawal, strategy=strategy))))
     out.append(("spend_less", "Reduce retirement spending by 5%",
                 replace(plan, spending=replace(plan.spending, base=plan.spending.base * 0.95))))
+    if plan.spending.rule == "guardrails":
+        out.append(("spend_bad_market", "Use the single bad-market cut instead of guardrails",
+                    replace(plan, spending=replace(plan.spending, rule="bad_market"))))
+    else:
+        out.append(("spend_guardrails", "Flex spending with guardrails (cut or raise 10% steps)",
+                    replace(plan, spending=replace(plan.spending, rule="guardrails"))))
     for i, p in enumerate(plan.people):
         if p.age < p.retire_age and p.retire_age + 1 < plan.end_age:   # not already retired
             people = list(plan.people)

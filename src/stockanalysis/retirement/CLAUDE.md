@@ -147,6 +147,12 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   and the bad-market cut starts the first year nobody earns in each future
   (`bad_ref`), a worker's death included. `retire_ref` / `retire_step` stay on the
   plan's calendar (they feed "investments at retirement").
+- **Spending rules** (`spending.rule`): `"bad_market"` (the default, one cut keyed on
+  `bad_ref`) or `"guardrails"` (Guyton-Klinger on the base need: the first non-earning
+  year sets `start_rate` = need ÷ investments; later years compare need × `adjust`
+  with that, cutting a `guardrail_step` above the upper band unless people[0] is
+  within `guardrail_stop_years` of `end_age`, raising one below the lower band).
+  `Projection.spend_adjust` records the factor; the two rules never stack.
 - **Money events** (`plan.events`, `engine.event_flows(plan, year)`): money in is
   untaxed cash (source `"other"`), money out is added to the need, both while
   someone is alive; `kind="income"` is taxed like salary for its person while they

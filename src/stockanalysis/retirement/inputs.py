@@ -94,6 +94,10 @@ class Spending:
     bad_market_cut: float = 0.10
     bad_market_trigger: float = 0.80
     survivor_share: float = 0.70    # a lone survivor's share of the couple's budget
+    rule: str = "bad_market"        # "bad_market" (one cut) or "guardrails" (Guyton-Klinger)
+    guardrail_band: float = 0.20    # act when the withdrawal rate moves this far from where it began
+    guardrail_step: float = 0.10    # each cut or raise
+    guardrail_stop_years: int = 15  # no cuts in the plan's last N years
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,7 @@ class Education:
 
 
 EVENT_KINDS = ("cash", "income")
+SPENDING_RULES = ("bad_market", "guardrails")
 
 
 @dataclass(frozen=True)
@@ -322,6 +327,7 @@ def limits(province: str) -> dict:
             "unlock_share": lif["unlock_share"].value,
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
             "survivor_share": (0.4, 1.0),
+            "guardrail_band": (0.05, 0.5), "guardrail_step": (0.02, 0.5),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
             "student_grant_max": rules.STUDENT_GRANT.value["yearly_max"],
             "aip_rrsp_max": aip["rrsp_transfer_max"], "aip_extra_tax": aip["extra_tax"]}
@@ -407,6 +413,14 @@ def validate(plan: PlanInputs) -> PlanInputs:
     lo, hi = lim["survivor_share"]
     if not lo <= s.survivor_share <= hi:
         _fail("spending.survivor_share", f"between {lo} and {hi}")
+    if s.rule not in SPENDING_RULES:
+        _fail("spending.rule", f"{s.rule!r} is not one of {SPENDING_RULES}")
+    for name in ("guardrail_band", "guardrail_step"):
+        lo, hi = lim[name]
+        if not lo <= getattr(s, name) <= hi:
+            _fail(f"spending.{name}", f"between {lo} and {hi}")
+    if not s.guardrail_stop_years >= 0:
+        _fail("spending.guardrail_stop_years", "must not be negative")
     if s.slow_go_age > s.no_go_age:
         _fail("spending.slow_go_age", "must not be after no_go_age")
     if s.care < 0:

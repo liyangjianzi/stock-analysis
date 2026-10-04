@@ -254,6 +254,27 @@ def _lifespan_tiles(result: PlanResult) -> str:
             + "".join(tiles) + "</div>")
 
 
+def spending_flex(result: PlanResult) -> dict:
+    """With guardrails: the lowest spending level reached (1 = as planned) in the typical
+    future and in the 1-in-10 bad one, plus the typical highest."""
+    adj = result.simulated.spend_adjust
+    low, high = adj.min(axis=0), adj.max(axis=0)
+    return {"typical_low": float(np.median(low)), "bad_low": float(np.percentile(low, 10)),
+            "typical_high": float(np.median(high))}
+
+
+def _flex_tile(result: PlanResult) -> str:
+    if result.inputs.spending.rule != "guardrails":
+        return ""
+    f = spending_flex(result)
+    pct = lambda x: f"{(x - 1):+.0%}"
+    return (f"<div class='kpis' style='grid-template-columns:repeat(2,1fr);margin-top:16px'>"
+            + _tile("Spending with guardrails: lowest level", pct(f["typical_low"]),
+                    f"Typical future; 1 in 10: {pct(f['bad_low'])}")
+            + _tile("Highest level reached", pct(f["typical_high"]), "Typical future, after strong years")
+            + "</div>")
+
+
 def _legacy_tile(plan, avg: Projection, bad: Projection) -> str:
     return (f"<div class='tile hero'><div class='label'>Legacy at {plan.end_age} "
             f"(after tax, home included)</div><div class='value'>{_short(avg.legacy[0])}</div>"
@@ -495,8 +516,13 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
          f"{ni.eligible_dividends:.1%} Canadian dividends, {ni.foreign_dividends:.1%} foreign "
          f"dividends, {ni.interest:.1%} interest a year, taxed every year and reinvested; "
          f"while working, taxed on top of salary"),
-        ("Bad-market rule", f"cut {s.bad_market_cut:.0%} when investments are below "
-                            f"{s.bad_market_trigger:.0%} of their value on retirement day"),
+        (("Guardrails", f"spending is cut {s.guardrail_step:.0%} when the withdrawal rate rises "
+                        f"{s.guardrail_band:.0%} above where it began (not in the last "
+                        f"{s.guardrail_stop_years} years) and raised {s.guardrail_step:.0%} when it falls "
+                        f"{s.guardrail_band:.0%} below")
+         if s.rule == "guardrails" else
+         ("Bad-market rule", f"cut {s.bad_market_cut:.0%} when investments are below "
+                             f"{s.bad_market_trigger:.0%} of their value on retirement day")),
         ("Home", "none" if h is None else (
             f"{_money(h.value)}; downsize at {h.downsize_age} to {_money(h.new_value)}"
             if h.downsize_age is not None else f"{_money(h.value)}; never sold")),
@@ -539,7 +565,8 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
     prev = previous.get("success") if previous else None
     meter = success_meter(sim.success, prev, title=lasts_label(plan))
     top = (f"<div class='top'><div class='card'>{_fig(meter, 'cdn')}</div>"
-           f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>{_lifespan_tiles(result)}")
+           f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>{_lifespan_tiles(result)}"
+           f"{_flex_tile(result)}")
     sections = [
         ("summary", "", top),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
