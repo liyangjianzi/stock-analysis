@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import rules
+from . import mortality, rules
 
 ACCOUNT_TYPES = ("rrsp", "pension", "tfsa", "nonreg")
 LIVING = ("home", "away")
@@ -43,6 +43,14 @@ KEYWORDS = (
 
 
 @dataclass(frozen=True)
+class Espp:
+    """An employee share purchase plan (the employer's terms, not a tax rule)."""
+    rate: float          # share of salary put in
+    cap: float           # most put in a year (C$)
+    discount: float      # off the market price; the discount is taxed as salary
+
+
+@dataclass(frozen=True)
 class Person:
     id: str
     name: str
@@ -61,6 +69,10 @@ class Person:
     salary: float | None = None  # gross employment income while working; taxes non-reg payouts then
     contributions: dict = field(default_factory=dict)
     contributions_when_partner_retired: dict | None = None
+    sex: str | None = None      # "female" / "male" for the life table; None averages the two
+    pension_match: float = 0.0  # employer match as a multiple of your own pension contribution
+    espp: Espp | None = None    # shares bought from salary into the non-registered account
+    rrsp_room: float | None = None  # "RRSP deduction limit" from the Notice of Assessment; None: not checked
 
 
 @dataclass(frozen=True)
@@ -81,6 +93,7 @@ class Spending:
     care: float = 0.0
     bad_market_cut: float = 0.10
     bad_market_trigger: float = 0.80
+    survivor_share: float = 0.70    # a lone survivor's share of the couple's budget
 
 
 @dataclass(frozen=True)
@@ -147,6 +160,7 @@ class Education:
     contribute: bool = True             # contribute each January while it still earns the grant
     aip_to_rrsp: bool = True            # leftover growth to the RRSP (up to the limit) first
     student_grant: bool = True          # apply for the Canada Student Grant (income-tested)
+    childcare: float = 0.0              # yearly child care paid (already in spending); deducted on line 21400
 
 
 @dataclass(frozen=True)
@@ -184,14 +198,14 @@ TEMPLATE = {
     "start_year": 2026,
     "end_age": 95,
     "people": [
-        {"id": "A", "name": "Partner A", "age": 50, "retire_age": 60,
+        {"id": "A", "name": "Partner A", "sex": "female", "age": 50, "retire_age": 60,
          "cpp_start_age": 70, "oas_start_age": 70, "cpp_at_65": None,
          "cpp_years": 25, "cpp_earnings_ratio": 0.9, "years_in_canada_at_65": 40,
          "rrif_start_age": 65, "lif_start_age": None, "unlock_share": 0.5, "tfsa_room": 0,
          "salary": 105000,
          "contributions": {"pension": 8000, "tfsa": 7000, "rrsp": 10000, "nonreg": 0},
          "contributions_when_partner_retired": None},
-        {"id": "B", "name": "Partner B", "age": 48, "retire_age": 58,
+        {"id": "B", "name": "Partner B", "sex": "male", "age": 48, "retire_age": 58,
          "cpp_start_age": 70, "oas_start_age": 70, "cpp_at_65": None,
          "cpp_years": 20, "cpp_earnings_ratio": 0.9, "years_in_canada_at_65": 38,
          "rrif_start_age": 65, "lif_start_age": None, "unlock_share": 0.5, "tfsa_room": 0,
@@ -202,7 +216,8 @@ TEMPLATE = {
     "spending": {"base": 80000,
                  "changes": [{"year": 2035, "amount": -10000, "label": "Kids leave home"}],
                  "slow_go_age": 75, "slow_go_share": 0.85, "no_go_age": 85, "no_go_share": 0.70,
-                 "care": 25000, "bad_market_cut": 0.10, "bad_market_trigger": 0.80},
+                 "care": 25000, "bad_market_cut": 0.10, "bad_market_trigger": 0.80,
+                 "survivor_share": 0.70},
     "home": {"value": 900000, "downsize_age": 65, "new_value": 600000, "selling_cost": 0.04,
              "moving_cost": 20000, "property_tax": 6000, "insurance": 2000},
     "returns": {"mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
@@ -227,7 +242,7 @@ def _build(d: dict) -> PlanInputs:
         spending["changes"] = tuple(SpendingChange(**c) for c in spending.get("changes", []))
         return PlanInputs(
             province=d["province"], start_year=int(d["start_year"]), end_age=int(d["end_age"]),
-            people=tuple(Person(**p) for p in d["people"]),
+            people=tuple(_person(p) for p in d["people"]),
             spending=Spending(**spending),
             home=None if d.get("home") is None else Home(**d["home"]),
             returns=Returns(**d.get("returns", {})),
@@ -242,6 +257,13 @@ def _build(d: dict) -> PlanInputs:
         raise ValueError(f"plan.json is missing the field {e}") from e
     except TypeError as e:
         raise ValueError(f"plan.json has an unexpected or missing field: {e}") from e
+
+
+def _person(d: dict) -> Person:
+    d = dict(d)
+    if d.get("espp") is not None:
+        d["espp"] = Espp(**d["espp"])
+    return Person(**d)
 
 
 class PlanError(ValueError):
@@ -276,6 +298,7 @@ def limits(province: str) -> dict:
             "lif_min_age": lif["min_age"].value,
             "unlock_share": lif["unlock_share"].value,
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
+            "survivor_share": (0.4, 1.0),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
             "student_grant_max": rules.STUDENT_GRANT.value["yearly_max"],
             "aip_rrsp_max": aip["rrsp_transfer_max"], "aip_extra_tax": aip["extra_tax"]}
@@ -304,6 +327,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
         f = f"people[{i}]"
         if not 18 <= p.age < plan.end_age:
             _fail(f"{f}.age", f"{p.age} must be 18 or more and below end_age {plan.end_age}")
+        if p.sex is not None and p.sex not in mortality.SEXES:
+            _fail(f"{f}.sex", f"{p.sex!r} is not one of {mortality.SEXES} (or leave it out)")
         if p.retire_age < p.age:
             _fail(f"{f}.retire_age", f"{p.retire_age} is below age {p.age}")
         if p.retire_age >= plan.end_age:
@@ -327,6 +352,17 @@ def validate(plan: PlanInputs) -> PlanInputs:
                 _fail(f"{f}.{name}", "must not be negative")
         if p.cpp_at_65 is not None and p.cpp_at_65 < 0:
             _fail(f"{f}.cpp_at_65", "must not be negative")
+        if not p.pension_match >= 0:
+            _fail(f"{f}.pension_match", "a multiple of your own contribution, 0 or more")
+        if p.rrsp_room is not None and not p.rrsp_room >= 0:
+            _fail(f"{f}.rrsp_room", "must not be negative")
+        if p.espp is not None:
+            if not 0 <= p.espp.rate <= 1:
+                _fail(f"{f}.espp.rate", "a share of salary between 0 and 1")
+            if not p.espp.cap >= 0:
+                _fail(f"{f}.espp.cap", "must not be negative")
+            if not 0 <= p.espp.discount < 1:
+                _fail(f"{f}.espp.discount", "between 0 and 1 (e.g. 0.15)")
         if p.salary is not None and p.salary < 0:
             _fail(f"{f}.salary", "must not be negative")
         for label, amounts in (("contributions", p.contributions),
@@ -343,6 +379,9 @@ def validate(plan: PlanInputs) -> PlanInputs:
     for name in ("slow_go_share", "no_go_share", "bad_market_cut", "bad_market_trigger"):
         if not 0 <= getattr(s, name) <= 1:
             _fail(f"spending.{name}", "must be between 0 and 1")
+    lo, hi = lim["survivor_share"]
+    if not lo <= s.survivor_share <= hi:
+        _fail("spending.survivor_share", f"between {lo} and {hi}")
     if s.slow_go_age > s.no_go_age:
         _fail("spending.slow_go_age", "must not be after no_go_age")
     if s.care < 0:
@@ -376,6 +415,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
         for living, cost in e.costs.items():
             if living not in LIVING or not cost >= 0:
                 _fail(f"education.costs.{living}", f"a yearly cost (not negative) for one of {LIVING}")
+        if not e.childcare >= 0:
+            _fail("education.childcare", "must not be negative")
         for name in ("resp_balance", "contributed", "grants"):
             if getattr(e, name) is not None and not getattr(e, name) >= 0:
                 _fail(f"education.{name}", "must not be negative")

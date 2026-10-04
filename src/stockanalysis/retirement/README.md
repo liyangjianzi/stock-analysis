@@ -68,8 +68,8 @@ Press Ctrl-C in the terminal to stop it.
 ## Planning tools (`--optimize`, the GUI's Optimize tab)
 
 The planning tools search the plan instead of changing one thing at a time.
-Every candidate sees the same random futures, so differences between candidates
-come from the change, not luck.
+Every candidate sees the same random futures (returns and lifespans), so
+differences between candidates come from the change, not luck.
 
 - **Highest safe spending:** the most after-tax base spending, rounded down to
   C$1,000, that keeps the chance the money lasts at or above the target.
@@ -77,21 +77,30 @@ come from the change, not luck.
   Everyone moves by the same number of years (it can also come out *later* than
   planned).
 - **Best CPP and OAS start ages:** tries every legal pair for each person and
-  keeps the pair that leaves the most after-tax money at `end_age` in the average
-  future. Each person is searched with the others held fixed, and the search
-  repeats until nobody's ages move; a process pool keeps it to about 10 s. The page
-  shows the cost of every other start age, because the choice is often nearly a
-  tie. It assumes everyone lives to `end_age`, which favours starting late.
+  keeps the pair that leaves the most after-tax money on average over 300 drawn
+  lifespans (at a steady median return), so starting late pays only in the futures
+  where you live to collect it. Each person is searched with the others held fixed,
+  and the search repeats until nobody's ages move; a process pool keeps it to about
+  20 s. The page shows the cost of every other start age, because the choice is
+  often nearly a tie.
+
+- **How much to draw from RRSPs:** tries every yearly target from $0 to $100k per
+  person (each of you tops taxable income up to it with RRSP money, so most is drawn
+  before CPP, OAS and the RRIF minimums start), next to your current setting. Each
+  target shows the expected legacy and lifetime tax over 300 drawn lifespans and the
+  chance the money lasts; pick the goal (most legacy, least lifetime tax, safest)
+  and the best target is highlighted. **Use this** switches the plan to that
+  steady-income target. About 15 s.
 
 In the GUI, **Use this** copies an answer into the plan you're editing; **Save**
 keeps it. Library: `optimize.affordability(plan, target=0.9)` and
-`optimize.best_benefit_ages(plan)`.
+`optimize.best_benefit_ages(plan)`, `optimize.rrsp_drawdown(plan).best("legacy")`.
 
 ## plan.json
 
 | Section | Holds |
 |---|---|
-| `people[]` (1–2) | `age`, `retire_age`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working; taxes non-registered payouts then), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
+| `people[]` (1–2) | `age`, `retire_age`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
 | `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), bad-market rule (`bad_market_cut` when investments fall below `bad_market_trigger` × retirement-day value) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, `selling_cost`, `moving_cost`, `property_tax`, `insurance` |
 | `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed` |
@@ -140,8 +149,13 @@ contributed before the year the child turns 15).
 
 ## The report
 
-- **Chance the money lasts:** the share of futures with no short year up to `end_age`.
-- **Legacy:** the after-tax estate at `end_age`, home included. Registered money and
+- **Chance the money lasts as long as either of you lives:** the share of futures
+  with no short year while anyone is alive. Each future draws when each person dies
+  (see Lifespans below); `end_age` is only the "plan to" age of the average and
+  bad-luck futures and the charts.
+- **Lifespans:** each person's median age at death, the chance one of you reaches 95,
+  and the median years a survivor lives alone.
+- **Legacy:** the after-tax estate at `end_age` in the average future, home included. Registered money and
   unrealized gains are taxed at the top rate at the second death.
 - **Short years / investments at retirement:** shown for the average future and
   the bad-luck future.
@@ -153,6 +167,14 @@ contributed before the year the child turns 15).
   Bad-luck button shows short years in red.
 - **Money left by age**, a **year-by-year table**, and **every rule** with its
   official source.
+- **Child benefit:** the Canada Child Benefit for the children in `education.kids`
+  under 18, on last year's net family income, as its own income bar. Set
+  `education.childcare` (yearly child care already in your spending) to get the
+  child care deduction, claimed by the lower earner while a child is under 16.
+- **Tax refund check:** the refund the model expects from your RRSP contributions
+  beside the "TAX REFUND" deposits in your bank CSVs (`--bank`, default
+  `retirement/bank/`, private). A gap points to a deduction or credit the plan
+  doesn't know about. It never changes the projection.
 
 ## Library
 
@@ -170,7 +192,8 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 
 ## Known simplifications
 
-- Both spouses live to `end_age` (no survivor benefits).
+- Lifespans are independent of each other and of health; the year of death counts
+  as a full year.
 - No GIS, no QPP, and no provinces other than Alberta.
 - Non-registered payouts are a fixed share of the balance. Foreign withholding tax
   is ignored (the foreign tax credit roughly offsets it), and selling to pay the
@@ -179,29 +202,40 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 - CPP/OAS count as a full year in the start year.
 - Household events (spending stages, downsizing) key on people[0]'s age.
 
+## Lifespans and survivor years
+
+- **When each person dies** is drawn per future from Statistics Canada's Alberta
+  life table (2021–2023, by sex) with death rates falling at the CPP actuarial
+  report's long-term rates (1.0% a year under 90, 0.6% at 90–94, 0.2% at 95+). Set
+  `people[].sex` (`"female"` / `"male"`); left out, the two tables are averaged.
+- **After the first death** the plan carries on for the survivor: every account
+  rolls over untaxed, the deceased's CPP and OAS stop, the survivor gets the CPP
+  survivor's pension (60% from 65, a flat rate plus 37.5% before, capped with their
+  own pension) and the C$2,500 death benefit, files alone with no pension
+  splitting, and spends `spending.survivor_share` (default 70%) of the couple's
+  budget; care costs stay whole.
+- **The average future** loses the person with the earlier median death at that
+  age, and the survivor lives to `end_age`, so the charts and the year-by-year
+  table (a † marks the deceased) show the survivor years.
+- **Simplified:** the two lifespans are independent, the year of death is a full
+  year, and the CPP survivor's pension uses the deceased's CPP at 65.
+
 ## Future improvements
 
-Considered on 2026-09-30, after the planning tools; not built yet, roughly in
-order of value:
+Re-planned on 2026-10-03, in build order (the owner's choice):
 
-1. **Drawing the RRSP down early.** Between retirement and 65, draw the RRSP in
-   amounts that stay in a low tax bracket, before CPP, OAS and RRIF minimums stack
-   up. It could beat `rrsp_first` / `steady_income` on lifetime tax and the OAS
-   clawback.
-2. **Survivor years.** The first death ends pension splitting and one OAS, and the
-   CPP survivor benefit is capped. This is usually the largest tax jump in a
-   couple's plan. Today both live to `end_age`.
-3. **Lifespan as a range.** Draw ages at death from Canadian life tables instead of
-   a fixed `end_age`. That makes "chance the money lasts" literal, and the CPP/OAS
-   optimizer could then weigh longevity instead of assuming it.
-4. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
-   bad-market cut.
-5. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
-   50, downsize at 60", each with its gauge and legacy.
-6. **Historical replay.** Run the plan through actual Canadian/US return
+1. **Clean-up:** CPP survivor reductions under 45, rejecting ages of 111+, leftover
+   RESP money to the living parent, the bad-market cut following deaths, one-person
+   lifespan wording, median-age rounding.
+2. **One-time money events.** One-off amounts in or out (an inheritance, a
+   renovation), repeating ones (a car every 10 years) and temporary income
+   (part-time work, taxed like salary).
+3. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
+   bad-market cut, with the report showing how much spending varies.
+4. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
+   50, downsize at 60", each with its gauge and legacy, on the same futures.
+5. **Historical replay.** Run the plan through actual Canadian/US return
    sequences (1970→) beside the random futures.
-7. **One-time money events.** Inheritances, a car every 10 years, part-time work
-   income. (Education is modelled; see above.)
 
 Treat results as estimates, not guarantees. Check the real CPP statement, and see
 a fee-only planner before big decisions.

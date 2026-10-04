@@ -172,3 +172,71 @@ def test_salary_must_not_be_negative():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "people[0].salary"
+
+
+def test_sex_and_survivor_share_default_and_round_trip():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    plan = inputs.parse(d)
+    assert [p.sex for p in plan.people] == ["female", "male"]
+    assert plan.spending.survivor_share == 0.70
+    for p in d["people"]:
+        p.pop("sex")
+    d["spending"].pop("survivor_share")
+    plan = inputs.parse(d)
+    assert [p.sex for p in plan.people] == [None, None] and plan.spending.survivor_share == 0.70
+
+
+def test_a_misspelled_sex_names_the_field():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][1]["sex"] = "M"
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[1].sex"
+
+
+@pytest.mark.parametrize("share", [0.39, 1.01])
+def test_survivor_share_is_bounded(share):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["spending"]["survivor_share"] = share
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "spending.survivor_share"
+    assert inputs.limits("AB")["survivor_share"] == (0.4, 1.0)
+
+
+def test_pension_match_defaults_to_zero_and_must_not_be_negative():
+    assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).people[0].pension_match == 0.0
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["pension_match"] = -0.5
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].pension_match"
+
+
+def test_espp_parses_and_validates():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["espp"] = {"rate": 0.25, "cap": 25_000, "discount": 0.15}
+    e = inputs.parse(d).people[0].espp
+    assert (e.rate, e.cap, e.discount) == (0.25, 25_000, 0.15)
+    assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).people[0].espp is None
+    for bad in ({"rate": 1.5, "cap": 1, "discount": 0.1}, {"rate": 0.1, "cap": -1, "discount": 0.1},
+                {"rate": 0.1, "cap": 1, "discount": 1.0}):
+        d["people"][0]["espp"] = bad
+        with pytest.raises(inputs.PlanError) as err:
+            inputs.parse(d)
+        assert err.value.field.startswith("people[0].espp")
+
+
+def test_rrsp_room_and_childcare_are_optional_and_not_negative():
+    plan = inputs.parse(copy.deepcopy(inputs.TEMPLATE))
+    assert plan.people[0].rrsp_room is None
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["rrsp_room"] = -1
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].rrsp_room"
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["education"] = {"kids": [{"name": "K", "age": 10}], "childcare": -5}
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "education.childcare"

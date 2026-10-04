@@ -44,6 +44,17 @@ _OAS_START = "https://www.canada.ca/en/services/benefits/publicpensions/old-age-
 _CPP_AMOUNT = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-benefit/amount.html"
 _CPP_START = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/when-start.html"
 _CPP_HOW_MUCH = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/amount.html"
+_CPP_SURVIVOR = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-survivor-pension.html"
+_CPP_MAXIMUMS = ("https://www.canada.ca/en/employment-social-development/programs/pensions/pension/"
+                 "statistics/2026-quarterly-july-september.html")
+_CPP_DEATH = "https://www.canada.ca/en/services/benefits/publicpensions/cpp/cpp-death-benefit.html"
+_PAYROLL = "https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/payroll/"
+_CPP_PREMIUMS = (_PAYROLL + "payroll-deductions-contributions/canada-pension-plan-cpp/"
+                 "cpp-contribution-rates-maximums-exemptions.html")
+_CPP2_PREMIUMS = (_PAYROLL + "calculating-deductions/making-deductions/"
+                  "second-additional-cpp-contribution-rates-maximums.html")
+_EI_PREMIUMS = (_PAYROLL + "payroll-deductions-contributions/employment-insurance-ei/"
+                "ei-premium-rates-maximums.html")
 _RRIF_FACTORS = ("https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/"
                  "completing-slips-summaries/t4rsp-t4rif-information-returns/payments/"
                  "chart-prescribed-factors.html")
@@ -77,6 +88,8 @@ FEDERAL = {
     # 65+; reduced by 15% of net income above the threshold (zero at $107,819).
     "age_amount": Rule({"amount": 9_208, "threshold": 46_432, "rate": 0.15}, 2026, _TD1),
     "pension_amount": Rule(2_000, 2026, _PENSION_AMOUNT),
+    # Canada employment amount (T4127 table 8.2): a credit on employment income.
+    "employment_amount": Rule(1_501, 2026, _T4127),
 }
 
 PROVINCIAL = {
@@ -131,6 +144,41 @@ STUDENT_GRANT = Rule({
 
 # Up to 50% of eligible pension income (RRIF/LIF payments when the transferor
 # is 65+, NOT plain RRSP withdrawals) can be allocated to a spouse.
+_CCB = ("https://www.canada.ca/en/revenue-agency/services/child-family-benefits/"
+        "canada-child-benefit-overview/canada-child-benefit-we-calculate-your-ccb.html")
+_RRSP_LIMITS = ("https://www.canada.ca/en/revenue-agency/services/tax/registered-plans-administrators/"
+                "pspa/mp-rrsp-dpsp-tfsa-limits-ympe.html")
+_CHILDCARE = ("https://www.canada.ca/en/revenue-agency/services/tax/technical-information/income-tax/"
+              "income-tax-folios-index/series-1-individuals/folio-3-family-unit-issues/"
+              "income-tax-folio-s1-f3-c1-child-care-expense-deduction.html")
+
+# Canada Child Benefit, July 2026 - June 2027 (on 2025 family net income). Reduction
+# per number of children (4 = 4 or more): (rate in the first band, the amount at
+# the second threshold, rate above it).
+CCB = Rule({"under_6": 8_157, "6_to_17": 6_883, "threshold_1": 38_237, "threshold_2": 82_847,
+            "reduction": {1: (0.07, 3_123, 0.032), 2: (0.135, 6_022, 0.057),
+                          3: (0.19, 8_476, 0.08), 4: (0.23, 10_260, 0.095)}}, 2026, _CCB)
+
+# RRSP room: 18% of last year's earned income up to the dollar limit, less the
+# pension adjustment.
+RRSP_LIMIT = Rule({"rate": 0.18, "dollar_limit": 33_810}, 2026, _RRSP_LIMITS)
+
+# Child care expense deduction (line 21400): per child, claimed by the lower-income
+# spouse, capped at two-thirds of their earned income. Unchanged since 2015 (the folio
+# gives them for "2015 and subsequent tax years"), so they apply to 2026.
+CHILDCARE = Rule({"under_7": 8_000, "7_to_15": 5_000, "earned_share": 2 / 3}, 2026, _CHILDCARE)
+
+# Employee payroll premiums on a salary (outside Quebec). Not income tax: CPP
+# premiums buy the CPP pension.
+PAYROLL = {
+    # Of the 5.95%, the base 4.95% earns a credit at the lowest rate and the first
+    # additional 1.00% is deducted from income (T4127 K2 / F5); CPP2 is all deducted.
+    "cpp": Rule({"rate": 0.0595, "base_rate": 0.0495, "ympe": 74_600, "exemption": 3_500},
+                2026, _CPP_PREMIUMS),
+    "cpp2": Rule({"rate": 0.04, "yampe": 85_000}, 2026, _CPP2_PREMIUMS),
+    "ei": Rule({"rate": 0.0163, "max_insurable": 68_900}, 2026, _EI_PREMIUMS),
+}
+
 PENSION_SPLIT = Rule({"max_share": 0.5, "min_age": 65}, 2026, _SPLIT)
 
 OAS = {
@@ -148,6 +196,14 @@ CPP = {
     # General drop-out: up to 17% of the contributory period (max 8 years);
     # the period runs from 18 to a 65 start = 47 years.
     "dropout": Rule({"share": 0.17, "max_years": 8, "contributory_years": 47}, 2026, _CPP_HOW_MUCH),
+    # Survivor's pension: 60% of the contributor's pension at 65+, or a flat rate plus
+    # 37.5% under 65; with the survivor's own retirement pension the two together are
+    # capped. Shares from the survivor page, 2026 amounts from the ESDC maximums table.
+    "survivor": Rule({"share_65": 0.60, "share_under_65": 0.375, "flat_monthly": 238.17,
+                      "combined_max_monthly": 1_531.56}, 2026, _CPP_MAXIMUMS),
+    "survivor_rules": Rule("60% at 65+; flat rate + 37.5% under 65; combined maximum with "
+                           "your own retirement pension", 2026, _CPP_SURVIVOR),
+    "death_benefit": Rule(2_500.0, 2026, _CPP_DEATH),
 }
 
 RRIF = {
@@ -215,7 +271,7 @@ def all_rules() -> list[tuple[str, Rule]]:
             for key, value in obj.items():
                 walk(f"{prefix}.{key}", value)
 
-    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PENSION_SPLIT",
+    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "CCB", "RRSP_LIMIT", "CHILDCARE", "PENSION_SPLIT",
                  "OAS", "CPP", "RRIF", "TFSA", "LIF"):
         walk(name.lower(), globals()[name])
     return found

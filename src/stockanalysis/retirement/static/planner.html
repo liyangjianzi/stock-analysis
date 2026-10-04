@@ -63,7 +63,7 @@ table.ages td.best{font-weight:700;color:var(--good)}
 .answer b{font-size:1.05rem}
 .x{border:none;background:none;color:var(--muted);font-size:1.1rem;padding:2px 6px}
 aside{position:sticky;top:70px;align-self:start}
-.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0} .tiles .tile:nth-child(5){grid-column:1/-1}
 .tile{background:var(--surface);border:1px solid rgba(11,11,11,.10);border-radius:10px;padding:10px 12px}
 .tile .label{color:var(--ink2);font-size:.8rem}.tile .value{font-size:1.35rem;font-weight:600;font-variant-numeric:tabular-nums}
 .tile .sub{font-size:.78rem;color:var(--muted)}
@@ -110,7 +110,7 @@ let eduDefaults = {}, kidDefaults = {};   // from the server: inputs.defaults()
 let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
 let gen = 0, inflight = false, timer = null;
 // Optimizer results, with the draft they were computed for (shown as out of date after an edit).
-let target = 0.9, afford = null, benefits = null;
+let target = 0.9, afford = null, benefits = null, drawdown = null, goal = "legacy";
 
 // ---- helpers --------------------------------------------------------------
 const $ = id => document.getElementById(id);
@@ -166,6 +166,12 @@ function number(path, label, o = {}) {
 }
 const contribGrid = prefix => `<div class="grid2">${ACCOUNTS.map(([k, l]) =>
   number(`${prefix}.${k}`, l, {min: 0, step: 500, optional: true, placeholder: "0"})).join("")}</div>`;
+function choice(path, label, options) {
+  const v = get(draft, path) ?? "";
+  return `<div class="field" data-field="${path}"><label>${esc(label)}</label>
+    <select data-path="${path}">${options.map(([k, l]) =>
+      `<option value="${k}" ${k === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`;
+}
 function text(path, label) {
   return `<div class="field" data-field="${path}"><label>${esc(label)}</label>
     <input type="text" data-path="${path}" data-structural value="${esc(get(draft, path) ?? "")}"></div>`;
@@ -179,6 +185,7 @@ function peoplePanel() {
     return `<div class="card"><h3>${esc(p.name)}</h3>
       <div class="grid2">
         ${number(`${P}.age`, "Age today", {min: 18, max: end - 1, step: 1, structural: true})}
+        ${choice(`${P}.sex`, "Sex (for life expectancy)", [["", "Not set (average)"], ["female", "Female"], ["male", "Male"]])}
         ${slider(`${P}.retire_age`, "Retire at", {min: p.age, max: end - 1, structural: true})}
         ${slider(`${P}.cpp_start_age`, "Start CPP at", {min: limits.cpp_start_age[0], max: limits.cpp_start_age[1],
                  help: "Later pays more each year, for life."})}
@@ -214,6 +221,7 @@ function spendingPanel() {
       ${slider("spending.no_go_age", "Slow down more at", {min: 60, max: 100, structural: true})}
       ${slider("spending.no_go_share", "…spending this much", {min: 0.4, max: 1, step: 0.01, unit: "%"})}
       ${number("spending.care", "Care costs in the last years (C$/yr)", {min: 0, step: 1000})}
+      ${draft.people.length === 2 ? slider("spending.survivor_share", "A survivor alone spends", {min: limits.survivor_share[0], max: limits.survivor_share[1], step: 0.01, unit: "%"}) : ""}
     </div></div>
     <div class="card"><h3>When markets fall</h3><div class="grid2">
       ${slider("spending.bad_market_cut", "Cut spending by", {min: 0, max: 0.3, step: 0.01, unit: "%"})}
@@ -275,6 +283,8 @@ function educationPanel() {
         ${number("education.contributed", "Contributed so far (C$)", {min: 0, step: 1000, nullable: true, placeholder: "estimated from the grants"})}
         ${number("education.grants", "Grants received so far (C$)", {min: 0, step: 100, nullable: true, placeholder: "estimated"})}
       </div>
+      ${number("education.childcare", "Child care paid a year (C$, already in spending)", {min: 0, step: 500, optional: true, placeholder: "0",
+               help: "Day camps, after-school care, babysitting for children under 16: deducted by the lower earner"})}
       ${check("education.student_grant", `Apply for the Canada Student Grant (up to ${money(limits.student_grant_max)} a student-year when last year's family income is low)`, eduDefaults.student_grant)}
       <p class="note">Family income is your taxable income: RRSP/RRIF withdrawals count, TFSA withdrawals don't.
         Drawing "proportionally" (Investing tab) can keep it low enough during school years.</p>
@@ -326,6 +336,17 @@ function advancedPanel() {
       ${number(`${P}.years_in_canada_at_65`, "Years in Canada by 65", {min: 0, max: 40, step: 1})}
       ${number(`${P}.lif_start_age`, "LIF starts at (optional)", {min: limits.lif_min_age, max: limits.convert_by_age, step: 1,
                nullable: true, placeholder: `max(${limits.lif_min_age}, retire age)`})}
+      ${number(`${P}.rrsp_room`, "RRSP deduction limit (C$, from your Notice of Assessment)", {min: 0, step: 500, nullable: true,
+               placeholder: "not checked", help: "Contributions above your room go to the TFSA instead; room grows 18% of salary less the pension adjustment"})}
+      ${number(`${P}.pension_match`, "Employer pension match (× your contribution)", {min: 0, step: 0.05, optional: true, placeholder: "0",
+               help: "e.g. 1.75 if your employer adds $1.75 for every $1 you put in; only your part comes out of salary"})}
+      ${p.espp ? `
+        ${number(`${P}.espp.rate`, "ESPP: share of salary (%)", {min: 0, max: 1, step: 0.01, unit: "%"})}
+        ${number(`${P}.espp.cap`, "ESPP: most per year (C$)", {min: 0, step: 500})}
+        ${number(`${P}.espp.discount`, "ESPP: discount (%)", {min: 0, max: 0.5, step: 0.01, unit: "%",
+                 help: "The discount is taxed as salary; the shares go to the non-registered account"})}
+        <div class="field"><button data-remove-espp="${i}">Remove ESPP</button></div>`
+        : `<div class="field"><button data-add-espp="${i}">+ Add an ESPP</button></div>`}
       ${number(`${P}.unlock_share`, "LIF one-time unlock (%)", {min: 0, max: limits.unlock_share, step: 0.01, unit: "%"})}
       ${number(`${P}.tfsa_room`, "Unused TFSA room from past years (C$)", {min: 0, step: 500})}
       </div>
@@ -379,12 +400,30 @@ function optimizePanel() {
     b = r.people.map(c => `<h4>${esc(c.name)}: CPP at ${c.best[0]}, OAS at ${c.best[1]}
           <span class="note">(now ${c.current[0]} / ${c.current[1]})</span></h4>
         <table class="ages">${row("CPP start", c.by_cpp, c.best[0])}${row("OAS start", c.by_oas, c.best[1])}</table>`).join("") +
-      `<div class="answer"><span>Legacy in the average future:</span><b>${short(r.best_legacy)}</b>
+      `<div class="answer"><span>Expected legacy (over lifespans):</span><b>${short(r.best_legacy)}</b>
          <span class="note">${gain > 0 ? "+" + short(gain) + " vs today's ages" : "today's ages are already best"}
          · chance the money lasts ${pct(r.success)} → ${pct(r.best_success)}</span>
          ${gain > 0 ? `<button data-apply="benefits">Use these ages</button>` : ""}</div>
       ${gain < 0.005 * Math.abs(r.legacy) ? `<p class="note">The difference is under 0.5% of the legacy, a near tie:
          choose on other grounds, such as health or wanting the income sooner.</p>` : ""}${stale(benefits)}`;
+  }
+  let dd = "";
+  if (drawdown && drawdown.error) dd = `<p class="note" style="color:var(--bad)">${esc(drawdown.error)}</p>`;
+  else if (drawdown) {
+    const r = drawdown.result, pick = r.best[goal], now = r.current;
+    const sign = (x, f) => (x >= 0 ? "+" : "−") + f(Math.abs(x));
+    const riskier = now.success - pick.success > 0.01;
+    dd = `<div class="answer"><span>Draw up to</span><b>${money(pick.target)} each</b>
+        <span class="note">legacy ${short(pick.legacy)} (${sign(pick.legacy - now.legacy, short)} vs now) ·
+          lifetime tax ${short(pick.lifetime_tax)} (${sign(pick.lifetime_tax - now.lifetime_tax, short)}) ·
+          ${pct(pick.success, 1)} chance (now ${pct(now.success, 1)})</span>
+        <button data-apply="drawdown">Use this</button></div>
+      ${riskier ? `<p class="note" style="color:var(--bad)">This lowers the chance the money lasts by more than a point.</p>` : ""}
+      <table class="ages"><tr><td>Each draws up to</td><td>Legacy</td><td>Lifetime tax</td><td>Chance</td><td>Tax, first retired year</td></tr>
+      ${[now, ...r.rows].map(x => `<tr class="${x === pick || (x.target != null && x.target === pick.target) ? "best" : ""}">
+          <td>${x.target == null ? esc(x.label) : money(x.target)}</td><td>${short(x.legacy)}</td>
+          <td>${short(x.lifetime_tax)}</td><td>${pct(x.success, 1)}</td><td>${short(x.first_retired_tax)}</td></tr>`).join("")}
+      </table>${stale(drawdown)}`;
   }
   return `<div class="card"><h3>What can we afford?</h3>
       <div class="field"><label>Chance the money lasts to aim for <b id="target-out">${pct(target)}</b></label>
@@ -398,8 +437,18 @@ function optimizePanel() {
       <button id="opt-benefits">Find the best start ages</button>
       <div id="benefits-out">${b}</div>
       <p class="note">Tries every CPP (${limits.cpp_start_age.join("–")}) and OAS (${limits.oas_start_age.join("–")}) start age for each person and keeps the ones that
-        leave the most money after tax at ${draft.end_age} in the average future (about 10 seconds).
-        It assumes everyone lives to ${draft.end_age}; starting later pays off only if you do.</p>
+        leave the most money after tax on average over 300 drawn lifespans (about 20 seconds), so
+        starting later counts only in the futures where you live to collect it.</p>
+    </div>
+    <div class="card"><h3>How much to draw from RRSPs</h3>
+      <div class="field">${[["legacy", "Most legacy"], ["tax", "Least lifetime tax"], ["success", "Safest"]].map(([k, l]) =>
+        `<label class="radio"><input type="radio" name="drawdown-goal" value="${k}" ${goal === k ? "checked" : ""}> ${l}</label>`).join("")}</div>
+      <button id="opt-drawdown">Find the best yearly RRSP draw</button>
+      <div id="drawdown-out">${dd}</div>
+      <p class="note">Tries each yearly target from $0 to $100k per person: each of you tops taxable income up to it
+        with RRSP money, which draws most before CPP, OAS and the RRIF minimums start. Legacy and lifetime tax are
+        averages over 300 drawn lifespans at a steady return; the chance is over the same futures as above
+        (about 15 seconds). Changing the goal re-picks instantly.</p>
     </div>`;
 }
 const PANELS = {people: peoplePanel, spending: spendingPanel, education: educationPanel, home: homePanel,
@@ -412,6 +461,7 @@ function render() {
 
 // ---- events -------------------------------------------------------------------
 function readInput(el) {
+  if (el.tagName === "SELECT") return el.value === "" ? null : el.value;
   if (el.type === "text" || el.type === "radio") return el.value;
   if (el.type === "checkbox") return el.checked;
   if (el.value === "") return el.hasAttribute("data-nullable") ? null : el.hasAttribute("data-optional") ? undefined : 0;
@@ -435,6 +485,7 @@ document.addEventListener("change", e => {
   const el = e.target;
   if (el.hasAttribute("data-structural")) render();     // other controls' limits depend on it
   if (el.name === "strategy") { draft.withdrawal.strategy = el.value; edited(); }
+  if (el.name === "drawdown-goal") { goal = el.value; render(); }
   if (el.id === "downsize") {
     const age0 = draft.people[0].age;
     draft.home.downsize_age = el.checked ? Math.max(age0, Math.min(65, draft.end_age - 1)) : null;
@@ -461,7 +512,10 @@ document.addEventListener("click", e => {
   }
   if (el.id === "opt-afford") runOptimizer(el, "affordability", r => afford = r, {target});
   if (el.id === "opt-benefits") runOptimizer(el, "benefits", r => benefits = r, {});
+  if (el.id === "opt-drawdown") runOptimizer(el, "drawdown", r => drawdown = r, {});
   if (el.dataset.apply) applyOptimizer(el.dataset.apply);
+  if (el.dataset.addEspp != null) { draft.people[Number(el.dataset.addEspp)].espp = {rate: 0.1, cap: 25000, discount: 0.15}; edited(); }
+  if (el.dataset.removeEspp != null) { draft.people[Number(el.dataset.removeEspp)].espp = null; edited(); }
   if (el.id === "add-education") { draft.education = {kids: [newKid(1)]}; edited(); }
   if (el.id === "add-kid") { draft.education.kids.push(newKid(draft.education.kids.length + 1)); edited(); }
   if (el.dataset.removeKid != null) { draft.education.kids.splice(Number(el.dataset.removeKid), 1); edited(); }
@@ -487,6 +541,10 @@ async function runOptimizer(button, kind, keep, extra) {
 function applyOptimizer(kind) {
   if (kind === "spending") draft.spending.base = afford.result.max_spending;
   if (kind === "retire") draft.people.forEach(p => { p.retire_age += afford.result.retire_shift; });
+  if (kind === "drawdown") {
+    draft.withdrawal.strategy = "steady_income";
+    draft.withdrawal.steady_income_target = drawdown.result.best[goal].target;
+  }
   if (kind === "benefits") benefits.result.people.forEach((c, i) => {
     draft.people[i].cpp_start_age = c.best[0];
     draft.people[i].oas_start_age = c.best[1];
@@ -556,6 +614,8 @@ function showResults(r) {
     ["Investments at retirement", short(r.investments_at_retirement) + delta(r.investments_at_retirement, s.investments_at_retirement, short), "Average future"],
     ["Bad-luck future", shortTile, r.short_years_bad + " short year" + (r.short_years_bad === 1 ? "" : "s") + " (1-in-10 bad run)"],
     ["Lifetime taxes", short(r.lifetime_tax) + delta(r.lifetime_tax, s.lifetime_tax, short, true), "Income tax plus tax at death"],
+    ...(r.lifespans ? [["Median age at death", r.lifespans.people.map(x => `${esc(x.name)} ${x.median_age_at_death}`).join(" · "),
+        `Chance someone reaches 95: ${pct(r.lifespans.reach_95)}`]] : []),
   ];
   $("tiles").innerHTML = tiles.map(([a, b, c]) => `<div class="tile"><div class="label">${esc(a)}</div>
     <div class="value">${b}</div><div class="sub">${esc(c)}</div></div>`).join("");

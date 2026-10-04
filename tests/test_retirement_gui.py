@@ -168,3 +168,37 @@ def test_benefits_endpoint(server, monkeypatch):
     status, r = _req(server, "POST", "/api/optimize/benefits", {"plan": inputs.TEMPLATE})
     assert status == 200 and r["plan"] is None and r["best_legacy"] >= r["legacy"]
     assert [c["name"] for c in r["people"]] == ["Partner A", "Partner B"]
+
+
+def test_page_edits_sex_and_survivor_share(server):
+    status, page = _req(server, "GET", "/")
+    page = page.decode()
+    assert status == 200 and "${P}.sex" in page and "spending.survivor_share" in page
+    assert "It assumes everyone lives to" not in page
+    status, st = _req(server, "GET", "/api/plan")
+    assert st["limits"]["survivor_share"] == [0.4, 1.0]
+    assert "lifespans" in st["saved"]
+
+
+def test_page_edits_the_pension_match(server):
+    status, page = _req(server, "GET", "/")
+    assert "${P}.pension_match" in page.decode()
+
+
+def test_page_edits_the_espp(server):
+    status, page = _req(server, "GET", "/")
+    page = page.decode()
+    assert "${P}.espp.rate" in page and "data-add-espp" in page and "data-remove-espp" in page
+
+
+def test_drawdown_endpoint_returns_the_table(server):
+    status, r = _req(server, "POST", "/api/optimize/drawdown", {"plan": inputs.TEMPLATE})
+    assert status == 200 and len(r["rows"]) == len(optimize.DRAWDOWN_TARGETS)
+    assert set(r["best"]) == {"legacy", "tax", "success"} and r["current"]["target"] is None
+    page = _req(server, "GET", "/")[1].decode()
+    assert "opt-drawdown" in page and 'name="drawdown-goal"' in page
+
+
+def test_page_edits_rrsp_room_and_childcare(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert "${P}.rrsp_room" in page and "education.childcare" in page

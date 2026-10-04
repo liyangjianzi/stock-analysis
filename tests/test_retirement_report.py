@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from stockanalysis.retirement import engine, inputs, report, rules, scenarios
@@ -113,3 +114,99 @@ def test_education_section_only_when_the_plan_has_children():
         html = report.build_report(result, baseline, ranked, generated_at="now")
         assert (f'id="{report.EDUCATION_ID}"' in html) is present
         assert ("Canada Student Grants" in html) is present
+
+
+def test_compact_cells():
+    assert report._compact(0) == "–" and report._compact(0.4) == "–"
+    assert report._compact(850) == "850" and report._compact(85_240) == "85.2k"
+    assert report._compact(1_234_567) == "1.23M" and report._compact(-2_500) == "-2.5k"
+
+
+def test_year_table_hides_all_zero_columns_and_keeps_exact_values(built):
+    _, result, _, _ = built
+    avg = result.average
+    table = report._year_table(avg)
+    assert table.count("<tbody><tr") == 1 and table.count("</tr>") == len(avg.years) + 2
+    assert ("⚠ Shortfall" in table) == bool((avg.income["shortfall"][:, 0].round() != 0).any())
+    assert f"title='{report._money(avg.investments[0, 0])}'" in table
+    for always in ("Spending", "Tax", "Total invested"):
+        assert f">{always}</th>" in table
+
+
+def test_headline_says_as_long_as_either_of_you_lives(built):
+    plan, result, *_ = built
+    html = _html(built)
+    assert report.lasts_label(plan) in html
+    assert report.lasts_label(plan) == "Chance the money lasts as long as either of you lives"
+    single = replace(plan, people=plan.people[:1])
+    assert report.lasts_label(single) == "Chance the money lasts as long as you live"
+
+
+def test_lifespans_tile_and_summary(built):
+    plan, result, *_ = built
+    life = report.lifespans(result)
+    assert [x["name"] for x in life["people"]] == [p.name for p in plan.people]
+    for x, p in zip(life["people"], plan.people):
+        assert p.age <= x["median_age_at_death"] < 111
+    assert 0 <= life["reach_95"] <= 1 and life["alone_years"] >= 0
+    assert "Median age at death" in _html(built)
+    assert report.headline(result)["lifespans"] == life
+
+
+def test_year_table_marks_the_dead_with_a_dagger(built):
+    _, result, *_ = built
+    avg = result.average
+    table = report._year_table(avg)
+    if (~avg.alive[:, :, 0]).any():
+        assert "†" in table
+    else:
+        assert "†" not in table
+
+
+def test_money_left_band_stops_at_end_age_and_ignores_ended_futures(built):
+    plan, result, *_ = built
+    fig = report.money_left_chart(result.simulated, plan)
+    xs = fig.data[0].x
+    # Ends where the average-future charts do: when the youngest reaches end_age
+    # (people[0]'s age on the x axis), not when people[0] does.
+    assert xs[-1] == plan.people[0].age + engine.steps(plan)
+    assert not any(np.isnan(fig.data[2].y[:3]))
+
+
+def test_assumptions_list_lifespan_sources(built):
+    html = _html(built)
+    assert "pid=1310011401" in html and "actuarial-report-32nd" in html
+    assert "Survivor spending" in html
+
+
+def test_report_explains_take_home_pay_and_premiums(built):
+    html = _html(built)
+    assert "Working years" in html and "take-home pay" in html
+    assert "CPP/EI premiums while working" in report._year_table(built[1].average)
+
+
+def test_report_says_to_set_salaries_when_one_is_missing(built):
+    plan, result, baseline, ranked = built
+    no_salary = replace(plan, people=tuple(replace(p, salary=None) for p in plan.people))
+    html = report._assumptions(no_salary, result, None)
+    assert "Set each worker" in html and "salary for an honest view" in html
+
+
+def test_report_shows_the_refund_check_when_given(built):
+    html = _html(built, refunds=(2_000.0, [("2026-03-23", 2_000.0)]))
+    assert "Tax refund check" in html and "2026-03-23" in html
+    assert "Tax refund check" not in _html(built)
+
+
+def test_report_says_whether_rrsp_room_is_checked(built):
+    plan, result, *_ = built
+    unset = report._assumptions(plan, result, None)
+    assert "RRSP room" in unset and "Notice of Assessment" in unset
+    room = replace(plan, people=tuple(replace(p, rrsp_room=10_000.0) for p in plan.people))
+    assert "tracked from" in report._assumptions(room, result, None)
+
+
+def test_child_benefit_shows_in_the_year_table_when_paid(built):
+    _, result, *_ = built
+    avg = result.average
+    assert ("Child benefit" in report._year_table(avg)) == bool((avg.income["ccb"][:, 0] > 0.5).any())

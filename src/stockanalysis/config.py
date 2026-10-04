@@ -31,6 +31,7 @@ DEFAULT_THESES_DIR = Path(__file__).resolve().parents[2] / "data" / "theses"
 # Personal retirement plan and its reports: gitignored (the repo is public).
 DEFAULT_RETIREMENT_INPUTS = Path(__file__).resolve().parents[2] / "retirement" / "plan.json"
 DEFAULT_RETIREMENT_OUT = Path(__file__).resolve().parents[2] / "retirement" / "output"
+DEFAULT_RETIREMENT_BANK = Path(__file__).resolve().parents[2] / "retirement" / "bank"
 
 
 @functools.lru_cache(maxsize=None)

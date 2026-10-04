@@ -1,6 +1,8 @@
 """The rules table: every statutory value cited, and the lookup helpers."""
 from __future__ import annotations
 
+import pytest
+
 from stockanalysis.retirement import rules
 
 
@@ -52,3 +54,28 @@ def test_top_marginal_rate_alberta():
 def test_is_stale():
     assert not rules.is_stale(rules.TAX_YEAR)
     assert rules.is_stale(rules.TAX_YEAR + 1)
+
+
+def test_cpp_survivor_rules_are_consistent_with_the_2026_maximums():
+    s = rules.CPP["survivor"].value
+    max65 = rules.CPP["max_monthly_at_65"].value
+    assert s["share_65"] * max65 == pytest.approx(904.59, abs=0.01)        # published 65+ maximum
+    assert s["flat_monthly"] + s["share_under_65"] * max65 == pytest.approx(803.54, abs=0.01)
+    assert rules.CPP["death_benefit"].value == 2_500.0
+
+
+def test_payroll_maximums_match_the_published_2026_figures():
+    p = rules.PAYROLL
+    cpp, cpp2, ei = p["cpp"].value, p["cpp2"].value, p["ei"].value
+    assert cpp["rate"] * (cpp["ympe"] - cpp["exemption"]) == pytest.approx(4_230.45, abs=0.01)
+    assert cpp2["rate"] * (cpp2["yampe"] - cpp["ympe"]) == pytest.approx(416.0, abs=0.01)
+    assert ei["rate"] * ei["max_insurable"] == pytest.approx(1_123.07, abs=0.01)
+
+
+def test_ccb_second_band_starts_where_the_first_ends():
+    c = rules.CCB.value
+    span = c["threshold_2"] - c["threshold_1"]
+    for n, (rate1, base2, _) in c["reduction"].items():
+        assert rate1 * span == pytest.approx(base2, abs=1.0), n      # e.g. 7% x 44,610 = 3,123
+    assert rules.RRSP_LIMIT.value["dollar_limit"] == 33_810
+    assert rules.CHILDCARE.value["under_7"] == 8_000 and rules.CHILDCARE.value["7_to_15"] == 5_000

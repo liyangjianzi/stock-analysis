@@ -39,7 +39,8 @@ stock-analysis retire --optimize --target 85
 ```
 
 Prints the highest safe base spending, the earliest safe retirement (everyone
-moved together) and the best CPP/OAS start ages, ranked by the average future's
+moved together), the best yearly RRSP draw for each goal (most legacy, least
+lifetime tax, safest; GUI: "How much to draw from RRSPs") and the best CPP/OAS start ages, ranked by the average future's
 after-tax legacy. It takes about 20 s and writes no report. The GUI's
 **Optimize** tab runs the same tools and adds a table of what every other start
 age costs. When the gain is under 0.5% of the legacy, call it a near tie and say
@@ -88,8 +89,12 @@ Library: `from stockanalysis.retirement import load_inputs, run` then
 
 ## Reading the report (explain it in plain words)
 
-- **Chance the money lasts** — share of futures with no short year to `end_age`.
-- **Legacy** — after-tax estate at `end_age` incl. the home (registered money
+- **Chance the money lasts as long as either of you lives** — share of futures with
+  no short year while anyone is alive; deaths are drawn per future from the Alberta
+  life table (the Lifespans tiles show median ages at death). After the first death
+  the survivor spends `survivor_share` of the budget, gets the CPP survivor's
+  pension, and files alone (no splitting): usually the largest tax jump.
+- **Legacy** — after-tax estate at `end_age` (average future) incl. the home (registered money
   and unrealized gains taxed at the top rate at the second death).
 - **Short years / investments at retirement** — average future, and the
   bad-luck future (the 1-in-10 bad run of returns, replayed alone).
@@ -111,6 +116,10 @@ big decisions.
   page (CRA T4127 + TD1/TD1AB forms, Service Canada OAS/CPP pages, the CRA RRIF
   factor chart, Alberta's Superintendent of Pensions interest-rate tables) —
   **never from memory** — bump `TAX_YEAR`, and run `pytest tests/test_retirement_*.py`.
+  The CPP survivor amounts (`rules.CPP["survivor"]`, `death_benefit`) change every
+  January with the rest of `rules.CPP`. The life table in `mortality.py` changes only
+  when Statistics Canada publishes a new three-year table (13-10-0114-01) or the
+  CPP actuarial report revises its improvement rates.
 - Only **RRIF / LIF payments at 65+** are eligible pension income (pension
   credit + splitting); plain RRSP withdrawals are not — hence `rrif_start_age` 65.
 - The OAS repayment is deducted (line 23500) before net and taxable income.
@@ -118,7 +127,22 @@ big decisions.
   the age on January 1. LIF: no minimum in its first year; max = greater of last
   year's return and the Alberta % × January 1 balance; Alberta allows a one-time
   50% unlock at 50+.
-- Nobody's RRSP / LIF is drawn while they still work (earned income covers them).
+- Nobody's RRSP / LIF is drawn while they still work.
+- With `salary` set for every worker, working years are cash-honest: gross salary
+  is the earned income, income tax + CPP/EI premiums show in Tax, take-home pay
+  covers spending then contributions, and any gap is drawn from savings (any
+  surplus saved). Set `pension_match` so only the employee's share leaves salary.
+  If contributions are set higher than take-home pay allows, the report shows the
+  household drawing savings while still working: point that out.
+- Ask for each person's **RRSP deduction limit** (Notice of Assessment) and set
+  `people[].rrsp_room`; without it, contributions above the room are wrongly counted
+  as deductible. The Canada Child Benefit is modelled for `education.kids` under 18;
+  `education.childcare` adds the child care deduction (lower earner, under 16).
+- An ESPP (`people[].espp`) buys discounted employer shares from salary into the
+  non-registered account; don't also enter it as a `nonreg` contribution.
+- The report's **Tax refund check** compares the model's expected refund with the
+  bank CSVs' refund deposits (`retirement/bank/`, private; `--bank PATH`). A large
+  gap means a missing deduction or credit; it never changes the projection.
 
 ## Known simplifications
 

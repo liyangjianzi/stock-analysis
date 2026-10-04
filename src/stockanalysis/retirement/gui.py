@@ -11,7 +11,8 @@ A stdlib ``http.server`` on 127.0.0.1 serves one self-contained page
 - ``GET  /api/report/status``    idle / running / done (+ url) / error
 - ``POST /api/reload-balances``  re-read the holdings file
 - ``POST /api/optimize/affordability``  highest spending / earliest retirement at a target
-- ``POST /api/optimize/benefits``       best CPP / OAS start ages (~10 s)
+- ``POST /api/optimize/benefits``       best CPP / OAS start ages (~20 s)
+- ``POST /api/optimize/drawdown``       every yearly RRSP-draw target, best per goal (~15 s)
 - ``GET  /reports/<path>``       files under the output root (browsers won't follow
                                  ``file://`` links from an http page)
 
@@ -60,7 +61,8 @@ def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
         "short_years_bad": int(bad.shortfall_years[0]),
         "first_short_age_bad": plan.people[0].age + first if first < len(bad.years) else None,
         "median_return": result.average_return,
-        "gauge": json.loads(report.success_meter(sim.success, previous).to_json()),
+        "gauge": json.loads(report.success_meter(sim.success, previous,
+                                                 title=report.lasts_label(plan)).to_json()),
         "chart": json.loads(report.money_left_chart(sim, plan).to_json()),
         "education": _education_summary(result),
     }
@@ -83,13 +85,14 @@ class PlannerApp:
 
     def __init__(self, plan_path, *, holdings_path=None, out_root=None,
                  preview_paths: int = PREVIEW_PATHS, report_paths: int | None = None,
-                 scenario_paths: int | None = None):
+                 scenario_paths: int | None = None, bank=None):
         self.plan_path = Path(plan_path)
         self.holdings_path = holdings_path
         self.out_root = Path(out_root) if out_root else config.DEFAULT_RETIREMENT_OUT
         self.preview_paths = preview_paths
         self.report_paths = report_paths
         self.scenario_paths = scenario_paths
+        self.bank = bank                # bank CSVs for the report's tax-refund check (None: skip)
         self._book = None               # the holdings file, read once until "reload"
         self._compute = threading.Lock()     # one engine run at a time
         self._job_lock = threading.Lock()
@@ -147,6 +150,13 @@ class PlannerApp:
         res = optimize.best_benefit_ages(plan, paths=self.preview_paths)
         return dataclasses.asdict(dataclasses.replace(res, plan=None))   # the ages are in people
 
+    def drawdown(self, d: dict) -> dict:
+        plan, _ = self.with_balances(inputs.parse(d))
+        t = optimize.rrsp_drawdown(plan, paths=self.preview_paths)
+        return {"rows": [dataclasses.asdict(r) for r in t.rows],
+                "current": dataclasses.asdict(t.current),
+                "best": {g: dataclasses.asdict(t.best(g)) for g in optimize.GOALS}}
+
     def plan_state(self) -> dict:
         raw = self.read_raw()
         try:
@@ -172,7 +182,8 @@ class PlannerApp:
     def _run_report(self, plan, source) -> None:
         try:
             out, result = cli.generate(plan, source, paths=self.report_paths,
-                                       scenario_paths=self.scenario_paths, out_root=self.out_root)
+                                       scenario_paths=self.scenario_paths, out_root=self.out_root,
+                                       bank=self.bank)
             rel = out.resolve().relative_to(self.out_root.resolve()).as_posix()
             job = {"state": "done", "url": f"/reports/{rel}", "success": result.simulated.success}
         except Exception as e:                    # surface any failure on the page
@@ -275,6 +286,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(self.app.affordability(body["plan"], float(body.get("target", 0.9))))
             if self.path == "/api/optimize/benefits":
                 return self._json(self.app.benefits(body["plan"]))
+            if self.path == "/api/optimize/drawdown":
+                return self._json(self.app.drawdown(body["plan"]))
             if self.path == "/api/reload-balances":
                 self.app.reload_balances()
                 return self._json(self.app.plan_state())
@@ -307,7 +320,8 @@ def serve(plan_path, *, port: int = 8765, open_browser: bool = True, holdings_pa
     """Run the planner page until Ctrl-C. ``report_paths`` / ``scenario_paths`` are the
     CLI's ``--paths`` / ``--scenario-paths`` for the report button."""
     app = PlannerApp(plan_path, holdings_path=holdings_path, out_root=out_root,
-                     report_paths=report_paths, scenario_paths=scenario_paths)
+                     report_paths=report_paths, scenario_paths=scenario_paths,
+                     bank=config.DEFAULT_RETIREMENT_BANK)
     app.read_raw()                      # a missing plan fails here, not in the browser
     server = PlannerServer(app, port)
     print(f"Retirement planner: {server.url}  (editing {app.plan_path}; Ctrl-C to stop)")

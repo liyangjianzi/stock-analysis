@@ -18,12 +18,14 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 | Module | Responsibility |
 |---|---|
 | `rules.py` | Every statutory value as `Rule(value, year, source)`: federal/Alberta tax, OAS, CPP, RRIF factors, TFSA, Alberta LIF. `TAX_YEAR`, `is_stale` |
+| `mortality.py` | Lifespans: the Statistics Canada Alberta life table (`QX`, 2021/2023) and CPP-report improvement (`IMPROVEMENT`) as `Rule`s; `qx`, `death_cdf`, `draw_death_ages` (own seed stream), `median_death_age`. Death age = the age on the January 1 after the last year lived; `OMEGA = 111` |
+| `refund.py` | The tax-refund check, display only: `expected_refund(plan)` (first-year tax withheld without the RRSP deduction minus true tax) vs `actual_refunds(path)` ("TAX REFUND" deposits in the bank CSVs' last 12 months; `retirement/bank/`, gitignored). Never feeds the projection |
 | `tax.py` | Vectorized person tax, household tax, the 5%-step pension-split search (`best_split`) |
 | `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `TEMPLATE` is the invented `--init` plan |
-| `engine.py` | Year-by-year accounts over N paths (`simulate`); `run` adds the average future (steady median return) and the bad-luck future (10th-percentile path replayed alone) → `PlanResult` |
+| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None)`); `draw_futures` (returns over `life_steps` + death ages); `run` simulates the drawn futures and adds the average future (steady median return) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
 | `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success |
 | `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
-| `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers) and `best_benefit_ages` (per-person CPP x OAS grid on the average-future legacy, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
+| `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers), `rrsp_drawdown` (every `steady_income` target in `DRAWDOWN_TARGETS` + the plan as it stands → `DrawdownTable`; `best("legacy" | "tax" | "success")`, ties keep the lower target) and `best_benefit_ages` (per-person CPP x OAS grid on the expected legacy over `LIFESPAN_DRAWS` lifespans, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
 | `report.py` | `build_report` (pure; self-contained HTML string), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
 | `cli.py` | `stock-analysis retire`. `generate(plan, source, ...)` is **the one report path** (run → rank → build → save → summary); the CLI and the GUI both call it. `_with_balances(plan, path, load=_load_book)` is the one balance-precedence rule; the GUI passes a caching `load` |
 | `gui.py` + `static/planner.html` | `--gui`: stdlib `http.server` plan editor (see below) |
@@ -84,8 +86,55 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
     so does the year before a retired household's plan starts.
   - Statutory values live in `rules.RESP` and `rules.STUDENT_GRANT`; the cost per student-year is a plan input (`inputs.EDUCATION_COSTS`
   defaults), not a rule.
+- **Lifespans and survivor years.** `deaths=None` means everyone lives the whole
+  horizon, which is the old engine exactly; keep it that way (every pre-lifespan
+  test is the regression anchor). Simulated runs use `life_steps` and drawn deaths;
+  the average / bad-luck futures use `steps` and `average_deaths` (the earlier
+  median death in a couple, the survivor to `end_age`). A dead person earns, draws
+  and pays nothing; each January `roll_over` moves their accounts to the living
+  partner untaxed, plus the CPP death benefit once; the survivor gets
+  `survivor_cpp` (from `rules.CPP["survivor"]`, none if the deceased's CPP at 65 is
+  0), spends `survivor_share`, and is never split with. Balances are NaN after the
+  household's `end_step`; read the estate from `final_investments` / `legacy`,
+  never `investments[-1]`. Every comparison draws returns **and** deaths with
+  `engine.draw_futures`.
 - **No registered draws while working.** Nobody's RRSP/LIF is drawn while they
-  still work; earned income covers them.
+  still work.
+- **Salary drives the working years** (`engine.payroll`) when every worker has a
+  `salary`: earned income is the gross salary. Its **income tax is part of the
+  household tax**: `_parts` gives each worker `salary` (CPP/EI credits, the enhanced
+  CPP + CPP2 deduction and the Canada employment amount, via `tax.income_tax(salary=)`)
+  and `deductions` (RRSP, own pension share = pension ÷ (1 + `pension_match`), child
+  care), so withdrawals and pension splitting are taxed on top of the salary.
+  `payroll` returns pay before income tax (salary − CPP/EI premiums); premiums go in
+  `tax` too, are recorded in `Projection.premiums` and left out of `lifetime_tax`.
+  Take-home pay covers the need, then the planned contributions (`saved` includes
+  them); the gap is drawn or the surplus saved, TFSA room going to planned
+  contributions first. **Contributions the household can't fund are cut pro rata,
+  never counted as a shortfall** (tax keeps the planned deductions in those years, a
+  small approximation). The employer's match enters the pension without touching
+  cash. If any worker's salary is missing, that year falls back to the old rule
+  (earned income = the need), and the report says so.
+- **ESPP** (`people[].espp`: `rate`, `cap`, `discount`; `engine.espp_purchase`): each
+  working year min(rate × salary, cap) is paid from take-home pay and buys shares
+  worth paid ÷ (1 − discount) into the worker's non-registered account at that cost
+  base; the discount is a taxable benefit (income tax, not CPP/EI), added to earned
+  income and to `saved` so the sources still add up. Needs a salary.
+- **Child benefit, child care, RRSP room** (`tax.child_benefit` / `childcare_deduction` /
+  `rrsp_new_room`; `rules.CCB`, `CHILDCARE`, `RRSP_LIMIT`). The CCB is its own income
+  source (`"ccb"`), tax-free, from the `education.kids` under 18, tested on last year's
+  **net** family income (`last_net`: total income + the ESPP benefit − RRSP, own
+  pension and child care deductions), not `last_income` (line 15000, which the
+  student grant uses). Child care (`education.childcare`, already inside spending) is
+  deducted by the lower earner among the living parents via `engine.childcare_claims`,
+  capped per child under 16 and at two-thirds of their salary, so it stops when that
+  spouse stops working. `people[].rrsp_room` (None: not enforced): contributions
+  above it go to the TFSA (then non-registered); each working year adds
+  `rrsp_new_room(salary, total pension contributions)`. The refund check uses both.
+- **Bank CSVs are private.** `cli.generate(bank=None)` and `PlannerApp(bank=None)`
+  default to no bank file; only the real CLI (`--bank`, default
+  `config.DEFAULT_RETIREMENT_BANK`) and `gui.serve` pass the owner's folder. Tests
+  pass `--bank /nonexistent-bank`; never let a test read `retirement/bank/`.
 - **Comparisons share futures.** What-ifs (`scenarios`), the report's
   "current plan" row and the GUI's saved-vs-edited tiles all use the same seed and
   path count. That is what makes a difference the change's effect. Keep it that
@@ -103,9 +152,11 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   candidate.
 - `max_spending` bisects over whole `SPENDING_STEP` multiples, so "one step more
   fails" holds exactly; a test pins this.
-- `best_benefit_ages` scores each candidate by the **average future's**
-  after-tax legacy, a single path at about 0.15 s. That makes 66 grid points per
-  person affordable. Success is only compared for today's ages vs the best ages.
+- `best_benefit_ages` scores each candidate by the **expected after-tax legacy
+  over `LIFESPAN_DRAWS` (300) death draws** at a steady median return, so a late
+  start counts only where the person lives to collect it. One candidate is one
+  vectorized run, about 0.4 s (300 paths cost about as much as one), so the full
+  66-point grid stays: about 20 s on 10 cores. Success is only compared for today's ages vs the best ages.
   Ties keep today's ages. The answer is often a near tie, so the GUI shows every
   age's cost; keep that rather than presenting one "right" age.
 - The process pool uses spawn on macOS, so `best_benefit_ages` must be called

@@ -103,7 +103,7 @@ Both came back no-edge. A 2026-09-27 study, `earn_*.py` (an earnings blackout on
   fetch+report layers), the `run`/`backtest` CLI flags, the backtest (plan exits,
   `robustness`, the random-entry null, and the single-pass equivalence tests),
   the research cache (`refresh`, drift detection, `replace_bars`, via a
-  monkeypatched `ingest.fetch_bulk_prices`), the whole `retirement/` planner (rules citations,
+  monkeypatched `ingest.fetch_bulk_prices`), the whole `retirement/` planner (lifespans and survivor years, rules citations,
   hand-worked federal + Alberta tax, the RRIF/LIF/TFSA account model, what-ifs, the HTML
   report, the `retire` CLI and its `--gui` server), and the whole `thesis/` subpackage
   — model/store/sources/review/CLI, with an injected fake price adapter for

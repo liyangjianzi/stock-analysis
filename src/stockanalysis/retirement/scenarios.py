@@ -55,10 +55,12 @@ def variants(plan: PlanInputs) -> list:
 
 
 def evaluate(plan: PlanInputs, *, paths: int, seed: int) -> tuple:
-    """(success over ``paths`` futures, average-future lifetime tax, average-future legacy)."""
+    """(success over ``paths`` futures with drawn lifespans, average-future lifetime tax,
+    average-future legacy)."""
     r, T = plan.returns, engine.steps(plan)
-    simulated = engine.simulate(plan, engine.draw_returns(r.mean, r.sd, paths, T, seed))
-    average = engine.simulate(plan, np.full((T, 1), engine.median_return(r.mean, r.sd)))
+    simulated = engine.simulate(plan, *engine.draw_futures(plan, paths, seed))
+    average = engine.simulate(plan, np.full((T, 1), engine.median_return(r.mean, r.sd)),
+                              engine.average_deaths(plan))
     return simulated.success, float(average.lifetime_tax[0]), float(average.legacy[0])
 
 

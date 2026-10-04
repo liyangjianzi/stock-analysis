@@ -15,13 +15,14 @@ from __future__ import annotations
 import datetime as dt
 import html
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
 
 from ..report import save_report  # noqa: F401  (re-exported: the same writer as the other reports)
-from . import engine, rules
+from . import engine, mortality, refund, rules
 from .engine import SOURCES, PlanResult, Projection
 from .inputs import STRATEGY_LABELS
 
@@ -32,8 +33,8 @@ CRITICAL, GOOD_TEXT, TRACK, BAND = "#d03b3b", "#006300", "#cde2fb", "rgba(42,120
 FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 LABELS = {"earned": "Earned income", "cpp": "CPP", "oas": "OAS", "minimums": "RRIF/LIF minimums",
           "registered": "Registered", "tfsa": "TFSA", "nonreg": "Non-registered",
-          "shortfall": "⚠ Shortfall"}
-COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "shortfall": CRITICAL}
+          "ccb": "Child benefit", "shortfall": "⚠ Shortfall"}
+COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "ccb": MUTED, "shortfall": CRITICAL}
 DRAWN = ("registered", "tfsa", "nonreg")   # year-table sources that are withdrawals from an account
 SECTION_IDS = ("summary", "suggestions", "income", "money-left", "years", "assumptions")
 EDUCATION_ID = "education"          # only when the plan has children's education
@@ -53,7 +54,20 @@ table{{border-collapse:collapse;width:100%;background:{SURFACE};font-size:.85rem
 th,td{{padding:6px 8px;border-bottom:1px solid {GRID};text-align:right}}
 th:first-child,td:first-child{{text-align:left}} td{{font-variant-numeric:tabular-nums}}
 .up{{color:{GOOD_TEXT}}} .down{{color:{CRITICAL}}} .flat{{color:{INK_2}}} tr.base td{{font-weight:600}}
-details summary{{cursor:pointer;font-weight:600;margin:.8rem 0}} .years{{overflow-x:auto}}
+details summary{{cursor:pointer;font-weight:600;margin:.8rem 0}}
+.years{{overflow:auto;max-height:70vh;border:1px solid rgba(11,11,11,.10);border-radius:10px}}
+.years table{{font-size:.78rem;white-space:nowrap}}
+.years th,.years td{{padding:3px 7px}}
+.years thead{{position:sticky;top:0;z-index:2}}
+.years thead tr{{background:{PAGE}}} .years th{{color:{INK_2};font-weight:600;vertical-align:bottom}}
+.years th.grp{{text-align:center;color:{MUTED};font-weight:500;border-bottom:1px solid {AXIS}}}
+.years .g{{border-left:1px solid {AXIS}}}
+.years .stick{{position:sticky;left:0;z-index:1;background:inherit;text-align:left}}
+.years tr>.stick:first-child{{width:3.2em;min-width:3.2em}}
+.years .s2{{left:calc(3.2em + 14px);border-right:1px solid {AXIS}}}
+.years tbody tr{{background:{SURFACE}}} .years tbody tr:nth-child(even){{background:{PAGE}}}
+.years tbody tr:hover{{background:{TRACK}}} .years tbody tr.short{{background:#fbe9e9}}
+.years tr.short td:first-child{{box-shadow:inset 3px 0 {CRITICAL}}}
 """
 
 
@@ -95,7 +109,8 @@ def _style_axes(fig: go.Figure, height: int) -> go.Figure:
     return fig
 
 
-def success_meter(success: float, previous: float | None = None) -> go.Figure:
+def success_meter(success: float, previous: float | None = None,
+                  title: str = "Chance the money lasts") -> go.Figure:
     if previous is not None and round(previous * 100) == round(success * 100):
         previous = None                 # a "0 pts" delta is noise, not news
     delta = None if previous is None else {
@@ -105,7 +120,7 @@ def success_meter(success: float, previous: float | None = None) -> go.Figure:
         mode="gauge+number" + ("" if delta is None else "+delta"),
         value=round(success * 100), delta=delta,
         number={"suffix": "%", "font": {"size": 48, "color": INK}},
-        title={"text": "Chance the money lasts", "font": {"size": 14, "color": INK_2}},
+        title={"text": title, "font": {"size": 14, "color": INK_2}},
         gauge={"axis": {"range": [0, 100], "tickcolor": MUTED, "tickfont": {"color": MUTED}},
                "bar": {"color": SERIES[0], "thickness": 0.35}, "bgcolor": TRACK, "borderwidth": 0}))
     fig.update_layout(height=240, paper_bgcolor=SURFACE, font=dict(family=FONT, color=INK_2),
@@ -156,8 +171,12 @@ def income_chart(avg: Projection, bad: Projection) -> go.Figure:
 def money_left_chart(sim: Projection, plan) -> go.Figure:
     """Investments by age as a bad / typical / good band, plus the home's value."""
     ref = plan.people[0]
-    x = [ref.age + t for t in range(sim.investments.shape[0])]
-    p10, p50, p90 = np.percentile(sim.investments, [10, 50, 90], axis=1)
+    rows = min(sim.investments.shape[0], engine.steps(plan) + 1)   # stop when the youngest reaches end_age
+    inv = sim.investments[:rows]
+    x = [ref.age + t for t in range(rows)]
+    with warnings.catch_warnings():                       # a year where every future has ended
+        warnings.simplefilter("ignore", RuntimeWarning)
+        p10, p50, p90 = np.nanpercentile(inv, [10, 50, 90], axis=1)
     fig = go.Figure([
         go.Scatter(x=x, y=p90, name="Good luck (1 in 10)", line=dict(color=SERIES[0], width=1),
                    hovertemplate="Good luck: C$%{y:,.0f}<extra></extra>"),
@@ -167,7 +186,7 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
                    hovertemplate="Typical: C$%{y:,.0f}<extra></extra>"),
     ])
     if plan.home is not None:
-        fig.add_trace(go.Scatter(x=x, y=sim.home_value, name="Home value",
+        fig.add_trace(go.Scatter(x=x, y=sim.home_value[:rows], name="Home value",
                                  line=dict(color=SERIES[1], width=2, dash="dot"),
                                  hovertemplate="Home: C$%{y:,.0f}<extra></extra>"))
     def at(p, age):                    # p's age -> the chart's x (people[0]'s age)
@@ -181,6 +200,10 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
             marks.append((at(p, p.cpp_start_age), f"{p.name}: CPP + OAS"))
         else:
             marks += [(at(p, p.cpp_start_age), f"{p.name}: CPP"), (at(p, p.oas_start_age), f"{p.name}: OAS")]
+    fixed = engine.average_deaths(plan)
+    for i, p in enumerate(plan.people):
+        if len(plan.people) == 2 and fixed[i, 0] < p.age + engine.steps(plan):
+            marks.append((at(p, int(fixed[i, 0])), f"{p.name}: dies (average future)"))
     grouped: dict = {}                 # one label per age, so marks never print on top of each other
     for age, label in marks:
         if x[0] <= age <= x[-1]:
@@ -195,6 +218,39 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
                       margin=dict(l=70, r=20, t=120, b=40))
     fig.update_xaxes(title_text=f"Age of {ref.name}")
     return fig
+
+
+def lasts_label(plan) -> str:
+    who = "either of you lives" if len(plan.people) == 2 else "you live"
+    return f"Chance the money lasts as long as {who}"
+
+
+def lifespans(result: PlanResult) -> dict:
+    """Median age at death per person, the chance someone reaches 95, and the median
+    years a survivor lives alone, over the simulated futures."""
+    plan, d = result.inputs, result.simulated.death_ages
+    age0 = np.array([[p.age] for p in plan.people])
+    out = {"people": [{"name": p.name, "median_age_at_death": int(np.median(d[i])) - 1}
+                      for i, p in enumerate(plan.people)],
+           "reach_95": float((d > 95).any(axis=0).mean()),
+           "alone_years": None}
+    if len(plan.people) == 2:
+        left = d - age0
+        out["alone_years"] = float(np.median(np.abs(left[0] - left[1])))
+    return out
+
+
+def _lifespan_tiles(result: PlanResult) -> str:
+    life = lifespans(result)
+    ages = " · ".join(f"{x['name']} {x['median_age_at_death']}" for x in life["people"])
+    tiles = [_tile("Median age at death", ages, "Alberta life table, improving over time"),
+             _tile("Chance one of you reaches 95" if len(life["people"]) == 2 else "Chance of reaching 95",
+                   f"{life['reach_95']:.0%}", "Plan-to age stays your choice")]
+    if life["alone_years"] is not None:
+        tiles.append(_tile("Survivor alone (median)", f"{life['alone_years']:.0f} years",
+                           f"Spending {result.inputs.spending.survivor_share:.0%} of the couple's"))
+    return (f"<div class='kpis' style='grid-template-columns:repeat({len(tiles)},1fr);margin-top:16px'>"
+            + "".join(tiles) + "</div>")
 
 
 def _legacy_tile(plan, avg: Projection, bad: Projection) -> str:
@@ -276,25 +332,63 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
             "year before; a year with no known prior income gets none.</p>")
 
 
+def _compact(x) -> str:
+    """A table cell: 85.2k / 1.23M, no currency (the caption says C$); zero is a dash."""
+    x = float(x)
+    if round(x) == 0:
+        return "–"
+    sign, x = ("-" if x < 0 else ""), abs(x)
+    if x >= 1e6:
+        return f"{sign}{x / 1e6:.2f}M"
+    if x >= 1e3:
+        return f"{sign}{x / 1e3:.1f}k"
+    return f"{sign}{x:.0f}"
+
+
 def _year_table(proj: Projection) -> str:
-    school = proj.education is not None
-    # Sources are what was drawn that year; the last columns are January 1 balances.
-    head = ["Year", "Ages", "Spending", "Tax", *[f"{LABELS[s]} drawn" if s in DRAWN else LABELS[s]
-                                                 for s in SOURCES], "Saved",
-            "RRSP/RRIF balance", "Pension/LIF balance", "TFSA balance", "Non-registered balance",
-            "Total invested",
-            *(["Education (household)", "Student grants", "RESP"] if school else [])]
+    # (group, header, series). Sources are what was drawn that year; balances are January 1.
+    cols = [("", "Spending", proj.need[:, 0]), ("", "Tax", proj.tax[:, 0]),
+            *[("Income by source", LABELS[s] + (" drawn" if s in DRAWN else ""), proj.income[s][:, 0])
+              for s in SOURCES],
+            ("Income by source", "Saved", proj.saved[:, 0]),
+            *[("January 1 balances", h, proj.balances[k][:, 0]) for k, h in
+              (("rrsp", "RRSP/RRIF"), ("pension", "Pension/LIF"), ("tfsa", "TFSA"), ("nonreg", "Non-reg"))],
+            ("January 1 balances", "Total invested", proj.investments[:, 0])]
+    if proj.education is not None:
+        cols += [("Education", "Household", proj.education[:, 0]),
+                 ("Education", "Student grants", proj.student_grant[:, 0]),
+                 ("Education", "RESP", proj.resp[:, 0])]
+    keep = {"Spending", "Tax", "Total invested"}
+    cols = [c for c in cols if c[1] in keep or np.any(np.round(c[2]) != 0)]   # all-zero columns say nothing
+
+    groups: list = []                  # [group, span], merging neighbours
+    for g, _, _ in cols:
+        if groups and groups[-1][0] == g:
+            groups[-1][1] += 1
+        else:
+            groups.append([g, 1])
+    first = {i for i, (g, _, _) in enumerate(cols) if i == 0 or cols[i - 1][0] != g}
+    def edge(i):                       # a rule where each group starts
+        return " class='g'" if i in first else ""
+
+    top = "<tr><th class='stick' colspan='2'></th>" + "".join(
+        f"<th class='g grp' colspan='{n}'>{_esc(g)}</th>" for g, n in groups) + "</tr>"
+    sub = ("<tr><th class='stick'>Year</th><th class='stick s2'>Ages</th>"
+           + "".join(f"<th{edge(i)}>{_esc(h)}</th>" for i, (_, h, _) in enumerate(cols)) + "</tr>")
+    short = proj.income["shortfall"][:, 0]
     rows = []
     for t, year in enumerate(proj.years):
-        cells = [year, age_label(proj.ages[t]), _money(proj.need[t, 0]), _money(proj.tax[t, 0]),
-                 *[_money(proj.income[s][t, 0]) for s in SOURCES], _money(proj.saved[t, 0]),
-                 *[_money(proj.balances[k][t, 0]) for k in ("rrsp", "pension", "tfsa", "nonreg")],
-                 _money(proj.investments[t, 0]),
-                 *([_money(proj.education[t, 0]), _money(proj.student_grant[t, 0]),
-                    _money(proj.resp[t, 0])] if school else [])]
-        rows.append("<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in cells) + "</tr>")
-    return ("<div class='years'><table><thead><tr>" + "".join(f"<th>{_esc(h)}</th>" for h in head)
-            + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+        cells = "".join(f"<td{edge(i)} title='{_money(v[t])}'>{_compact(v[t])}</td>"
+                        for i, (_, _, v) in enumerate(cols))
+        cls = " class='short'" if round(short[t]) > 0 else ""
+        ages = "/".join(f"{a}{'' if proj.alive is None or proj.alive[t, i, 0] else '†'}"
+                        for i, a in enumerate(proj.ages[t]))
+        rows.append(f"<tr{cls}><td class='stick'>{year}</td>"
+                    f"<td class='stick s2'>{_esc(ages)}</td>{cells}</tr>")
+    return ("<p class='note'>C$, today's dollars; k = thousand, M = million, – = none. Hover a cell "
+            "for the exact amount. Columns that are zero every year are hidden; short years are "
+            "shaded red; † = has died (the survivor's years follow). Tax includes CPP/EI premiums while working; Saved includes your planned contributions.</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
+            + "".join(rows) + "</tbody></table></div>")
 
 
 def _rule_value(value) -> str:
@@ -317,9 +411,34 @@ def _education_facts(plan, s) -> list:
             ("Canada Student Grant", grant), *rows]
 
 
-def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
+def _refund_check(plan, refunds) -> str:
+    """The model's expected refund beside the refunds found in the bank CSVs."""
+    if refunds is None or refunds[0] is None:
+        return ""
+    actual, deposits = refunds
+    expected = refund.expected_refund(plan)
+    total = sum(r for _, r in expected)
+    rows = "".join(f"<tr><td>Expected for {_esc(n)} (model)</td><td>{_money(r)}</td></tr>" for n, r in expected)
+    rows += "".join(f"<tr><td>Deposited {_esc(d)} (bank)</td><td>{_money(a)}</td></tr>" for d, a in deposits)
+    rows += (f"<tr class='base'><td>Model vs bank</td><td>{_money(total)} vs {_money(actual)}</td></tr>")
+    gap = actual - total
+    note = ("The model's refund comes from RRSP contributions alone. "
+            + (f"The bank shows {_money(gap)} more: likely a deduction or credit the plan doesn't "
+               "know about (childcare, donations, over-withholding), so the plan's tax may be a "
+               "little high." if gap > 0.1 * max(total, 1.0) else
+               f"The bank shows {_money(-gap)} less: withholding may already allow for the RRSP, or "
+               "a contribution was smaller than planned." if gap < -0.1 * max(total, 1.0) else
+               "They agree, so the plan's tax looks right."))
+    return ("<h2>Tax refund check</h2><p class='note'>Payroll withholds tax as if there were no RRSP "
+            "contribution and the spring refund gives it back; the plan already charges the true tax, "
+            "so this only checks it. Never changes the projection.</p>"
+            f"<table><tbody>{rows}</tbody></table><p class='note'>{note}</p>")
+
+
+def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=None) -> str:
     people = "".join(
-        f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{p.retire_age}</td>"
+        f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{_esc(p.sex or 'not set (average table)')}</td>"
+        f"<td>{p.retire_age}</td>"
         f"<td>{p.cpp_start_age}</td><td>{p.oas_start_age}</td><td>{_money(engine.cpp_at_65(p))}</td>"
         f"<td>{p.years_in_canada_at_65:g}</td><td>{p.rrif_start_age}</td>"
         f"<td>{_esc(p.lif_start_age if p.lif_start_age is not None else 'at retirement (50+)')}</td>"
@@ -334,6 +453,26 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
         ("Spending", f"{_money(s.base)} a year after tax; slow-go from {s.slow_go_age} "
                      f"({s.slow_go_share:.0%}), no-go from {s.no_go_age} ({s.no_go_share:.0%}) "
                      f"plus {_money(s.care)} care"),
+        ("Working years", "each salary pays income tax (after RRSP and your own pension "
+                          "contributions) and CPP/EI premiums; take-home pay covers spending, then "
+                          "your planned contributions, and the rest is saved (or drawn from savings "
+                          "when short). An employer pension match goes straight into the pension"
+         if all(p.salary is not None for p in plan.people if p.age < p.retire_age) else
+         "Set each worker's salary for an honest view: without one, earned income is assumed to "
+         "cover spending exactly and salary tax isn't shown"),
+        ("RRSP room", "tracked from your Notice of Assessment: contributions above it go to the TFSA, "
+                      "and it grows 18% of salary (up to the yearly limit) less the pension adjustment"
+         if any(p.rrsp_room is not None for p in plan.people) else
+         "not checked: set people[].rrsp_room to the \"RRSP deduction limit\" on your Notice of "
+         "Assessment, or contributions above your room are counted as deductible"),
+        *([("Child care", f"{_money(plan.education.childcare)} a year (part of spending), deducted by the "
+                          "lower earner while a child is under 16")]
+          if plan.education is not None and plan.education.childcare > 0 else []),
+        ("Survivor spending", f"{s.survivor_share:.0%} of the couple's budget once one of you has "
+                              "died (care costs stay whole)" if len(plan.people) == 2 else "n/a"),
+        ("Lifespans", "drawn per future from the Statistics Canada Alberta life table "
+                      "(2021–2023) with the CPP actuarial report's mortality improvement; "
+                      f"the average future assumes the median first death and the survivor to {plan.end_age}"),
         ("Non-registered payouts",
          "none" if not ni.total else
          f"{ni.eligible_dividends:.1%} Canadian dividends, {ni.foreign_dividends:.1%} foreign "
@@ -351,21 +490,29 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None) -> str:
     rules_rows = "".join(
         f"<tr><td>{_esc(name)}</td><td>{_esc(_rule_value(rule.value))}</td><td>{rule.year}</td>"
         f"<td><a href='{_esc(rule.source)}'>source</a></td></tr>" for name, rule in rules.all_rules())
+    life = [("mortality.life_table", "Alberta 2021–2023, by sex, ages 0–110", mortality.QX),
+            ("mortality.improvement", _rule_value(mortality.IMPROVEMENT.value), mortality.IMPROVEMENT)]
+    rules_rows += "".join(
+        f"<tr><td>{_esc(n)}</td><td>{_esc(v)}</td><td>{r.year}</td>"
+        f"<td><a href='{_esc(r.source)}'>source</a></td></tr>" for n, v, r in life)
     return (
-        "<table><thead><tr><th>Person</th><th>Age</th><th>Retires</th><th>CPP from</th>"
+        "<table><thead><tr><th>Person</th><th>Age</th><th>Sex</th><th>Retires</th><th>CPP from</th>"
         "<th>OAS from</th><th>CPP at 65 (yearly)</th><th>Years in Canada at 65</th>"
         f"<th>RRIF from</th><th>LIF from</th><th>TFSA room carried in</th><th>Salary</th></tr></thead>"
         f"<tbody>{people}</tbody></table>"
         "<table><tbody>" + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in facts)
-        + "</tbody></table><h2>Canadian rules used</h2>"
+        + "</tbody></table>"
+        + _refund_check(plan, refunds) +
+        "<h2>Canadian rules used</h2>"
         "<table><thead><tr><th>Rule</th><th>Value</th><th>Year</th><th>Official source</th></tr>"
         f"</thead><tbody>{rules_rows}</tbody></table>")
 
 
 def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str,
                  holdings_source: str | None = None, previous: dict | None = None,
-                 today: dt.date | None = None) -> str:
-    """The whole page as a string. ``previous`` is the last run's summary, for the change."""
+                 today: dt.date | None = None, refunds: tuple | None = None) -> str:
+    """The whole page as a string. ``previous`` is the last run's summary, for the change;
+    ``refunds`` is ``refund.actual_refunds(...)`` for the refund check."""
     plan, sim, avg, bad = result.inputs, result.simulated, result.average, result.bad_luck
     today = today or dt.date.today()
     banner = ""
@@ -373,8 +520,9 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
         banner = (f"<p class='banner'>⚠ The tax and benefit rules are for {rules.TAX_YEAR}. "
                   f"Update rules.py for {today.year} from the official pages it cites.</p>")
     prev = previous.get("success") if previous else None
-    top = (f"<div class='top'><div class='card'>{_fig(success_meter(sim.success, prev), 'cdn')}</div>"
-           f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>")
+    meter = success_meter(sim.success, prev, title=lasts_label(plan))
+    top = (f"<div class='top'><div class='card'>{_fig(meter, 'cdn')}</div>"
+           f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>{_lifespan_tiles(result)}")
     sections = [
         ("summary", "", top),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
@@ -389,7 +537,7 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
          + _fig(money_left_chart(sim, plan), False)),
         ("years", "", "<details><summary>Year-by-year table (average future)</summary>"
                       f"{_year_table(avg)}</details>"),
-        ("assumptions", "Assumptions &amp; rules", _assumptions(plan, result, holdings_source)),
+        ("assumptions", "Assumptions &amp; rules", _assumptions(plan, result, holdings_source, refunds)),
     ]
     body = "".join(f'<section id="{sid}">' + (f"<h2>{title}</h2>" if title else "") + content
                    + "</section>" for sid, title, content in sections)
@@ -406,7 +554,8 @@ def headline(result: PlanResult) -> dict:
     avg = result.average
     return {"success": result.simulated.success, "paths": result.simulated.paths,
             "legacy": float(avg.legacy[0]), "lifetime_tax": float(avg.lifetime_tax[0]),
-            "investments_at_retirement": float(avg.investments_at_retirement[0])}
+            "investments_at_retirement": float(avg.investments_at_retirement[0]),
+            "lifespans": lifespans(result)}
 
 
 def write_summary(result: PlanResult, path) -> str:
