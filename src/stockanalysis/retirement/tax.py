@@ -65,20 +65,21 @@ def extra_tax(base, *, ordinary=0.0, dividends=0.0, age=0, province="AB") -> np.
             - income_tax(ordinary=base, age=age, province=province))
 
 
-def payroll_parts(salary) -> tuple:
+def payroll_parts(salary, age=0) -> tuple:
     """(premiums credited at the lowest rate: base CPP + EI, premiums deducted from
-    income: enhanced CPP + CPP2) on ``salary`` (outside Quebec)."""
+    income: enhanced CPP + CPP2) on ``salary`` (outside Quebec). No CPP from 70."""
     s = np.asarray(salary, dtype=float)
+    cpp_on = np.asarray(age) < 70
     cpp, cpp2, ei = (rules.PAYROLL[k].value for k in ("cpp", "cpp2", "ei"))
-    first = cpp["rate"] * np.clip(s - cpp["exemption"], 0.0, cpp["ympe"] - cpp["exemption"])
+    first = cpp_on * cpp["rate"] * np.clip(s - cpp["exemption"], 0.0, cpp["ympe"] - cpp["exemption"])
     base = first * cpp["base_rate"] / cpp["rate"]
-    second = cpp2["rate"] * np.clip(s - cpp["ympe"], 0.0, cpp2["yampe"] - cpp["ympe"])
+    second = cpp_on * cpp2["rate"] * np.clip(s - cpp["ympe"], 0.0, cpp2["yampe"] - cpp["ympe"])
     return base + ei["rate"] * np.clip(s, 0.0, ei["max_insurable"]), first - base + second
 
 
-def payroll_premiums(salary) -> np.ndarray:
+def payroll_premiums(salary, age=0) -> np.ndarray:
     """An employee's yearly CPP, CPP2 and EI premiums on ``salary`` (outside Quebec)."""
-    credited, deducted = payroll_parts(salary)
+    credited, deducted = payroll_parts(salary, age)
     return credited + deducted
 
 
@@ -133,7 +134,7 @@ def income_tax(*, ordinary=0.0, pension=0.0, gains=0.0, oas=0.0, dividends=0.0, 
     grossed_up = dividends * (1 + rules.DIVIDENDS["eligible_gross_up"].value)
     gross = total_income(ordinary=ordinary + salary, pension=pension, gains=gains, oas=oas,
                          dividends=dividends)
-    credited, deducted = payroll_parts(salary)
+    credited, deducted = payroll_parts(salary, age)
     before = np.maximum(gross - deductions - deducted, 0.0)
     recovery = oas_recovery(before, oas)
     net = before - recovery          # line 23600: after deducting the OAS repayment

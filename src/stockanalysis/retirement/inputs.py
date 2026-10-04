@@ -98,6 +98,8 @@ class Spending:
     guardrail_band: float = 0.20    # act when the withdrawal rate moves this far from where it began
     guardrail_step: float = 0.10    # each cut or raise
     guardrail_stop_years: int = 15  # no cuts in the plan's last N years
+    guardrail_floor: float = 0.75   # never cut below this share of the planned spending
+    guardrail_ceiling: float = 1.50  # never raise above this share
 
 
 @dataclass(frozen=True)
@@ -292,6 +294,10 @@ def _build(d: dict) -> PlanInputs:
 
 def _set(obj, keys: list, value):
     key, rest = keys[0], keys[1:]
+    if isinstance(obj, dict):                    # e.g. contributions, education costs
+        new = dict(obj)
+        new[key] = _set(obj[key], rest, value) if rest else value
+        return new
     if isinstance(obj, tuple):
         items = list(obj)
         i = int(key)
@@ -308,8 +314,8 @@ def apply_changes(plan: PlanInputs, changes: dict) -> PlanInputs:
     for path, value in changes.items():
         try:
             plan = _set(plan, path.split("."), value)
-        except (KeyError, IndexError, ValueError, TypeError) as e:
-            raise KeyError(f"no field {path!r}") from e
+        except (KeyError, IndexError, ValueError, TypeError, AttributeError) as e:
+            raise ValueError(f"no field {path!r}") from e
     return plan
 
 
@@ -337,6 +343,14 @@ def _education(d: dict | None) -> Education | None:
     return Education(kids=kids, costs=costs, **d)
 
 
+def _is_number(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and bool(np.isfinite(x))
+
+
+def _is_int(x) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
 def _fail(field_name: str, message: str):
     raise PlanError(field_name, message)
 
@@ -354,6 +368,7 @@ def limits(province: str) -> dict:
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
             "survivor_share": (0.4, 1.0),
             "guardrail_band": (0.05, 0.5), "guardrail_step": (0.02, 0.5),
+            "guardrail_floor": (0.3, 1.0), "guardrail_ceiling": (1.0, 3.0),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
             "student_grant_max": rules.STUDENT_GRANT.value["yearly_max"],
             "aip_rrsp_max": aip["rrsp_transfer_max"], "aip_extra_tax": aip["extra_tax"]}
@@ -441,7 +456,7 @@ def validate(plan: PlanInputs) -> PlanInputs:
         _fail("spending.survivor_share", f"between {lo} and {hi}")
     if s.rule not in SPENDING_RULES:
         _fail("spending.rule", f"{s.rule!r} is not one of {SPENDING_RULES}")
-    for name in ("guardrail_band", "guardrail_step"):
+    for name in ("guardrail_band", "guardrail_step", "guardrail_floor", "guardrail_ceiling"):
         lo, hi = lim[name]
         if not lo <= getattr(s, name) <= hi:
             _fail(f"spending.{name}", f"between {lo} and {hi}")
@@ -499,8 +514,14 @@ def validate(plan: PlanInputs) -> PlanInputs:
             if kid.cesg_received is not None and not (
                     0 <= kid.cesg_received <= rules.RESP["cesg"].value["lifetime_max"]):
                 _fail(f"{f}.cesg_received", "between 0 and the lifetime grant maximum")
+    owner = {p.id: p for p in plan.people}
     for j, ev in enumerate(plan.events):
         f = f"events[{j}]"
+        if not _is_number(ev.amount):
+            _fail(f"{f}.amount", "must be a number")
+        for name in ("year", "age", "every", "until", "until_age"):
+            if getattr(ev, name) is not None and not _is_int(getattr(ev, name)):
+                _fail(f"{f}.{name}", "must be a whole number")
         if ev.kind not in EVENT_KINDS:
             _fail(f"{f}.kind", f"{ev.kind!r} is not one of {EVENT_KINDS}")
         if (ev.year is None) == (ev.age is None):
@@ -515,6 +536,14 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"{f}.amount", "yearly income must not be negative")
         if ev.person is not None and ev.person not in ids:
             _fail(f"{f}.person", f"{ev.person!r} is not one of the people {ids}")
+        ref = owner.get(ev.person, plan.people[0])
+        start = ev.year if ev.year is not None else plan.start_year + ev.age - ref.age
+        if ev.until_age is not None and plan.start_year + ev.until_age - ref.age < start:
+            _fail(f"{f}.until_age", "ends before it starts")
+        if ev.until is not None and ev.until < start:
+            _fail(f"{f}.until", "must not be before the start year")
+        if start < plan.start_year and ev.every is None and ev.kind == "cash":
+            _fail(f"{f}.year" if ev.year is not None else f"{f}.age", "is before the plan starts")
     for j, a in enumerate(plan.accounts):
         if a.owner not in ids:
             _fail(f"balances[{j}].owner", f"{a.owner!r} is not one of the people {ids}")
@@ -527,7 +556,7 @@ def validate(plan: PlanInputs) -> PlanInputs:
     for j, (name, changes) in enumerate(plan.saved_scenarios):
         try:
             validate(apply_changes(replace(plan, saved_scenarios=()), changes))
-        except (PlanError, KeyError) as e:
+        except Exception as e:                   # a bad path, a wrong type, an invalid value
             _fail(f"saved_scenarios[{j}]", f"{name!r}: {e}")
     return plan
 

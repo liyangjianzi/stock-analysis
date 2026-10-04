@@ -182,3 +182,8 @@ def test_deductions_lower_net_income():
 
 def test_unknown_income_means_no_child_benefit():
     assert float(tax.child_benefit(np.nan, 0, 1)) == 0.0
+
+
+def test_no_cpp_premiums_from_age_70():
+    assert float(tax.payroll_premiums(50_000, age=70)) == pytest.approx(0.0163 * 50_000)
+    assert float(tax.payroll_premiums(50_000, age=69)) > 0.0163 * 50_000

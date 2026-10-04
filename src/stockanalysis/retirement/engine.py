@@ -436,7 +436,7 @@ def payroll(people, ages, working, contrib, childcare=None) -> dict:
         own = own_pension(p, contrib["pension"][i])
         paid, value = espp_purchase(p)
         care = 0.0 if childcare is None else childcare[i]
-        prem = np.where(w, tax.payroll_premiums(p.salary), 0.0)
+        prem = np.where(w, tax.payroll_premiums(p.salary, ages[i]), 0.0)
         out["salary"][i] = np.where(w, p.salary, 0.0)
         out["benefit_by"][i] = np.where(w, value - paid, 0.0)
         out["deductions"][i] = np.where(w, contrib["rrsp"][i] + own + care, 0.0)
@@ -599,7 +599,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 resp_tax = aip["extra_tax"] * taxable
                 works = (aip_share * working).sum(axis=0) > 0
                 salary = sum(aip_share[i] * (p.salary or 0.0) for i, p in enumerate(people))
-                resp_tax = resp_tax + np.where(works, tax.extra_tax(salary, ordinary=taxable, age=ages[0],
+                age_r = np.where(aip_share[0] > 0, ages[0], ages[-1])
+                resp_tax = resp_tax + np.where(works, tax.extra_tax(salary, ordinary=taxable, age=age_r,
                                                                     province=prov), 0.0)
                 aip_income = np.where(works, 0.0, taxable)        # a retiree's: in the household tax
                 resp_tax = np.minimum(resp_tax, taxable)
@@ -631,13 +632,14 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             # years), below the lower one raise it a step.
             retired_now = ~earning & household
             rate = np.divide(need * adjust, invest[t], out=np.full(N, np.inf), where=invest[t] > 0)
-            first = retired_now & np.isnan(start_rate)
+            first = retired_now & np.isnan(start_rate) & (invest[t] > 0)   # wait for a portfolio
             start_rate = np.where(first, rate, start_rate)
-            act = retired_now & ~first
+            act = retired_now & ~np.isnan(start_rate) & ~first
             cut = act & (rate > start_rate * (1 + spend.guardrail_band)) & (ages[0] < stop_age)
             rise = act & (rate < start_rate * (1 - spend.guardrail_band))
             adjust = np.where(cut, adjust * (1 - spend.guardrail_step),
                               np.where(rise, adjust * (1 + spend.guardrail_step), adjust))
+            adjust = np.clip(adjust, spend.guardrail_floor, spend.guardrail_ceiling)
             need = need * adjust
         else:
             # The bad-market cut, once nobody earns (a worker's death counts, not just the plan).
@@ -652,9 +654,10 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             need = need + school.contribution[t]       # RESP contributions are paid like spending
         # School costs the RESP can't cover come from savings even while anyone works.
         inflow, outflow, event_income = event_flows(plan, year)
-        need = (need + outflow) * household               # a one-time cost is spent like the rest
+        need = need * household
+        outflow = outflow * household                    # a one-time cost: paid like school costs
         uncovered = uncovered * household
-        need_rec[t] = need + uncovered
+        need_rec[t] = need + uncovered + outflow
         pay_tax = funded = benefit = deducted = np.zeros(N)
         espp_shares = np.zeros((P, N))
         pay = None
@@ -666,10 +669,10 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             benefit, espp_shares = pay["benefit"], pay["espp"]
             income["earned"][t] = benefit + sum(np.where(working[i], p.salary, 0.0)
                                                 for i, p in enumerate(people) if planned[i])
-            cash_need = need + uncovered + funded - pay["pay"]   # income tax: in the household tax
+            cash_need = need + uncovered + outflow + funded - pay["pay"]   # income tax: household tax
         else:             # no salary to go on: earned income just covers spending
             income["earned"][t] = np.where(earning, need, 0.0)
-            cash_need = np.where(earning, uncovered, need + uncovered)
+            cash_need = np.where(earning, uncovered, need + uncovered) + outflow
 
         # 3. Guaranteed income: CPP, OAS, RRIF and LIF minimums.
         cpp = np.array([[cpp_year[i] if ages[i] >= p.cpp_start_age else 0.0]
@@ -698,7 +701,9 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         # Temporary income (events): taxed like salary for its person while they live;
         # money in is untaxed. Both are cash this year.
         side_pay = event_income[:, None] * alive
-        side_premiums = tax.payroll_premiums(side_pay)
+        on_salary = pay["salary"] if pay is not None else np.zeros((P, N))
+        side_premiums = np.array([tax.payroll_premiums(on_salary[i] + side_pay[i], ages[i])
+                                  - tax.payroll_premiums(on_salary[i], ages[i]) for i in range(P)])
         extra_cash = inflow * household + (side_pay - side_premiums).sum(axis=0)
         guaranteed = (cpp + oas + min_rrif + min_lif).sum(axis=0) + ccb + extra_cash
         base_taxable = cpp + oas + min_rrif + min_lif

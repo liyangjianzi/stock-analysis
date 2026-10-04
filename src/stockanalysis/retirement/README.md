@@ -173,14 +173,18 @@ contributed before the year the child turns 15).
   child care deduction, claimed by the lower earner while a child is under 16.
 - **Saved scenarios** (`saved_scenarios` in plan.json; GUI: Compare tab): named
   versions that store only the fields they change as dotted paths, e.g.
-  `{"name": "Retire at 50", "changes": {"people.0.retire_age": 50}}`. The report and
+  `{"name": "Retire at 50", "changes": {"people.0.retire_age": 50}}`. Any single field
+  works, including contributions (`people.0.contributions.rrsp`); edits to lists
+  (events, children, dated changes) aren't captured. The report and
   the Compare tab show the plan and every scenario side by side (chance the money
   lasts, legacy, lifetime tax, spending, retirement ages) on the same futures.
 - **Guardrail spending** (`spending.rule: "guardrails"`; GUI: Spending tab, "When
   markets move"): instead of one cut in a bad market, once nobody earns the plan
   compares each year's withdrawal rate with the first one; 20% above it spending is
-  cut 10% (not in the last 15 years), 20% below it spending is raised 10%
-  (`guardrail_band`, `guardrail_step`, `guardrail_stop_years`). The report shows the
+  cut 10% (not in the last 15 years), 20% below it spending is raised 10%, always
+  between 75% and 150% of plan (`guardrail_band`, `guardrail_step`,
+  `guardrail_stop_years`, `guardrail_floor`, `guardrail_ceiling`). A year that still
+  can't be paid at the floor counts as short. The report shows the
   lowest spending level reached in the typical and the 1-in-10 bad future.
 - **Money events** (`events` in plan.json; GUI: Spending tab): one-off or repeating
   amounts in (untaxed, saved) or out (spent that year), e.g.

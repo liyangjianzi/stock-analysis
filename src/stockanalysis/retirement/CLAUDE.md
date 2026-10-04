@@ -151,11 +151,17 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   `bad_ref`) or `"guardrails"` (Guyton-Klinger on the base need: the first non-earning
   year sets `start_rate` = need ÷ investments; later years compare need × `adjust`
   with that, cutting a `guardrail_step` above the upper band unless people[0] is
-  within `guardrail_stop_years` of `end_age`, raising one below the lower band).
-  `Projection.spend_adjust` records the factor; the two rules never stack.
+  within `guardrail_stop_years` of `end_age`, raising one below the lower band),
+  clipped to `guardrail_floor`..`guardrail_ceiling`, so a depleted portfolio can't
+  shrink the need until it "succeeds". `start_rate` waits for a year with
+  investments. The rate uses the base × stage need, so planned drops (slow-go,
+  dated changes) and inflows (downsizing, events) can trigger a raise; that's
+  intended. `Projection.spend_adjust` records the factor; the two rules never stack.
 - **Saved scenarios** (`plan.saved_scenarios`: `(name, {dotted.path: value})`):
   `inputs.apply_changes` sets scalar leaves by 0-based dotted path (as the GUI's
-  `data-path`), and `validate` checks every scenario applies and validates (errors
+  `data-path`) through dataclasses, tuples and dicts (contributions, education
+  costs); the GUI only addresses list items in `people` (an index into events or
+  kids would retarget once the list changes), and `validate` checks every scenario applies and validates (errors
   name `saved_scenarios[i]`). `scenarios.compare_saved` evaluates the plan and each
   one on the same seed; `cli.generate` passes the rows to the report. The GUI's
   "Save as scenario" diffs the draft against the saved plan's scalar fields (list
@@ -163,7 +169,8 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 - **Money events** (`plan.events`, `engine.event_flows(plan, year)`): money in is
   untaxed cash (source `"other"`), money out is added to the need, both while
   someone is alive; `kind="income"` is taxed like salary for its person while they
-  live (it joins `work["salary"]` in the tax parts, with CPP/EI premiums) but is not
+  live (it joins `work["salary"]` in the tax parts; its CPP/EI premiums are the extra
+  over that person's salary, no CPP from 70) but is not
   "working": no contributions, RRSP draws continue. Income without an end runs one
   year; cash repeats every `every` years to `until`.
 - **No CPP survivor reduction under 45.** Service Canada removed it in 2019; the
@@ -203,6 +210,8 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
     `GET /api/report/status`.
   - `GET /reports/<path>` serves files that stay inside `out_root`.
   - `POST /api/optimize/affordability` and `POST /api/optimize/benefits` run the
+  - `POST /api/optimize/drawdown` runs the RRSP-draw tool; `POST /api/compare` compares the
+    plan and its saved scenarios on the same futures.
     planning tools on the posted draft.
 - **Saving:** validate first (including balances), copy the old file to
   `plan.json.bak`, then write tmp + `os.replace`. The page posts back the **whole

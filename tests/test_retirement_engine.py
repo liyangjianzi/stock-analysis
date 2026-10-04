@@ -797,3 +797,40 @@ def test_no_guardrail_cuts_in_the_last_years():
 def test_the_default_rule_never_adjusts_spending():
     proj = run_flat(plan(accounts=[Account("A", "tfsa", 1_000_000.0)], base=40_000.0, end_age=70))
     assert (proj.spend_adjust == 1.0).all()
+
+
+# -- review fixes: events, premiums, guardrails ------------------------------------------
+
+def test_a_one_off_cost_is_paid_from_savings_even_without_salaries():
+    w = worker(salary=None, retire_age=50)
+    base = plan(people=[w], accounts=[Account("A", "tfsa", 500_000.0)], base=40_000.0, end_age=55)
+    with_car = run_flat(replace(base, events=(Event("Car", -100_000.0, year=2027),)))
+    without = run_flat(base)
+    assert without.investments[2, 0] - with_car.investments[2, 0] == pytest.approx(100_000.0, abs=1.0)
+    assert with_car.income["earned"][1, 0] == without.income["earned"][1, 0]
+
+
+def test_side_income_premiums_combine_with_the_salary_and_stop_cpp_at_70():
+    w = worker(salary=105_000.0)
+    job = Event("Consulting", 20_000.0, kind="income", year=2026, until=2026)
+    base = plan(people=[w], base=40_000.0, end_age=50)
+    with_job, without = run_flat(replace(base, events=(job,))), run_flat(base)
+    assert with_job.premiums[0, 0] == pytest.approx(without.premiums[0, 0])     # already past every maximum
+    old = plan(people=[person(age=72)], base=0.0, end_age=75)
+    p = run_flat(replace(old, events=(Event("Part-time", 30_000.0, kind="income", year=2026, until=2026),)))
+    assert p.premiums[0, 0] == pytest.approx(0.0163 * 30_000.0)                    # EI only at 72
+
+
+def test_guardrails_wait_for_a_portfolio_before_setting_the_starting_rate():
+    p = replace(plan(people=[person(age=60)], base=30_000.0, end_age=100, rule="guardrails"),
+                events=(Event("Inheritance", 500_000.0, year=2028),))
+    proj = run_flat(p)
+    assert (proj.spend_adjust[:, 0] <= 1.0 + 1e-9).all()                        # never the endless raise
+
+
+def test_guardrail_cuts_stop_at_the_floor_and_raises_at_the_ceiling():
+    down = _guarded(-0.25)
+    assert down.spend_adjust[:, 0].min() == pytest.approx(0.75, abs=0.081)       # 0.9^3 = 0.729 → held at 0.75
+    assert down.spend_adjust[:, 0].min() >= 0.75
+    up = _guarded(0.30)
+    assert up.spend_adjust[:, 0].max() <= 1.5 + 1e-9

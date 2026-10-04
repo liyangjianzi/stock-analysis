@@ -309,3 +309,45 @@ def test_saved_scenarios_parse_and_bad_ones_name_the_scenario():
         with pytest.raises(inputs.PlanError) as e:
             inputs.parse(d)
         assert e.value.field == "saved_scenarios[0]"
+
+
+@pytest.mark.parametrize("bad, field", [
+    ({"label": "x", "amount": None, "year": 2030}, "events[0].amount"),
+    ({"label": "x", "amount": "5", "year": 2030}, "events[0].amount"),
+    ({"label": "x", "amount": 1, "year": 2030.5}, "events[0].year"),
+    ({"label": "x", "amount": 1, "year": 2020}, "events[0].year"),                  # before the plan, once
+    ({"label": "x", "amount": 1, "year": 2030, "until_age": 40}, "events[0].until_age"),
+])
+def test_more_bad_events(bad, field):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["events"] = [bad]
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == field
+
+
+@pytest.mark.parametrize("changes", [{"people.0.retire_age": "62"}, {"spending": 5}, {"home.value": None}])
+def test_wrong_typed_scenario_values_are_plan_errors(changes):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "x", "changes": changes}]
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "saved_scenarios[0]"
+
+
+def test_scenarios_can_change_contributions_and_education_costs():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "More RRSP", "changes": {"people.0.contributions.rrsp": 15_000}}]
+    plan = inputs.parse(d)
+    v = inputs.apply_changes(plan, dict(plan.saved_scenarios[0][1]))
+    assert v.people[0].contributions["rrsp"] == 15_000 and plan.people[0].contributions["rrsp"] != 15_000
+
+
+def test_guardrail_floor_and_ceiling_validate():
+    s = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).spending
+    assert (s.guardrail_floor, s.guardrail_ceiling) == (0.75, 1.5)
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["spending"]["guardrail_floor"] = 1.2
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "spending.guardrail_floor"

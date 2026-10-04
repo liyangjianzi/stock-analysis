@@ -251,7 +251,10 @@ function spendingPanel() {
       ${slider("spending.guardrail_band", "Act when the withdrawal rate moves", {min: limits.guardrail_band[0], max: limits.guardrail_band[1], step: 0.01, unit: "%",
                help: "Above the starting rate by this much: cut. Below by this much: raise."})}
       ${slider("spending.guardrail_step", "…by a step of", {min: limits.guardrail_step[0], max: limits.guardrail_step[1], step: 0.01, unit: "%"})}
-      ${number("spending.guardrail_stop_years", "No cuts in the last years", {min: 0, step: 1})}` : `
+      ${number("spending.guardrail_stop_years", "No cuts in the last years", {min: 0, step: 1})}
+      ${slider("spending.guardrail_floor", "Never below", {min: limits.guardrail_floor[0], max: limits.guardrail_floor[1], step: 0.05, unit: "%",
+               help: "Share of the planned spending; a year that still can't be paid counts as short."})}
+      ${slider("spending.guardrail_ceiling", "Never above", {min: limits.guardrail_ceiling[0], max: limits.guardrail_ceiling[1], step: 0.05, unit: "%"})}` : `
       ${slider("spending.bad_market_cut", "Cut spending by", {min: 0, max: 0.3, step: 0.01, unit: "%"})}
       ${slider("spending.bad_market_trigger", "…when investments drop below", {min: 0.5, max: 1, step: 0.01, unit: "%",
                help: "Share of their value on retirement day."})}`}
@@ -480,14 +483,18 @@ function optimizePanel() {
     </div>`;
 }
 // Scenario changes are the scalar fields that differ from the saved plan, as dotted paths.
-// List edits (events, kids, dated changes) can't be expressed that way and are skipped.
+// List items (events, kids, dated changes) are skipped: an index would point at the wrong
+// item once the list changes. Only the fixed people list is addressed by index.
 const SKIP_KEYS = ["saved_scenarios", "holdings", "balances", "_readme", "scenarios"];
+const LIST_OK = p => p === "people";
 function diffScalars(a, b, path = "", out = {changes: {}, skipped: false}) {
   const isObj = v => v !== null && typeof v === "object";
   for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
     if (!path && SKIP_KEYS.includes(k)) continue;
     const p = path ? `${path}.${k}` : k, x = a?.[k], y = b?.[k];
-    if (isObj(x) && isObj(y) && Array.isArray(x) === Array.isArray(y) && (!Array.isArray(x) || x.length === y.length))
+    if (Array.isArray(x) && Array.isArray(y) && !LIST_OK(p)) {
+      if (JSON.stringify(x) !== JSON.stringify(y)) out.skipped = true;
+    } else if (isObj(x) && isObj(y) && Array.isArray(x) === Array.isArray(y) && (!Array.isArray(x) || x.length === y.length))
       diffScalars(x, y, p, out);
     else if (!isObj(x) && !isObj(y)) { if (x !== y && y !== undefined) out.changes[p] = y ?? null; }
     else out.skipped = true;
@@ -560,6 +567,7 @@ document.addEventListener("change", e => {
   if (el.name === "strategy") { draft.withdrawal.strategy = el.value; edited(); }
   if (el.name === "drawdown-goal") { goal = el.value; render(); }
   if (el.name === "spending-rule") { draft.spending.rule = el.value; edited(); }
+  if (el.dataset.path && /^events\.\d+\.kind$/.test(el.dataset.path)) edited();   // show or hide "Whose"
   if (el.id === "downsize") {
     const age0 = draft.people[0].age;
     draft.home.downsize_age = el.checked ? Math.max(age0, Math.min(65, draft.end_age - 1)) : null;
@@ -580,10 +588,11 @@ document.addEventListener("click", e => {
     document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "panel-" + activeTab));
   }
   if (el.id === "save-scenario") {
-    const name = ($("scenario-name").value || "").trim() || `Scenario ${(original.saved_scenarios || []).length + 1}`;
+    const name = ($("scenario-name").value || "").trim() || `Scenario ${(draft.saved_scenarios || []).length + 1}`;
     const d = diffScalars(original, draft);
     if (!Object.keys(d.changes).length) { alert("Change something first, then save it as a scenario."); return; }
-    if (d.skipped) alert("List edits (events, children, dated changes) aren't saved in scenarios; the rest is.");
+    if (d.skipped) alert("Edits to lists (events, children, dated changes) and added or removed sections " +
+                         "(home, education, ESPP) aren't saved in scenarios; the rest is.");
     const list = clone(draft.saved_scenarios || []);
     draft = clone(original);
     draft.saved_scenarios = [...list, {name, changes: d.changes}];

@@ -534,10 +534,11 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
         (("Guardrails", f"spending is cut {s.guardrail_step:.0%} when the withdrawal rate rises "
                         f"{s.guardrail_band:.0%} above where it began (not in the last "
                         f"{s.guardrail_stop_years} years) and raised {s.guardrail_step:.0%} when it falls "
-                        f"{s.guardrail_band:.0%} below")
+                        f"{s.guardrail_band:.0%} below, kept between {s.guardrail_floor:.0%} and "
+                        f"{s.guardrail_ceiling:.0%} of plan")
          if s.rule == "guardrails" else
          ("Bad-market rule", f"cut {s.bad_market_cut:.0%} when investments are below "
-                             f"{s.bad_market_trigger:.0%} of their value on retirement day")),
+                             f"{s.bad_market_trigger:.0%} of their value in the first year nobody earns")),
         ("Home", "none" if h is None else (
             f"{_money(h.value)}; downsize at {h.downsize_age} to {_money(h.new_value)}"
             if h.downsize_age is not None else f"{_money(h.value)}; never sold")),
