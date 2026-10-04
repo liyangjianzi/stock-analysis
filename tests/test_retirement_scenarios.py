@@ -70,3 +70,22 @@ def test_guardrails_are_offered_as_a_what_if_both_ways():
     assert "spend_guardrails" in keys
     guarded = replace(p, spending=replace(p.spending, rule="guardrails"))
     assert "spend_bad_market" in [k for k, _, _ in scenarios.variants(guarded)]
+
+
+# -- saved scenarios side by side ---------------------------------------------------------
+
+def test_apply_changes_sets_nested_fields(plan):
+    v = scenarios.apply_changes(plan, {"people.1.retire_age": 60, "spending.base": 70_000,
+                                       "home.downsize_age": None})
+    assert v.people[1].retire_age == 60 and v.people[0] == plan.people[0]
+    assert v.spending.base == 70_000 and v.home.downsize_age is None and plan.spending.base != 70_000
+
+
+def test_compare_saved_puts_the_plan_first_on_shared_futures(plan):
+    from dataclasses import replace
+    p = replace(plan, saved_scenarios=(("Spend less", {"spending.base": plan.spending.base * 0.8}),))
+    rows = scenarios.compare_saved(p, paths=20, seed=1)
+    assert [r.name for r in rows] == ["Current plan", "Spend less"]
+    s0, t0, l0 = scenarios.evaluate(p, paths=20, seed=1)
+    assert (rows[0].success, rows[0].lifetime_tax, rows[0].legacy) == (s0, t0, l0)
+    assert rows[1].spending == plan.spending.base * 0.8 and rows[1].success >= rows[0].success

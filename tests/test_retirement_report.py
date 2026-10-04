@@ -252,3 +252,11 @@ def test_guardrail_spending_range_is_reported(built):
                                today=dt.date(rules.TAX_YEAR, 6, 1))
     assert "Spending with guardrails" in html
     assert "Spending with guardrails" not in _html(built)
+
+
+def test_saved_scenarios_table_when_given(built):
+    rows = [scenarios.SavedRow("Current plan", 0.9, 1e6, 3e5, 80_000.0, (60, 58)),
+            scenarios.SavedRow("Retire at 62", 0.95, 1.2e6, 3.1e5, 80_000.0, (62, 58))]
+    html = _html(built, saved=rows)
+    assert "Saved scenarios" in html and "Retire at 62" in html and "62/58" in html
+    assert "Saved scenarios" not in _html(built)

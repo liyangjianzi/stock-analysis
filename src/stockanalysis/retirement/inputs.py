@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import MISSING, dataclass, field, fields, replace
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -211,6 +211,7 @@ class PlanInputs:
     nonreg_income: NonregIncome = NonregIncome()
     education: Education | None = None
     events: tuple = ()
+    saved_scenarios: tuple = ()     # (name, {dotted.path: value}) versions to compare side by side
     holdings: dict = field(default_factory=dict)
     scenarios: dict = field(default_factory=dict)
 
@@ -278,6 +279,8 @@ def _build(d: dict) -> PlanInputs:
             nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
             education=_education(d.get("education")),
             events=tuple(Event(**e) for e in d.get("events") or []),
+            saved_scenarios=tuple((str(s["name"]), dict(s.get("changes") or {}))
+                                  for s in d.get("saved_scenarios") or []),
             holdings=dict(d.get("holdings") or {}),
             scenarios=dict(d.get("scenarios") or {}),
         )
@@ -285,6 +288,29 @@ def _build(d: dict) -> PlanInputs:
         raise ValueError(f"plan.json is missing the field {e}") from e
     except TypeError as e:
         raise ValueError(f"plan.json has an unexpected or missing field: {e}") from e
+
+
+def _set(obj, keys: list, value):
+    key, rest = keys[0], keys[1:]
+    if isinstance(obj, tuple):
+        items = list(obj)
+        i = int(key)
+        items[i] = _set(items[i], rest, value) if rest else value
+        return tuple(items)
+    if not is_dataclass(obj) or key not in {f.name for f in fields(obj)}:
+        raise KeyError(key)
+    return replace(obj, **{key: _set(getattr(obj, key), rest, value) if rest else value})
+
+
+def apply_changes(plan: PlanInputs, changes: dict) -> PlanInputs:
+    """``plan`` with each ``{dotted.path: value}`` set, e.g. ``people.0.retire_age``
+    (0-based, as in the GUI). Raises KeyError / IndexError / ValueError on a bad path."""
+    for path, value in changes.items():
+        try:
+            plan = _set(plan, path.split("."), value)
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            raise KeyError(f"no field {path!r}") from e
+    return plan
 
 
 def _person(d: dict) -> Person:
@@ -498,6 +524,11 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"balances[{j}].balance", "must be a number, not negative")
         if a.cost is not None and not (np.isfinite(a.cost) and a.cost >= 0):
             _fail(f"balances[{j}].cost", "must be a number, not negative")
+    for j, (name, changes) in enumerate(plan.saved_scenarios):
+        try:
+            validate(apply_changes(replace(plan, saved_scenarios=()), changes))
+        except (PlanError, KeyError) as e:
+            _fail(f"saved_scenarios[{j}]", f"{name!r}: {e}")
     return plan
 
 

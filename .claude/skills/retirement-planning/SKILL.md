@@ -138,6 +138,8 @@ big decisions.
   `people[].rrsp_room`; without it, contributions above the room are wrongly counted
   as deductible. The Canada Child Benefit is modelled for `education.kids` under 18;
   `education.childcare` adds the child care deduction (lower earner, under 16).
+- To compare alternatives, save them as `saved_scenarios` (GUI: Compare tab) rather
+  than editing the plan back and forth; the report then shows them side by side.
 - Big one-off costs (cars, renovations, weddings), inheritances and part-time work
   go in `events` (see the package README); don't fake them with permanent spending
   changes.

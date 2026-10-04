@@ -153,6 +153,13 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   with that, cutting a `guardrail_step` above the upper band unless people[0] is
   within `guardrail_stop_years` of `end_age`, raising one below the lower band).
   `Projection.spend_adjust` records the factor; the two rules never stack.
+- **Saved scenarios** (`plan.saved_scenarios`: `(name, {dotted.path: value})`):
+  `inputs.apply_changes` sets scalar leaves by 0-based dotted path (as the GUI's
+  `data-path`), and `validate` checks every scenario applies and validates (errors
+  name `saved_scenarios[i]`). `scenarios.compare_saved` evaluates the plan and each
+  one on the same seed; `cli.generate` passes the rows to the report. The GUI's
+  "Save as scenario" diffs the draft against the saved plan's scalar fields (list
+  edits are skipped) and resets the draft to the plan.
 - **Money events** (`plan.events`, `engine.event_flows(plan, year)`): money in is
   untaxed cash (source `"other"`), money out is added to the need, both while
   someone is alive; `kind="income"` is taxed like salary for its person while they

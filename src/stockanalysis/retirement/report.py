@@ -38,6 +38,7 @@ COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "ccb": MUTED, "other": AXIS, "short
 DRAWN = ("registered", "tfsa", "nonreg")   # year-table sources that are withdrawals from an account
 SECTION_IDS = ("summary", "suggestions", "income", "money-left", "years", "assumptions")
 EDUCATION_ID = "education"          # only when the plan has children's education
+SAVED_ID = "saved"                  # only when the plan has saved scenarios
 
 _STYLE = f"""
 body{{margin:0;background:{PAGE};color:{INK};font-family:{FONT}}}
@@ -320,6 +321,20 @@ def _suggestions(baseline, suggestions) -> str:
             f"<table><thead>{head}</thead><tbody>{body}</tbody></table>")
 
 
+def _saved_table(rows) -> str:
+    """The plan and its saved scenarios side by side (same futures)."""
+    head = "".join(f"<th>{_esc(r.name)}</th>" for r in rows)
+    def line(label, cells):
+        return f"<tr><td>{_esc(label)}</td>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+    body = (line("Chance the money lasts", [f"{r.success:.0%}" for r in rows])
+            + line("Legacy (average future)", [_short(r.legacy) for r in rows])
+            + line("Lifetime tax (average future)", [_short(r.lifetime_tax) for r in rows])
+            + line("Spending (base, a year)", [_money(r.spending) for r in rows])
+            + line("Retire at", [_esc(age_label(r.retire_ages)) for r in rows]))
+    return ("<p class='note'>Each column reruns the plan with that scenario's changes on the same "
+            f"random futures.</p><table><thead><tr><th></th>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+
 def _education(plan, avg: Projection, bad: Projection) -> str:
     """Children's school in the average future: who pays, year by year."""
     s = avg.school
@@ -553,7 +568,8 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
 
 def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str,
                  holdings_source: str | None = None, previous: dict | None = None,
-                 today: dt.date | None = None, refunds: tuple | None = None) -> str:
+                 today: dt.date | None = None, refunds: tuple | None = None,
+                 saved: list | None = None) -> str:
     """The whole page as a string. ``previous`` is the last run's summary, for the change;
     ``refunds`` is ``refund.actual_refunds(...)`` for the refund check."""
     plan, sim, avg, bad = result.inputs, result.simulated, result.average, result.bad_luck
@@ -570,6 +586,7 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
     sections = [
         ("summary", "", top),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
+        *([(SAVED_ID, "Saved scenarios", _saved_table(saved))] if saved else []),
         *([(EDUCATION_ID, "Children's education", _education(plan, avg, bad))]
           if avg.education is not None else []),
         ("income", "Detailed income projection",

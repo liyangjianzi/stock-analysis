@@ -103,14 +103,14 @@ aside{position:sticky;top:70px;align-self:start}
 <script>
 "use strict";
 const TABS = [["people", "People"], ["spending", "Spending"], ["education", "Education"], ["home", "Home"],
-              ["investing", "Investing"], ["optimize", "Optimize"], ["advanced", "Advanced"]];
+              ["investing", "Investing"], ["optimize", "Optimize"], ["compare", "Compare"], ["advanced", "Advanced"]];
 const ACCOUNTS = [["pension", "Pension / LIRA"], ["rrsp", "RRSP"], ["tfsa", "TFSA"], ["nonreg", "Non-registered"]];
 let original = null, draft = null, saved = null, strategies = {}, limits = {}, reportPaths = null, lastPreview = null;
 let eduDefaults = {}, kidDefaults = {};   // from the server: inputs.defaults()
 let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
 let gen = 0, inflight = false, timer = null;
 // Optimizer results, with the draft they were computed for (shown as out of date after an edit).
-let target = 0.9, afford = null, benefits = null, drawdown = null, goal = "legacy";
+let target = 0.9, afford = null, benefits = null, drawdown = null, goal = "legacy", compared = null;
 
 // ---- helpers --------------------------------------------------------------
 const $ = id => document.getElementById(id);
@@ -479,8 +479,53 @@ function optimizePanel() {
         (about 15 seconds). Changing the goal re-picks instantly.</p>
     </div>`;
 }
+// Scenario changes are the scalar fields that differ from the saved plan, as dotted paths.
+// List edits (events, kids, dated changes) can't be expressed that way and are skipped.
+const SKIP_KEYS = ["saved_scenarios", "holdings", "balances", "_readme", "scenarios"];
+function diffScalars(a, b, path = "", out = {changes: {}, skipped: false}) {
+  const isObj = v => v !== null && typeof v === "object";
+  for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+    if (!path && SKIP_KEYS.includes(k)) continue;
+    const p = path ? `${path}.${k}` : k, x = a?.[k], y = b?.[k];
+    if (isObj(x) && isObj(y) && Array.isArray(x) === Array.isArray(y) && (!Array.isArray(x) || x.length === y.length))
+      diffScalars(x, y, p, out);
+    else if (!isObj(x) && !isObj(y)) { if (x !== y && y !== undefined) out.changes[p] = y ?? null; }
+    else out.skipped = true;
+  }
+  return out;
+}
+const staleNote = r => r && r.forDraft !== JSON.stringify(draft)
+  ? `<p class="note">You've edited the plan since; run it again for current numbers.</p>` : "";
+function comparePanel() {
+  const list = draft.saved_scenarios || [];
+  const items = list.map((sc, i) => `<tr><td><b>${esc(sc.name)}</b></td>
+      <td class="note">${Object.entries(sc.changes || {}).map(([k, v]) => `${esc(k)} = ${esc(String(v))}`).join("; ")}</td>
+      <td><button data-apply-scenario="${i}">Apply to plan</button></td>
+      <td><button class="x" data-remove-scenario="${i}" title="Remove">×</button></td></tr>`).join("");
+  let table = "";
+  if (compared && compared.error) table = `<p class="note" style="color:var(--bad)">${esc(compared.error)}</p>`;
+  else if (compared) {
+    const rows = compared.result.rows;
+    const line = (label, f) => `<tr><td>${label}</td>${rows.map(r => `<td>${f(r)}</td>`).join("")}</tr>`;
+    table = `<table class="ages"><tr><td></td>${rows.map(r => `<td><b>${esc(r.name)}</b></td>`).join("")}</tr>
+      ${line("Chance the money lasts", r => pct(r.success))}${line("Legacy (average future)", r => short(r.legacy))}
+      ${line("Lifetime tax", r => short(r.lifetime_tax))}${line("Spending a year", r => money(r.spending))}
+      ${line("Retire at", r => r.retire_ages.join("/"))}</table>`;
+  }
+  return `<div class="card"><h3>Saved scenarios</h3>
+      <table class="changes">${items || `<tr><td class="note">None yet.</td></tr>`}</table>
+      <div class="field"><label>Save your current edits as a scenario named</label>
+        <input type="text" id="scenario-name" placeholder="e.g. Retire at 50, downsize at 60">
+        <button id="save-scenario" style="margin-top:6px">Save as scenario</button></div>
+      <p class="note">This records what you changed (compared with the saved plan) as a named scenario and puts the
+        plan back as it was; <b>Save</b> keeps it in plan.json. Changes to lists (events, children, dated spending
+        changes) aren't captured.</p></div>
+    <div class="card"><h3>Side by side</h3>
+      <button id="run-compare">Compare the plan and every scenario</button>${table}${staleNote(compared)}
+      <p class="note">All on the same ${(lastPreview || saved || {paths: 1000}).paths.toLocaleString()} futures.</p></div>`;
+}
 const PANELS = {people: peoplePanel, spending: spendingPanel, education: educationPanel, home: homePanel,
-                investing: investingPanel, optimize: optimizePanel, advanced: advancedPanel};
+                investing: investingPanel, optimize: optimizePanel, compare: comparePanel, advanced: advancedPanel};
 
 function render() {
   $("tabs").innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === activeTab ? "on" : ""}">${l}</button>`).join("");
@@ -534,6 +579,23 @@ document.addEventListener("click", e => {
     document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === activeTab));
     document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "panel-" + activeTab));
   }
+  if (el.id === "save-scenario") {
+    const name = ($("scenario-name").value || "").trim() || `Scenario ${(original.saved_scenarios || []).length + 1}`;
+    const d = diffScalars(original, draft);
+    if (!Object.keys(d.changes).length) { alert("Change something first, then save it as a scenario."); return; }
+    if (d.skipped) alert("List edits (events, children, dated changes) aren't saved in scenarios; the rest is.");
+    const list = clone(draft.saved_scenarios || []);
+    draft = clone(original);
+    draft.saved_scenarios = [...list, {name, changes: d.changes}];
+    edited();
+  }
+  if (el.dataset.applyScenario != null) {
+    Object.entries(draft.saved_scenarios[Number(el.dataset.applyScenario)].changes || {})
+      .forEach(([path, v]) => set(draft, path, v));
+    edited();
+  }
+  if (el.dataset.removeScenario != null) { draft.saved_scenarios.splice(Number(el.dataset.removeScenario), 1); edited(); }
+  if (el.id === "run-compare") runOptimizer(el, "/api/compare", r => compared = r, {});
   if (el.id === "add-event") {
     draft.events = draft.events || [];
     draft.events.push({label: "", kind: "cash", amount: -10000, year: draft.start_year + 1});
@@ -569,7 +631,8 @@ async function runOptimizer(button, kind, keep, extra) {
   button.disabled = true;
   button.innerHTML = `<span class="spin"></span>Searching…`;
   const forDraft = JSON.stringify(draft);
-  try { keep({result: await api("/api/optimize/" + kind, {plan: draft, ...extra}), forDraft}); }
+  const url = kind.startsWith("/") ? kind : "/api/optimize/" + kind;
+  try { keep({result: await api(url, {plan: draft, ...extra}), forDraft}); }
   catch (err) { keep({error: err.message, forDraft}); }
   render();
 }

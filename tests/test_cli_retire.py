@@ -92,3 +92,15 @@ def test_optimize_prints_the_answers_without_a_report(tmp_path, monkeypatch, cap
     assert "Partner A: CPP" in printed and "Expected legacy (over lifespans)" in printed
     assert "RRSP draw for most legacy" in printed and "least lifetime tax" in printed
     assert not out.exists()
+
+
+def test_the_report_compares_saved_scenarios(tmp_path, monkeypatch):
+    monkeypatch.setattr(holdings, "load", lambda *a, **k: pytest.fail("holdings must not be read"))
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "Spend 10% less", "changes": {"spending.base": 72_000}}]
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(d))
+    out = tmp_path / "out"
+    assert cli.main(["retire", "--inputs", str(path), "--out", str(out), *FAST]) == 0
+    [run_dir] = list(out.iterdir())
+    assert "Spend 10% less" in (run_dir / "retirement_report.html").read_text()

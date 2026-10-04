@@ -171,6 +171,11 @@ contributed before the year the child turns 15).
   under 18, on last year's net family income, as its own income bar. Set
   `education.childcare` (yearly child care already in your spending) to get the
   child care deduction, claimed by the lower earner while a child is under 16.
+- **Saved scenarios** (`saved_scenarios` in plan.json; GUI: Compare tab): named
+  versions that store only the fields they change as dotted paths, e.g.
+  `{"name": "Retire at 50", "changes": {"people.0.retire_age": 50}}`. The report and
+  the Compare tab show the plan and every scenario side by side (chance the money
+  lasts, legacy, lifetime tax, spending, retirement ages) on the same futures.
 - **Guardrail spending** (`spending.rule: "guardrails"`; GUI: Spending tab, "When
   markets move"): instead of one cut in a bad market, once nobody earns the plan
   compares each year's withdrawal rate with the first one; 20% above it spending is
@@ -234,11 +239,8 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 
 ## Future improvements
 
-Re-planned on 2026-10-03, in build order (the owner's choice):
-
-1. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
-   50, downsize at 60", each with its gauge and legacy, on the same futures.
-Skipped by the owner (2026-10-04): historical replay.
+Everything planned on 2026-10-03 is built; historical replay was skipped by the
+owner (2026-10-04). Add new ideas here.
 
 Treat results as estimates, not guarantees. Check the real CPP statement, and see
 a fee-only planner before big decisions.

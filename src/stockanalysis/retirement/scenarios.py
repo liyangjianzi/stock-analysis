@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from . import engine
-from .inputs import STRATEGIES, STRATEGY_LABELS, PlanInputs
+from .inputs import STRATEGIES, STRATEGY_LABELS, PlanInputs, apply_changes  # noqa: F401
 
 
 @dataclass(frozen=True)
@@ -80,3 +80,27 @@ def rank(plan: PlanInputs, *, paths: int, seed: int) -> tuple:
         ranked.append(Suggestion(key, label, s, s - s0, t, legacy))
     ranked.sort(key=lambda x: (-x.delta, -x.legacy))
     return baseline, ranked
+
+
+# -- saved scenarios side by side ------------------------------------------------------
+
+@dataclass(frozen=True)
+class SavedRow:
+    name: str
+    success: float                  # chance the money lasts, shared futures
+    legacy: float                   # average future
+    lifetime_tax: float             # average future
+    spending: float                 # base yearly spending
+    retire_ages: tuple
+
+
+def compare_saved(plan: PlanInputs, *, paths: int, seed: int) -> list:
+    """The plan and each of ``plan.saved_scenarios``, on the same seed (so the same
+    random futures), the plan first."""
+    base = replace(plan, saved_scenarios=())
+    rows = []
+    for name, changes in (("Current plan", {}), *plan.saved_scenarios):
+        v = apply_changes(base, changes)
+        s, t, legacy = evaluate(v, paths=paths, seed=seed)
+        rows.append(SavedRow(name, s, legacy, t, v.spending.base, tuple(p.retire_age for p in v.people)))
+    return rows

@@ -214,3 +214,12 @@ def test_page_edits_money_events(server):
 def test_page_switches_the_spending_rule(server):
     page = _req(server, "GET", "/")[1].decode()
     assert 'name="spending-rule"' in page and "spending.guardrail_band" in page
+
+
+def test_compare_endpoint_and_tab(server):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "Spend less", "changes": {"spending.base": 70_000}}]
+    status, r = _req(server, "POST", "/api/compare", {"plan": d})
+    assert status == 200 and [x["name"] for x in r["rows"]] == ["Current plan", "Spend less"]
+    page = _req(server, "GET", "/")[1].decode()
+    assert '"compare"' in page and 'id="save-scenario"' in page and "data-apply-scenario" in page

@@ -296,3 +296,16 @@ def test_guardrail_settings_default_and_validate():
         with pytest.raises(inputs.PlanError) as e:
             inputs.parse(d)
         assert e.value.field == f"spending.{key}"
+
+
+# -- saved scenarios ------------------------------------------------------------------
+
+def test_saved_scenarios_parse_and_bad_ones_name_the_scenario():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "Retire later", "changes": {"people.0.retire_age": 62}}]
+    assert inputs.parse(d).saved_scenarios == (("Retire later", {"people.0.retire_age": 62}),)
+    for changes in ({"people.0.nope": 1}, {"people.0.retire_age": 10}):    # no such field / invalid
+        d["saved_scenarios"] = [{"name": "Bad", "changes": changes}]
+        with pytest.raises(inputs.PlanError) as e:
+            inputs.parse(d)
+        assert e.value.field == "saved_scenarios[0]"
