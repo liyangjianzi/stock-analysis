@@ -222,17 +222,20 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
 
 ## Future improvements
 
-Considered on 2026-09-30, after the planning tools; not built yet, roughly in
-order of value:
+Re-planned on 2026-10-03, in build order (the owner's choice):
 
-1. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
-   bad-market cut.
-2. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
-   50, downsize at 60", each with its gauge and legacy.
-3. **Historical replay.** Run the plan through actual Canadian/US return
+1. **Clean-up:** CPP survivor reductions under 45, rejecting ages of 111+, leftover
+   RESP money to the living parent, the bad-market cut following deaths, one-person
+   lifespan wording, median-age rounding.
+2. **One-time money events.** One-off amounts in or out (an inheritance, a
+   renovation), repeating ones (a car every 10 years) and temporary income
+   (part-time work, taxed like salary).
+3. **Guardrail spending rules** (Guyton-Klinger style) in place of the single
+   bad-market cut, with the report showing how much spending varies.
+4. **Saved scenarios side by side** in the GUI, e.g. "Retire at 48" vs "Retire at
+   50, downsize at 60", each with its gauge and legacy, on the same futures.
+5. **Historical replay.** Run the plan through actual Canadian/US return
    sequences (1970→) beside the random futures.
-4. **One-time money events.** Inheritances, a car every 10 years, part-time work
-   income. (Education is modelled; see above.)
 
 Treat results as estimates, not guarantees. Check the real CPP statement, and see
 a fee-only planner before big decisions.
