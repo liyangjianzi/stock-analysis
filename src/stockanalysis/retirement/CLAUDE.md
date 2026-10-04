@@ -210,9 +210,9 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
     `GET /api/report/status`.
   - `GET /reports/<path>` serves files that stay inside `out_root`.
   - `POST /api/optimize/affordability` and `POST /api/optimize/benefits` run the
+    planning tools on the posted draft.
   - `POST /api/optimize/drawdown` runs the RRSP-draw tool; `POST /api/compare` compares the
     plan and its saved scenarios on the same futures.
-    planning tools on the posted draft.
 - **Saving:** validate first (including balances), copy the old file to
   `plan.json.bak`, then write tmp + `os.replace`. The page posts back the **whole
   original dict** with only known fields changed, so keys it doesn't edit
