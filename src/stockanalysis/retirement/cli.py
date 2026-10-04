@@ -90,7 +90,7 @@ def dispatch(args) -> int:
         from . import gui
         gui.serve(path, port=args.port, open_browser=not args.no_browser,
                   holdings_path=args.holdings, out_root=args.out,
-                  report_paths=args.paths, scenario_paths=args.scenario_paths)
+                  report_paths=args.paths, scenario_paths=args.scenario_paths, bank=args.bank)
         return 0
     plan, source = _with_balances(inputs.load_inputs(path), args.holdings)
     if args.optimize:

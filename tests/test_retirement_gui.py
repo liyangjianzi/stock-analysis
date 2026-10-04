@@ -144,9 +144,11 @@ def test_gui_flag_hands_off_to_serve(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(gui, "serve", lambda path, **kw: seen.update(path=path, **kw))
     plan = tmp_path / "plan.json"
-    assert cli.main(["retire", "--gui", "--inputs", str(plan), "--port", "9001", "--no-browser"]) == 0
+    assert cli.main(["retire", "--gui", "--inputs", str(plan), "--port", "9001", "--no-browser",
+                     "--bank", "/nonexistent-bank"]) == 0
     assert seen == {"path": plan, "port": 9001, "open_browser": False, "holdings_path": None,
-                    "out_root": None, "report_paths": None, "scenario_paths": None}
+                    "out_root": None, "report_paths": None, "scenario_paths": None,
+                    "bank": "/nonexistent-bank"}
 
 
 def test_serve_fails_fast_without_a_plan(tmp_path):

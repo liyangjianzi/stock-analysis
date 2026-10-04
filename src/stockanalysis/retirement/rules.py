@@ -142,8 +142,6 @@ STUDENT_GRANT = Rule({
                    7: (101_797, 161_321)},
 }, 2026, _STUDENT_GRANT)
 
-# Up to 50% of eligible pension income (RRIF/LIF payments when the transferor
-# is 65+, NOT plain RRSP withdrawals) can be allocated to a spouse.
 _CCB = ("https://www.canada.ca/en/revenue-agency/services/child-family-benefits/"
         "canada-child-benefit-overview/canada-child-benefit-we-calculate-your-ccb.html")
 _RRSP_LIMITS = ("https://www.canada.ca/en/revenue-agency/services/tax/registered-plans-administrators/"
@@ -179,6 +177,8 @@ PAYROLL = {
     "ei": Rule({"rate": 0.0163, "max_insurable": 68_900}, 2026, _EI_PREMIUMS),
 }
 
+# Up to 50% of eligible pension income (RRIF/LIF payments when the transferor
+# is 65+, NOT plain RRSP withdrawals) can be allocated to a spouse.
 PENSION_SPLIT = Rule({"max_share": 0.5, "min_age": 65}, 2026, _SPLIT)
 
 OAS = {

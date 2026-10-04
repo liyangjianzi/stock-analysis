@@ -81,6 +81,9 @@ def test_optimize_prints_the_answers_without_a_report(tmp_path, monkeypatch, cap
     small = optimize.best_benefit_ages
     monkeypatch.setattr(optimize, "best_benefit_ages",
                         lambda plan, **kw: small(plan, cpp_ages=(65, 70), oas_ages=(65, 70), workers=1, **kw))
+    draw = optimize.rrsp_drawdown                      # a small grid, no process pool
+    monkeypatch.setattr(optimize, "rrsp_drawdown",
+                        lambda plan, **kw: draw(plan, targets=(0, 30_000), workers=1, **kw))
     out = tmp_path / "out"
     assert cli.main(["retire", "--inputs", str(_plan(tmp_path)), "--out", str(out),
                      "--optimize", "--target", "80", "--paths", "40"]) == 0

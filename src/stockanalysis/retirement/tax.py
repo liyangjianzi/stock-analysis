@@ -94,7 +94,7 @@ def child_benefit(income, under_6: int, six_to_17: int) -> np.ndarray:
     over2 = np.maximum(inc - c["threshold_2"], 0.0)
     cut = np.where(inc > c["threshold_2"], base2 + rate2 * over2, rate1 * over1)
     full = under_6 * c["under_6"] + six_to_17 * c["6_to_17"]
-    return np.maximum(full - np.nan_to_num(cut, posinf=np.inf), 0.0)
+    return np.maximum(full - np.nan_to_num(cut, nan=np.inf, posinf=np.inf), 0.0)   # unknown: none
 
 
 def childcare_deduction(expenses, kid_ages, earned) -> np.ndarray:

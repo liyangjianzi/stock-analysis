@@ -230,7 +230,8 @@ def lifespans(result: PlanResult) -> dict:
     years a survivor lives alone, over the simulated futures."""
     plan, d = result.inputs, result.simulated.death_ages
     age0 = np.array([[p.age] for p in plan.people])
-    out = {"people": [{"name": p.name, "median_age_at_death": int(np.median(d[i])) - 1}
+    out = {"people": [{"name": p.name,      # the upper median, as mortality.median_death_age
+                       "median_age_at_death": int(np.quantile(d[i], 0.5, method="higher")) - 1}
                       for i, p in enumerate(plan.people)],
            "reach_95": float((d > 95).any(axis=0).mean()),
            "alone_years": None}
@@ -387,7 +388,7 @@ def _year_table(proj: Projection) -> str:
                     f"<td class='stick s2'>{_esc(ages)}</td>{cells}</tr>")
     return ("<p class='note'>C$, today's dollars; k = thousand, M = million, – = none. Hover a cell "
             "for the exact amount. Columns that are zero every year are hidden; short years are "
-            "shaded red; † = has died (the survivor's years follow). Tax includes CPP/EI premiums while working; Saved includes your planned contributions.</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
+            "shaded red; † = has died (the survivor's years follow). Tax includes CPP/EI premiums while working; Saved includes your planned contributions (not an employer's pension match).</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
             + "".join(rows) + "</tbody></table></div>")
 
 
@@ -422,9 +423,10 @@ def _refund_check(plan, refunds) -> str:
     rows += "".join(f"<tr><td>Deposited {_esc(d)} (bank)</td><td>{_money(a)}</td></tr>" for d, a in deposits)
     rows += (f"<tr class='base'><td>Model vs bank</td><td>{_money(total)} vs {_money(actual)}</td></tr>")
     gap = actual - total
-    note = ("The model's refund comes from RRSP contributions alone. "
+    note = ("The model's refund comes from this year's RRSP contributions and child care; the bank's "
+            "deposits are last spring's, for the previous tax year, so expect some difference. "
             + (f"The bank shows {_money(gap)} more: likely a deduction or credit the plan doesn't "
-               "know about (childcare, donations, over-withholding), so the plan's tax may be a "
+               "know about (donations, medical, over-withholding), so the plan's tax may be a "
                "little high." if gap > 0.1 * max(total, 1.0) else
                f"The bank shows {_money(-gap)} less: withholding may already allow for the RRSP, or "
                "a contribution was smaller than planned." if gap < -0.1 * max(total, 1.0) else
@@ -472,7 +474,8 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
                               "died (care costs stay whole)" if len(plan.people) == 2 else "n/a"),
         ("Lifespans", "drawn per future from the Statistics Canada Alberta life table "
                       "(2021–2023) with the CPP actuarial report's mortality improvement; "
-                      f"the average future assumes the median first death and the survivor to {plan.end_age}"),
+                      + (f"the average future assumes the median first death and the survivor to {plan.end_age}"
+                         if len(plan.people) == 2 else f"the average future lives to {plan.end_age}")),
         ("Non-registered payouts",
          "none" if not ni.total else
          f"{ni.eligible_dividends:.1%} Canadian dividends, {ni.foreign_dividends:.1%} foreign "

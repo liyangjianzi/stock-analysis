@@ -469,6 +469,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
     balances = {k: np.zeros((T + 1, N)) for k in ACCOUNTS}
     home_value = np.zeros(T + 1)
     retire_ref, retire_step, max_resid, downsized = None, T, 0.0, False
+    bad_ref = np.full(N, np.nan)            # investments the first year nobody earns, per future
     school = education.schedule(plan, T)
     edu_out = resp_rec = csg_rec = None
     # Last year's family income (line 15000), for the student grant. A missing salary
@@ -477,7 +478,14 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
     salaries = [p.salary if p.salary is not None else np.inf for p in people]
     workers = [s for s, p in zip(salaries, people) if p.age < p.retire_age]
     last_income = np.full(N, sum(workers) if workers else np.inf)
-    last_net = last_income.copy()            # net income (after RRSP, pension, child care): the CCB's test
+    # Net income (after RRSP, pension, child care) is the CCB's test; before the plan starts
+    # it is estimated as the workers' salaries less their planned RRSP and own pension.
+    # (The CCB really runs July-June on the year before; counted per calendar year here.)
+    earners = [p for p in people if p.age < p.retire_age]
+    known = bool(earners) and all(p.salary is not None for p in earners)
+    last_net = np.full(N, sum(p.salary - p.contributions.get("rrsp", 0.0)
+                              - own_pension(p, p.contributions.get("pension", 0.0))
+                              for p in earners) if known else np.inf)
     if school is not None:
         edu_out, resp_rec, csg_rec = np.zeros((T, N)), np.zeros((T + 1, N)), np.zeros((T, N))
         family = P + len(plan.education.kids)
@@ -537,6 +545,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if home is not None:
             home_value[t] = home.new_value if downsized else home.value
         uncovered, resp_tax, aip_income = np.zeros(N), np.zeros(N), np.zeros(N)
+        aip_share = np.zeros((P, N))
         if school is not None:
             cost_t = np.full(N, school.cost[t])
             if plan.education.student_grant and school.students[t]:
@@ -549,19 +558,26 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 # their income (plus the flat extra tax): on top of salary while they
                 # work, otherwise in the household tax below.
                 back, growth = leftover
+                # It goes to people[0], or to the partner once people[0] has died.
+                aip_share = (np.array([alive[0], ~alive[0]], dtype=float) if P == 2
+                             else np.ones((1, N)))
                 to_rrsp = (np.minimum(growth, aip["rrsp_transfer_max"])
-                           if plan.education.aip_to_rrsp else 0.0)
+                           if plan.education.aip_to_rrsp else np.zeros(N))
+                room_left = np.where(aip_share > 0, rrsp_room, 0.0).sum(axis=0)
+                to_rrsp = np.minimum(to_rrsp, room_left)                          # within RRSP room
                 taxable = growth - to_rrsp
                 resp_tax = aip["extra_tax"] * taxable
-                if planned[0]:
-                    resp_tax = resp_tax + tax.extra_tax(people[0].salary or 0.0, ordinary=taxable,
-                                                        age=ages[0], province=prov)
-                else:
-                    aip_income = taxable
+                works = (aip_share * working).sum(axis=0) > 0
+                salary = sum(aip_share[i] * (p.salary or 0.0) for i, p in enumerate(people))
+                resp_tax = resp_tax + np.where(works, tax.extra_tax(salary, ordinary=taxable, age=ages[0],
+                                                                    province=prov), 0.0)
+                aip_income = np.where(works, 0.0, taxable)        # a retiree's: in the household tax
                 resp_tax = np.minimum(resp_tax, taxable)
-                bal["rrsp"][0] += to_rrsp
-                bal["nonreg"][0] += back + taxable - resp_tax
-                cost[0] += back + taxable - resp_tax
+                for i in range(P):
+                    bal["rrsp"][i] += aip_share[i] * to_rrsp
+                    rrsp_room[i] -= aip_share[i] * to_rrsp
+                    bal["nonreg"][i] += aip_share[i] * (back + taxable - resp_tax)
+                    cost[i] += aip_share[i] * (back + taxable - resp_tax)
             resp_rec[t] = resp_bal
             edu_out[t] = school.contribution[t] + uncovered
         room_rec[t] = room.sum(axis=0)
@@ -571,6 +587,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         gains_rec[t] = np.maximum(bal["nonreg"] - cost, 0.0).sum(axis=0)
         if not anyone_working and retire_ref is None:
             retire_ref, retire_step = invest[t].copy(), t
+        bad_ref = np.where(np.isnan(bad_ref) & ~earning & household, invest[t], bad_ref)
         pension_jan1 = bal["pension"].copy()
 
         # 2. The household's after-tax spending need.
@@ -578,9 +595,9 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if downsized:
             level -= (home.property_tax + home.insurance) * (1 - home.new_value / home.value)
         need = np.full(N, max(level, 0.0) * stage_share(spend, ages[0]))
-        if not anyone_working:
-            need = np.where(invest[t] < spend.bad_market_trigger * retire_ref,
-                            need * (1 - spend.bad_market_cut), need)
+        # The bad-market cut, once nobody earns (a worker's death counts, not just the plan).
+        need = np.where(~earning & (invest[t] < spend.bad_market_trigger * bad_ref),
+                        need * (1 - spend.bad_market_cut), need)
         if P == 2:
             need = np.where(alive.sum(axis=0) == 1, need * spend.survivor_share, need)
         if ages[0] >= spend.no_go_age:
@@ -650,7 +667,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                                                    cash_need + tax_est - guaranteed, base_taxable)
                 kept = (bal["nonreg"] - draw["nonreg"]) * retired       # a retiree's payouts
                 other = y_other * kept
-                other[0] = other[0] + aip_income                        # leftover RESP growth
+                other = other + aip_share * aip_income                  # leftover RESP growth
                 parts = _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
                                (y_eligible * kept, other), pay)
                 new_tax = tax.household_tax(parts, share, prov)

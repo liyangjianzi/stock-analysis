@@ -240,3 +240,14 @@ def test_rrsp_room_and_childcare_are_optional_and_not_negative():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "education.childcare"
+
+
+def test_ages_past_the_life_table_are_rejected():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["end_age"] = 115
+    d["home"] = None
+    d["people"][0]["age"] = 111
+    d["people"][0]["retire_age"] = 111
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].age"

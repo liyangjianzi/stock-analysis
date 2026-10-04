@@ -327,6 +327,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
         f = f"people[{i}]"
         if not 18 <= p.age < plan.end_age:
             _fail(f"{f}.age", f"{p.age} must be 18 or more and below end_age {plan.end_age}")
+        if p.age >= mortality.OMEGA - 1:
+            _fail(f"{f}.age", f"{p.age} is past the life table (ages up to {mortality.OMEGA - 2})")
         if p.sex is not None and p.sex not in mortality.SEXES:
             _fail(f"{f}.sex", f"{p.sex!r} is not one of {mortality.SEXES} (or leave it out)")
         if p.retire_age < p.age:

@@ -178,3 +178,7 @@ def test_salary_gets_payroll_credits_the_enhanced_cpp_deduction_and_the_employme
 def test_deductions_lower_net_income():
     with_ded = float(tax.income_tax(ordinary=80_000, deductions=10_000, age=40))
     assert with_ded == pytest.approx(float(tax.income_tax(ordinary=70_000, age=40)))
+
+
+def test_unknown_income_means_no_child_benefit():
+    assert float(tax.child_benefit(np.nan, 0, 1)) == 0.0

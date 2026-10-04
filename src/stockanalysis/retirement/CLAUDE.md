@@ -142,7 +142,13 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   with `preview_paths` and the plan's seed.
 - **An unsorted holdings account stops the run.** It never drops silently.
 - **Household events key on people[0]'s age.** That covers spending stages and
-  `home.downsize_age`.
+  `home.downsize_age`. Money events follow whoever is alive: leftover RESP money goes
+  to people[0], or to the partner once people[0] has died (within their RRSP room),
+  and the bad-market cut starts the first year nobody earns in each future
+  (`bad_ref`), a worker's death included. `retire_ref` / `retire_step` stay on the
+  plan's calendar (they feed "investments at retirement").
+- **No CPP survivor reduction under 45.** Service Canada removed it in 2019; the
+  survivor's pension depends only on the survivor being under or over 65.
 
 ## Planning tools (`optimize.py`)
 

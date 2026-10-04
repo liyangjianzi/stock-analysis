@@ -664,3 +664,56 @@ def test_a_workers_withdrawals_are_taxed_on_top_of_the_salary():
     extra = float(tax.income_tax(salary=100_000.0, gains=drawn, age=40) - tax.income_tax(salary=100_000.0, age=40))
     pay = float(tax.income_tax(salary=100_000.0, age=40)) + float(tax.payroll_premiums(100_000.0))
     assert proj.tax[0, 0] == pytest.approx(pay + extra, abs=2.0)
+
+
+# -- clean-up: deaths and the household's events ---------------------------------------
+
+def _resp_plan(order):
+    """A retired couple; A has a RRIF, B nothing; one child finishing school in year 2
+    with RESP growth left over."""
+    a = person(id="A", name="A", age=70, retire_age=60, rrif_start_age=65)
+    b = person(id="B", name="B", age=70, retire_age=60, rrif_start_age=65)
+    people = [a, b] if order == "AB" else [b, a]
+    kid = Kid(name="K", age=19)
+    p = plan(people=people, accounts=[Account("B", "rrsp", 600_000.0), Account("B", "tfsa", 300_000.0)],
+             base=40_000.0, end_age=76)
+    return replace(p, education=Education(kids=(kid,), resp_balance=150_000.0, contributed=20_000.0,
+                                          grants=0.0, contribute=False, student_grant=False))
+
+
+def test_leftover_resp_money_goes_to_the_living_parent_whatever_the_order():
+    # A dies after year 0 in both orders; the leftover growth must be taxed as B's income.
+    ab = _resp_plan("AB")
+    ba = _resp_plan("BA")
+    d_ab = np.array([[71], [90]])          # (A, B)
+    d_ba = np.array([[90], [71]])          # (B, A)
+    one = engine.simulate(ab, np.zeros((engine.steps(ab), 1)), d_ab)
+    two = engine.simulate(ba, np.zeros((engine.steps(ba), 1)), d_ba)
+    end = ab.education and one.school.end_step
+    assert one.tax[end, 0] == pytest.approx(two.tax[end, 0], abs=1.0)
+
+
+def test_the_bad_market_cut_starts_when_the_only_worker_dies():
+    a = person(id="A", name="A", age=50, retire_age=60)                 # works, dies after year 0
+    b = person(id="B", name="B", age=62, retire_age=60)
+    p = plan(people=[a, b], accounts=[Account("B", "tfsa", 2_000_000.0)], base=40_000.0, end_age=70,
+             bad_market_cut=0.10, bad_market_trigger=0.80)
+    returns = np.full((engine.steps(p), 1), -0.30)
+    returns[0] = 0.0
+    proj = engine.simulate(p, returns, np.array([[51], [90]]))
+    assert proj.need[2, 0] == pytest.approx(40_000.0 * 0.70 * 0.90)     # survivor share, then the cut
+
+
+def test_year_0_child_benefit_estimates_last_years_net_income():
+    w = worker(salary=100_000.0, contributions={"rrsp": 20_000.0})
+    proj = run_flat(with_kids(plan(people=[w], base=40_000.0, end_age=50), ages=(10,)))
+    assert proj.income["ccb"][0, 0] == pytest.approx(float(tax.child_benefit(80_000.0, 0, 1)))
+
+
+def test_leftover_resp_growth_into_the_rrsp_respects_rrsp_room():
+    p = plan(people=[person(age=60, rrsp_room=10_000.0)], base=0.0, end_age=62)
+    p = replace(p, education=Education(kids=(Kid(name="K", age=21),), resp_balance=150_000.0,
+                                       contributed=20_000.0, grants=0.0, contribute=False,
+                                       student_grant=False))
+    proj = run_flat(p)
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(10_000.0)

@@ -316,12 +316,13 @@ class PlannerServer(ThreadingHTTPServer):
 
 
 def serve(plan_path, *, port: int = 8765, open_browser: bool = True, holdings_path=None,
-          out_root=None, report_paths: int | None = None, scenario_paths: int | None = None) -> None:
+          out_root=None, report_paths: int | None = None, scenario_paths: int | None = None,
+          bank=None) -> None:
     """Run the planner page until Ctrl-C. ``report_paths`` / ``scenario_paths`` are the
     CLI's ``--paths`` / ``--scenario-paths`` for the report button."""
     app = PlannerApp(plan_path, holdings_path=holdings_path, out_root=out_root,
                      report_paths=report_paths, scenario_paths=scenario_paths,
-                     bank=config.DEFAULT_RETIREMENT_BANK)
+                     bank=bank or config.DEFAULT_RETIREMENT_BANK)
     app.read_raw()                      # a missing plan fails here, not in the browser
     server = PlannerServer(app, port)
     print(f"Retirement planner: {server.url}  (editing {app.plan_path}; Ctrl-C to stop)")

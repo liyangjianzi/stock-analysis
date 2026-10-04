@@ -210,3 +210,24 @@ def test_child_benefit_shows_in_the_year_table_when_paid(built):
     _, result, *_ = built
     avg = result.average
     assert ("Child benefit" in report._year_table(avg)) == bool((avg.income["ccb"][:, 0] > 0.5).any())
+
+
+def test_median_age_at_death_rounds_a_half_up_like_the_engine(built):
+    from types import SimpleNamespace
+    plan = built[0]
+    fake = SimpleNamespace(inputs=replace(plan, people=plan.people[:1]),
+                           simulated=SimpleNamespace(death_ages=np.array([[88, 89]])))
+    assert report.lifespans(fake)["people"][0]["median_age_at_death"] == 88
+
+
+def test_one_person_lifespan_text_has_no_survivor(built):
+    plan, result, *_ = built
+    single = replace(plan, people=plan.people[:1])
+    html = report._assumptions(single, result, None)
+    assert "survivor to" not in html and "drawn per future" in html
+
+
+def test_refund_note_counts_child_care_and_names_the_tax_year(built):
+    plan = built[0]
+    note = report._refund_check(plan, (99_000.0, [("2026-03-23", 99_000.0)]))
+    assert "previous tax year" in note and "childcare" not in note.replace("child care", "")
