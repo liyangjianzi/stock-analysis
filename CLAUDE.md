@@ -39,7 +39,7 @@ Reads the owner's holdings (never committed — see Conventions; `--holdings PAT
 stock-analysis retire              # -> retirement/output/<ts>/retirement_report.html + summary.json
 stock-analysis retire --gui        # local page that edits retirement/plan.json, with a report button
 ```
-A separate Canadian retirement planner (`src/stockanalysis/retirement/`), not part of `pipeline.run`. **Read `src/stockanalysis/retirement/CLAUDE.md` before working there**: it covers the module map, the Canadian rule conventions, the GUI and the privacy rules. User docs are in its `README.md`; the command workflow is the skill `.claude/skills/retirement-planning/SKILL.md`. The owner's plan and reports live only in the gitignored root `retirement/` folder.
+A separate Canadian retirement planner (`src/stockanalysis/retirement/`), not part of `pipeline.run`: lifespans and survivor years, salary-driven working years (ESPP, pension match, RRSP room), the Canada Child Benefit, money events, guardrail spending, saved scenarios, a tax-refund check and planning tools. **Read `src/stockanalysis/retirement/CLAUDE.md` before working there**: it covers the module map, the Canadian rule conventions, the GUI and the privacy rules. User docs are in its `README.md`; the command workflow is the skill `.claude/skills/retirement-planning/SKILL.md`. The owner's plan, bank CSVs (`retirement/bank/`) and reports live only in the gitignored root `retirement/` folder; no test may read them.
 
 ### Broad-universe research (offline after one fetch)
 ```bash
@@ -103,7 +103,7 @@ Both came back no-edge. A 2026-09-27 study, `earn_*.py` (an earnings blackout on
   fetch+report layers), the `run`/`backtest` CLI flags, the backtest (plan exits,
   `robustness`, the random-entry null, and the single-pass equivalence tests),
   the research cache (`refresh`, drift detection, `replace_bars`, via a
-  monkeypatched `ingest.fetch_bulk_prices`), the whole `retirement/` planner (lifespans and survivor years, rules citations,
+  monkeypatched `ingest.fetch_bulk_prices`), the whole `retirement/` planner (lifespans and survivor years, the salary/ESPP/RRSP-room model, the Child Benefit, money events, guardrails, saved scenarios, the refund check, rules citations,
   hand-worked federal + Alberta tax, the RRIF/LIF/TFSA account model, what-ifs, the HTML
   report, the `retire` CLI and its `--gui` server), and the whole `thesis/` subpackage
   — model/store/sources/review/CLI, with an injected fake price adapter for

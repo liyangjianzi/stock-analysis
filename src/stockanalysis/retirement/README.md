@@ -51,8 +51,9 @@ be sorted **stops the run** rather than being dropped silently.
 
 A local page at `http://127.0.0.1:8765/` (only reachable from this machine):
 
-- **Tabs:** People, Spending, Home, Investing and Advanced. Retirement, CPP/OAS and
-  RRIF ages, spending and downsizing are sliders.
+- **Tabs:** People, Spending (money events, guardrails), Education, Home, Investing,
+  Optimize, Compare (saved scenarios) and Advanced (pension match, ESPP, RRSP room).
+  Retirement, CPP/OAS and RRIF ages, spending and downsizing are sliders.
 - **Live estimate:** each edit re-runs a 1,000-future estimate (~0.8 s). It shows
   the report's gauge and money-left chart, plus tiles that give the change against
   the *saved* plan on the same futures.
@@ -61,7 +62,8 @@ A local page at `http://127.0.0.1:8765/` (only reachable from this machine):
 - **Save** writes plan.json and keeps the previous file as `plan.json.bak`.
 - **Save & generate report** also runs the full report (~20–25 s) and links to it.
 - **Read-only sections:** `holdings`, `balances` and `scenarios` can't be edited
-  on the page and are kept exactly as they are.
+  on the page and are kept exactly as they are; `saved_scenarios` is edited on the
+  Compare tab.
 
 Press Ctrl-C in the terminal to stop it.
 
@@ -100,16 +102,18 @@ keeps it. Library: `optimize.affordability(plan, target=0.9)` and
 
 | Section | Holds |
 |---|---|
-| `people[]` (1–2) | `age`, `retire_age`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
-| `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), bad-market rule (`bad_market_cut` when investments fall below `bad_market_trigger` × retirement-day value) |
+| `people[]` (1–2) | `age`, `retire_age`, `sex` (`female` / `male` for the life table; omit to average), `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
+| `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), `survivor_share` (0.70), `rule`: `bad_market` (cut `bad_market_cut` when investments fall below `bad_market_trigger` × their value the first year nobody earns) or `guardrails` (`guardrail_band`, `guardrail_step`, `guardrail_stop_years`, `guardrail_floor`, `guardrail_ceiling`) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, `selling_cost`, `moving_cost`, `property_tax`, `insurance` |
 | `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed` |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`) |
-| `education` (optional) | `kids[]` (`name`, `age`, `start_age` 18, `years` 4, `living` `home`/`away`, `cesg_received`), `costs` per student-year (`home` 11,000 / `away` 25,000 today's $, editable estimates), RESP `resp_balance` (default: the holdings' RESP), `contributed` / `grants` so far (default: estimated as if every year's grant was collected), `contribute` (each January while it still earns the grant), `aip_to_rrsp`, `student_grant` (apply for the Canada Student Grant) |
+| `education` (optional) | `kids[]` (`name`, `age`, `start_age` 18, `years` 4, `living` `home`/`away`, `cesg_received`), `costs` per student-year (`home` 11,000 / `away` 25,000 today's $, editable estimates), RESP `resp_balance` (default: the holdings' RESP), `contributed` / `grants` so far (default: estimated as if every year's grant was collected), `contribute` (each January while it still earns the grant), `aip_to_rrsp`, `student_grant` (apply for the Canada Student Grant), `childcare` (yearly child care already in spending, for the deduction). The kids also drive the Canada Child Benefit |
 | `nonreg_income` (optional) | yearly payouts of the non-registered accounts as shares of their balance: `eligible_dividends` (Canadian companies), `foreign_dividends`, `interest`. Part of `returns.mean`, reinvested, taxed every year. Omit for none |
 | `balances` (optional) | `{owner, type, balance, cost}` rows; omit to read the holdings workbook |
 | `holdings` | owner keywords (whole words) and explicit `accounts` for names that don't say what they are |
-| `scenarios` | `downsize_ages` to test (null = never), `cheaper_home_share` |
+| `events` (optional) | money in / out and side income: `label`, `amount`, `year` or `age`, `every`, `until` / `until_age`, `kind` (`cash` / `income`), `person` |
+| `saved_scenarios` (optional) | `{name, changes: {dotted.path: value}}` versions compared side by side |
+| `scenarios` | the what-if settings: `downsize_ages` to test (null = never), `cheaper_home_share` |
 
 ## Children's education (the RESP)
 
@@ -222,6 +226,12 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
   distributions aren't modelled.
 - CPP/OAS count as a full year in the start year.
 - Household events (spending stages, downsizing) key on people[0]'s age.
+- Working years: the ESPP discount is taxed but carries no CPP/EI; contributions
+  the household can't fund are cut pro rata with the year's tax left as planned;
+  the pension is treated as defined-contribution for RRSP room.
+- The Child Benefit is counted per calendar year (it really runs July to June).
+- Guardrails act on the base spending need, so planned drops and big inflows can
+  trigger a raise.
 
 ## Lifespans and survivor years
 

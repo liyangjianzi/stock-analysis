@@ -32,7 +32,8 @@ needed. It covers the screener, indicators, signal engine and trade plans,
 fundamentals normalization, the watchlist loader, the exporters and HTML
 reports, the pipeline and CLI, the backtest (plan exits, robustness statistics,
 random-entry null), the research price cache, the `thesis/` subpackage, and the
-`retirement/` planner (hand-worked federal + Alberta tax, the RRIF/LIF/TFSA account model).
+`retirement/` planner (hand-worked federal + Alberta tax, the RRIF/LIF/TFSA account model,
+lifespans and survivor years, the salary model, money events, guardrails, saved scenarios).
 
 ## Run (CLI)
 
@@ -154,9 +155,15 @@ library entry point: `from stockanalysis.thesis import register, from_signal_mat
 ## Retirement planner (Canada)
 
 Projects a Canadian household year by year under federal + Alberta tax, CPP,
-OAS, RRIF, TFSA and Alberta LIF rules, over 10,000 simulated futures. The report
-shows the chance the money lasts, the after-tax legacy, income by source and
-ranked what-ifs. A local page lets you edit the plan with sliders.
+OAS, RRIF, TFSA and Alberta LIF rules, over 10,000 simulated futures with
+lifespans drawn from Canadian life tables (the survivor's years included). The
+report shows the chance the money lasts as long as either of you lives, the
+after-tax legacy, income by source and ranked what-ifs. It models the working
+years from your salaries (tax, CPP/EI, pension match, an ESPP, RRSP room), the
+Canada Child Benefit, one-off money events and optional guardrail spending, and
+compares saved scenarios side by side. Planning tools find the safest spending,
+the earliest retirement, the best CPP/OAS start ages and how much to draw from
+RRSPs each year. A local page lets you edit the plan with sliders.
 
 ```bash
 stock-analysis retire --init    # starter retirement/plan.json (invented example values)
