@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockanalysis.retirement import inputs
+from stockanalysis.retirement import inputs, rules
 
 
 @pytest.fixture
@@ -354,3 +354,28 @@ def test_inflation_is_bounded():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "returns.inflation"
+
+
+def test_cost_growth_defaults_come_from_rules_and_base_is_zero():
+    g = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).cost_growth
+    assert g.rate("base") == 0.0
+    for name in ("care", "education", "property_tax", "insurance"):
+        assert g.rate(name) == rules.COST_GROWTH[name].value
+
+
+def test_cost_growth_overrides_and_validation():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["cost_growth"] = {"base": 0.0154, "care": -0.01}
+    g = inputs.parse(d).cost_growth
+    assert g.rate("base") == 0.0154 and g.rate("care") == -0.01
+    d["cost_growth"] = {"care": 0.5}
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "cost_growth.care"
+
+
+def test_inflation_shocks_default_on_and_defaults_cover_the_new_inputs():
+    assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).returns.inflation_shocks is True
+    dflt = inputs.defaults()
+    assert dflt["returns"] == {"inflation_shocks": True}
+    assert dflt["cost_growth"]["base"] == 0.0 and dflt["cost_growth"]["care"] == rules.COST_GROWTH["care"].value

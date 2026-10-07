@@ -128,6 +128,7 @@ class Returns:
     paths: int = 10_000
     seed: int = 7
     inflation: float | None = None   # yearly; None: Canada's 40-year average (rules.CPI)
+    inflation_shocks: bool = True    # each future replays runs of past inflation; returns lag it
 
     @property
     def inflation_rate(self) -> float:
@@ -205,6 +206,26 @@ class Event:
     person: str | None = None
 
 
+COST_KINDS = ("base", "care", "education", "property_tax", "insurance")
+
+
+@dataclass(frozen=True)
+class CostGrowth:
+    """Yearly growth above Canada's CPI per cost, in today's dollars; None = the default
+    (rules.COST_GROWTH; base spending defaults to 0)."""
+    base: float | None = None
+    care: float | None = None
+    education: float | None = None
+    property_tax: float | None = None
+    insurance: float | None = None
+
+    def rate(self, name: str) -> float:
+        value = getattr(self, name)
+        if value is not None:
+            return value
+        return rules.COST_GROWTH[name].value if name in rules.COST_GROWTH else 0.0
+
+
 @dataclass(frozen=True)
 class Account:
     owner: str
@@ -225,6 +246,7 @@ class PlanInputs:
     withdrawal: Withdrawal
     accounts: tuple = ()
     nonreg_income: NonregIncome = NonregIncome()
+    cost_growth: CostGrowth = CostGrowth()
     education: Education | None = None
     events: tuple = ()
     saved_scenarios: tuple = ()     # (name, {dotted.path: value}) versions to compare side by side
@@ -293,6 +315,7 @@ def _build(d: dict) -> PlanInputs:
             withdrawal=Withdrawal(**d.get("withdrawal", {})),
             accounts=tuple(Account(**a) for a in d.get("balances") or []),
             nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
+            cost_growth=CostGrowth(**(d.get("cost_growth") or {})),
             education=_education(d.get("education")),
             events=tuple(Event(**e) for e in d.get("events") or []),
             saved_scenarios=tuple((str(s["name"]), dict(s.get("changes") or {}))
@@ -393,7 +416,9 @@ def defaults() -> dict:
     flags = lambda cls: {f.name: f.default for f in fields(cls) if isinstance(f.default, bool)}  # noqa: E731
     kid = {f.name: f.default for f in fields(Kid) if f.default not in (MISSING, None)}
     return {"education": {**flags(Education), "costs": dict(EDUCATION_COSTS)}, "kid": kid,
-            "withdrawal": flags(Withdrawal)}
+            "withdrawal": flags(Withdrawal),
+            "returns": flags(Returns),
+            "cost_growth": {name: CostGrowth().rate(name) for name in COST_KINDS}}
 
 
 def event_span(plan: PlanInputs, ev: Event) -> tuple:
@@ -513,6 +538,10 @@ def validate(plan: PlanInputs) -> PlanInputs:
         _fail("returns", "need mean > -1, sd >= 0 and paths >= 1")
     if r.inflation is not None and not -0.05 <= r.inflation <= 0.20:
         _fail("returns.inflation", "a yearly rate between -0.05 and 0.20 (e.g. 0.025)")
+    for name in COST_KINDS:
+        v = getattr(plan.cost_growth, name)
+        if v is not None and not (_is_number(v) and -0.05 <= v <= 0.15):
+            _fail(f"cost_growth.{name}", "a yearly rate above inflation between -0.05 and 0.15")
     for name in ("eligible_dividends", "foreign_dividends", "interest"):
         if not 0 <= getattr(plan.nonreg_income, name) <= 0.2:
             _fail(f"nonreg_income.{name}", "a yearly share of the balance between 0 and 0.2")

@@ -79,3 +79,9 @@ def test_ccb_second_band_starts_where_the_first_ends():
         assert rate1 * span == pytest.approx(base2, abs=1.0), n      # e.g. 7% x 44,610 = 3,123
     assert rules.RRSP_LIMIT.value["dollar_limit"] == 33_810
     assert rules.CHILDCARE.value["under_7"] == 8_000 and rules.CHILDCARE.value["7_to_15"] == 5_000
+
+
+def test_cost_growth_rules_are_rates_above_cpi():
+    assert set(rules.COST_GROWTH) == {"care", "education", "property_tax", "insurance"}
+    for name, rule in rules.COST_GROWTH.items():
+        assert -0.05 <= rule.value <= 0.15, name

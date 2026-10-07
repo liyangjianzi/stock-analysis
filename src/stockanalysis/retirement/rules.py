@@ -279,6 +279,20 @@ def historical_inflation(years: int = 40) -> float:
     return growth ** (1 / len(changes)) - 1
 
 
+_CALGARY_TAX = ("https://www.calgary.ca/cfod/finance/property-tax/tax-bill-and-tax-rate-calculation/"
+                "historical-tax-rates.html")
+
+# Yearly growth above Canada's CPI for costs that outpace it (today's dollars).
+# StatCan CPI 18-10-0004-01 components vs all-items; the property tax is the City
+# of Calgary's typical single-detached bill, 2023-2026 (+8.8%/yr nominal).
+COST_GROWTH = {
+    "care": Rule(0.011, 2025, _CPI),           # health care services, Canada, 1985-2025
+    "education": Rule(0.004, 2025, _CPI),      # tuition fees, Canada, 2005-2025
+    "property_tax": Rule(0.065, 2026, _CALGARY_TAX),
+    "insurance": Rule(0.062, 2025, _CPI),      # homeowners' home and mortgage insurance, Alberta, 2005-2025
+}
+
+
 def top_marginal_rate(province: str) -> float:
     """Combined top rate, used for tax on registered money at the second death."""
     return FEDERAL["brackets"].value[-1][1] + PROVINCIAL[province]["brackets"].value[-1][1]
@@ -295,7 +309,7 @@ def all_rules() -> list[tuple[str, Rule]]:
             for key, value in obj.items():
                 walk(f"{prefix}.{key}", value)
 
-    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "CCB", "RRSP_LIMIT", "CHILDCARE", "CPI", "PENSION_SPLIT",
+    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "CCB", "RRSP_LIMIT", "CHILDCARE", "CPI", "COST_GROWTH", "PENSION_SPLIT",
                  "OAS", "CPP", "RRIF", "TFSA", "LIF"):
         walk(name.lower(), globals()[name])
     return found
