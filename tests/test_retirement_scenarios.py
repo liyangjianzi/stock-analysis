@@ -18,7 +18,7 @@ def test_variant_keys_for_the_template(plan):
     keys = {k for k, _, _ in scenarios.variants(plan)}
     assert keys == {"withdraw_proportional", "withdraw_steady_income", "spend_less",
                     "retire_later_A", "retire_later_B", "downsize_never", "downsize_70",
-                    "cheaper_home", "spend_guardrails"}
+                    "cheaper_home", "spend_guardrails", "steady_inflation"}
 
 
 def test_each_variant_changes_exactly_one_field(plan):
@@ -93,3 +93,10 @@ def test_compare_saved_reuses_the_ranked_baseline(plan):
     rows = scenarios.compare_saved(p, paths=20, seed=1, baseline=baseline)
     assert (rows[0].success, rows[0].lifetime_tax, rows[0].legacy) == (
         baseline.success, baseline.lifetime_tax, baseline.legacy)
+
+
+def test_steady_inflation_is_offered_when_shocks_are_on(plan):
+    keys = [k for k, _, _ in scenarios.variants(plan)]
+    assert "steady_inflation" in keys
+    steady = replace(plan, returns=replace(plan.returns, inflation_shocks=False))
+    assert "steady_inflation" not in [k for k, _, _ in scenarios.variants(steady)]

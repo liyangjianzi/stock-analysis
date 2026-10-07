@@ -60,6 +60,10 @@ def variants(plan: PlanInputs) -> list:
             new = home.new_value * plan.scenarios.get("cheaper_home_share", 0.8)
             out.append(("cheaper_home", f"Buy a C${new:,.0f} home instead of C${home.new_value:,.0f}",
                         replace(plan, home=replace(home, new_value=new))))
+    r = plan.returns
+    if r.inflation_shocks and r.inflation is None:
+        out.append(("steady_inflation", "Steady inflation (no shocks)",
+                    replace(plan, returns=replace(r, inflation_shocks=False))))
     return out
 
 
