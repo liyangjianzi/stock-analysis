@@ -15,11 +15,12 @@ CESG = rules.RESP["cesg"].value
 
 
 def plan_with(kids, **edu):
-    """The template household (no non-registered payouts or cost growth, to isolate the RESP)."""
+    """The template household (no payouts, cost growth or inflation, to isolate the RESP)."""
     d = copy.deepcopy(inputs.TEMPLATE)
     d["education"] = {"kids": kids, **edu}
-    return replace(inputs.parse(d), nonreg_income=NonregIncome(),
-                   cost_growth=CostGrowth(0.0, 0.0, 0.0, 0.0, 0.0))
+    p = inputs.parse(d)
+    return replace(p, nonreg_income=NonregIncome(), cost_growth=CostGrowth(0.0, 0.0, 0.0, 0.0, 0.0),
+                   returns=replace(p.returns, inflation=0.0))
 
 
 def flat(p):
@@ -187,3 +188,11 @@ def test_education_costs_grow_with_their_rate():
     p = plan_with([{"name": "K", "age": 15, "living": "home"}], costs={"home": 10_000, "away": 30_000})
     s = education.schedule(replace(p, cost_growth=CostGrowth(education=0.02)), engine.steps(p))
     assert s.cost[3] == pytest.approx(10_000 * 1.02 ** 3)
+
+
+def test_the_student_grant_shrinks_with_prices():
+    p = _retired_family("tfsa")
+    T = engine.steps(p)
+    steady = engine.simulate(p, np.zeros((T, 1)), None, np.zeros((T, 1)))
+    hot = engine.simulate(p, np.zeros((T, 1)), None, np.full((T, 1), 0.10))
+    assert hot.student_grant[1, 0] == pytest.approx(steady.student_grant[1, 0] / 1.10)

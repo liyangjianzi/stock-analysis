@@ -678,8 +678,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if school is not None:
             cost_t = np.full(N, school.cost[t])
             if plan.education.student_grant and school.students[t]:
-                csg_rec[t] = np.minimum(school.students[t] * education.student_grant(last_income, family),
-                                        cost_t)
+                csg_rec[t] = np.minimum(school.students[t] * education.student_grant(last_income, family)
+                                        / prices[t], cost_t)
                 cost_t = cost_t - csg_rec[t]
             uncovered, leftover = _resp_year(school, t, cost_t, resp_bal, resp_in, resp_grant)
             if leftover is not None:
@@ -690,7 +690,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 # It goes to people[0], or to the partner once people[0] has died.
                 aip_share = (np.array([alive[0], ~alive[0]], dtype=float) if P == 2
                              else np.ones((1, N)))
-                to_rrsp = (np.minimum(resp_growth, aip["rrsp_transfer_max"])
+                to_rrsp = (np.minimum(resp_growth, aip["rrsp_transfer_max"] / prices[t])
                            if plan.education.aip_to_rrsp else np.zeros(N))
                 room_left = np.where(aip_share > 0, rrsp_room, 0.0).sum(axis=0)
                 to_rrsp = np.minimum(to_rrsp, room_left)                          # within RRSP room
@@ -844,6 +844,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 other = other + aip_share * aip_income                  # leftover RESP growth
                 parts = _parts(people, ages, is_rrif, cpp, oas, min_rrif, min_lif, draw, gain_ratio,
                                (y_eligible * kept, other), work, realized)
+                for part in parts:
+                    part["fixed_scale"] = 1 / prices[t]      # unindexed amounts shrink with prices
                 if P == 2 and recent.any():
                     _attribute(parts, ages, is_rrif, draw["rrsp"], bal["rrsp"], spousal, recent, alive)
                 new_tax = tax.household_tax(parts, share, prov)

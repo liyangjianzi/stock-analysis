@@ -187,3 +187,10 @@ def test_unknown_income_means_no_child_benefit():
 def test_no_cpp_premiums_from_age_70():
     assert float(tax.payroll_premiums(50_000, age=70)) == pytest.approx(0.0163 * 50_000)
     assert float(tax.payroll_premiums(50_000, age=69)) > 0.0163 * 50_000
+
+
+def test_the_federal_pension_credit_shrinks_with_prices():
+    full = t(pension=40_000, age=70)
+    shrunk = float(tax.income_tax(pension=40_000, age=70, fixed_scale=0.5))
+    # Half the C$2,000 credit at 14%: 140 more federal tax.
+    assert shrunk - full == pytest.approx(0.14 * 1_000, abs=0.01)

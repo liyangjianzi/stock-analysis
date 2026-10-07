@@ -1082,3 +1082,13 @@ def test_care_costs_grow():
              no_go_age=60, care=10_000.0)
     need = run_flat(_grow(p, care=0.02, base=0.0)).need[:, 0]
     assert need[3] == pytest.approx(10_000 * 1.02 ** 3)
+
+
+def test_fixed_amounts_shrink_in_the_engine():
+    p = plan(people=[person(age=70, rrif_start_age=65)], accounts=[Account("A", "rrsp", 400_000.0)],
+             base=30_000.0, end_age=75)
+    p = _grow(p, base=0.0, care=0.0, education=0.0, property_tax=0.0, insurance=0.0)
+    T = engine.steps(p)
+    steady = engine.simulate(p, np.zeros((T, 1)), None, np.zeros((T, 1)))
+    hot = engine.simulate(p, np.zeros((T, 1)), None, np.full((T, 1), 0.10))
+    assert hot.tax[4, 0] > steady.tax[4, 0]              # a smaller pension credit
