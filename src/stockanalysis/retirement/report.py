@@ -299,7 +299,7 @@ def _actions(result: PlanResult) -> str:
     """The plan as a dated to-do list, plus the inputs it still guesses at."""
     rows = "".join(
         f"<tr><td>{a.year}{'–' + str(a.until) if a.until else ''}</td><td>{_esc(a.who)}</td>"
-        f"<td>{_esc(a.what)}</td><td>{_esc(a.why)}</td></tr>" for a in actions.plan_actions(result))
+        f"<td>{_esc(a.text())}</td><td>{_esc(a.why)}</td></tr>" for a in actions.plan_actions(result))
     missing = actions.missing_inputs(result.inputs)
     todo = ("<h3>Information to add</h3><p class='note'>The plan estimates these; the real figures "
             "make it more accurate.</p><ul>" + "".join(f"<li>{_esc(m)}</li>" for m in missing)

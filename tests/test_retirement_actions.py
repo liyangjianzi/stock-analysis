@@ -16,7 +16,7 @@ def result():
 
 
 def whats(result):
-    return [a.what for a in actions.plan_actions(result)]
+    return [a.text() for a in actions.plan_actions(result)]
 
 
 def test_the_plan_lists_its_milestones_in_order(result):
@@ -49,7 +49,7 @@ def test_resp_actions_follow_the_schedule():
     acts = actions.plan_actions(engine.run(inputs.parse(d), paths=40))
     resp = [a for a in acts if a.who == "RESP"]
     assert any("No more RESP contributions needed for Older" in a.what for a in resp)
-    assert any(a.what.startswith("Contribute C$2,500") for a in resp)
+    assert any(a.text().startswith("Contribute C$2,500") for a in resp)
     assert any("Close the RESP" in a.what for a in resp)
 
 
@@ -80,6 +80,16 @@ def test_spousal_rrsp_contributions_and_the_attribution_warning():
     d = copy.deepcopy(inputs.TEMPLATE)
     d["people"][0]["contributions"]["spousal_rrsp"] = 6_000
     acts = actions.plan_actions(engine.run(inputs.parse(d), paths=40))
-    lines = [(a.who, a.what) for a in acts if "spousal RRSP" in a.what]
+    lines = [(a.who, a.text()) for a in acts if "spousal RRSP" in a.what]
     assert any(who == "Partner A" and what.startswith("Contribute about C$6,000 a year") for who, what in lines)
     assert any(who == "Partner B" and what.startswith("Leave the spousal RRSP alone until") for who, what in lines)
+
+
+def test_action_amounts_render_in_future_dollars(result):
+    acts = [a for a in actions.plan_actions(result) if a.amounts]
+    assert acts
+    a = acts[0]
+    f = actions.future_factor(result.inputs, a.year)
+    assert a.text() != a.text(f) or f == 1.0
+    assert f"C${a.amounts[0] * f:,.0f}" in a.text(f)
+    assert "{" not in a.text()

@@ -6,7 +6,8 @@ RRSP money out, converting to a RRIF, splitting pension income, applying for
 benefits. None of it happens unless someone does it. :func:`plan_actions` reads
 it from what the average future recorded (``Projection.tfsa_top_up``,
 ``lif_steps``, ``split_share``, ``downsize_step``...), never re-deriving an
-engine decision, with years and amounts in today's dollars. :func:`missing_inputs`
+engine decision, with years and amounts in today's dollars (``Action.text`` can
+scale them to each year's dollars). :func:`missing_inputs`
 lists what the plan still guesses at.
 
 Pure: no I/O. Amounts come from the projection; any rule quoted in the text is
@@ -30,8 +31,18 @@ class Action:
     year: int                # first (or only) calendar year
     until: int | None        # last year of a recurring action, None if once
     who: str
-    what: str
+    what: str                # may hold {} placeholders, one per amount
     why: str
+    amounts: tuple = ()      # today's dollars, in placeholder order
+
+    def text(self, factor: float = 1.0) -> str:
+        """``what`` with its amounts filled in, scaled by ``factor`` (see future_factor)."""
+        return self.what.format(*(_money(a * factor) for a in self.amounts))
+
+
+def future_factor(plan, year: int) -> float:
+    """Today's dollars → that year's dollars on the average inflation path."""
+    return (1 + plan.returns.inflation_rate) ** (year - plan.start_year)
 
 
 def _money(x: float) -> str:
@@ -61,8 +72,9 @@ def _runs(years: list, values: np.ndarray, change: float = 0.4) -> list:
     return out
 
 
-def _amount(typical: float, until) -> str:
-    return f"about {_money(typical)} a year" if until else _money(typical)
+def _amount(until) -> str:
+    """The placeholder for a phase's typical amount."""
+    return "about {} a year" if until else "{}"
 
 
 def plan_actions(result: PlanResult) -> list:
@@ -80,16 +92,18 @@ def plan_actions(result: PlanResult) -> list:
 
     for first, until, typical in _runs(years, avg.tfsa_top_up[:, 0]):
         acts.append(Action(first, until, everyone,
-                           f"In January, move {_amount(typical, until)} from non-registered "
+                           f"In January, move {_amount(until)} from non-registered "
                            "accounts into TFSAs",
                            "fills new TFSA room: later growth and payouts are tax-free and less "
-                           "is taxed at death (the gain on shares moved is taxed that year)"))
+                           "is taxed at death (the gain on shares moved is taxed that year)",
+                           (typical,)))
 
     for first, until, typical in _runs(years, avg.income["registered"][:, 0]):
         acts.append(Action(first, until, everyone,
-                           f"Withdraw {_amount(typical, until)} from RRSPs/RRIFs/LIFs (household)",
+                           f"Withdraw {_amount(until)} from RRSPs/RRIFs/LIFs (household)",
                            "the plan's withdrawal order spends registered money here, in lower "
-                           "brackets, rather than leaving it to be taxed at the top rate at death"))
+                           "brackets, rather than leaving it to be taxed at the top rate at death",
+                           (typical,)))
 
     for p, lif in zip(people, avg.lif_steps):
         convert = year_of(p, p.rrif_start_age) - plan.start_year
@@ -119,9 +133,9 @@ def plan_actions(result: PlanResult) -> list:
             spouse = people[1 - i].name
             for first, until, typical in _runs(years, avg.spousal_rrsp[:, i, 0]):
                 acts.append(Action(first, until, p.name,
-                                   f"Contribute {_amount(typical, until)} to a spousal RRSP for {spouse}",
+                                   f"Contribute {_amount(until)} to a spousal RRSP for {spouse}",
                                    f"you take the deduction now; {spouse} is taxed on it later, "
-                                   "usually at a lower rate"))
+                                   "usually at a lower rate", (typical,)))
             made = np.flatnonzero(avg.spousal_rrsp[:, i, 0] >= MIN_AMOUNT)
             if made.size:
                 free = years[made[-1]] + 3
@@ -140,9 +154,9 @@ def plan_actions(result: PlanResult) -> list:
     if avg.downsize_step is not None:
         h = plan.home
         acts.append(Action(years[avg.downsize_step], None, everyone,
-                           f"Sell the home and buy one for about {_money(h.new_value)}; invest the "
-                           f"{_money(h.released)} freed up",
-                           "the plan's downsizing; a principal residence sells tax-free"))
+                           "Sell the home and buy one for about {}; invest the {} freed up",
+                           "the plan's downsizing; a principal residence sells tax-free",
+                           (h.new_value, h.released)))
 
     acts += _education_actions(plan, avg)
     return sorted(acts, key=lambda a: (a.year, a.who, a.what))
@@ -156,9 +170,9 @@ def _education_actions(plan, avg) -> list:
     for t, (c, g) in enumerate(zip(s.contribution, s.grant)):
         if c > 0:
             acts.append(Action(plan.start_year + t, None, "RESP",
-                               f"Contribute {_money(c)} to the RESP in January",
+                               "Contribute {} to the RESP in January",
                                f"earns {_money(g)} of government grant (20%); after that there is "
-                               "no grant left to earn"))
+                               "no grant left to earn", (c,)))
     last_age = rules.RESP["cesg"].value["last_age"]
     for planned, kid in zip(s.kids, plan.education.kids):
         if plan.education.contribute and planned.contributions == 0 and kid.age < last_age:
@@ -169,9 +183,9 @@ def _education_actions(plan, avg) -> list:
     if plan.education.student_grant and avg.student_grant is not None:
         for first, until, typical in _runs(avg.years, avg.student_grant[:, 0]):
             acts.append(Action(first, until, "Students",
-                               f"Apply for the Canada Student Grant ({_amount(typical, until)} "
-                               "expected)",
-                               "tested on last year's family income; it isn't paid unless applied for"))
+                               f"Apply for the Canada Student Grant ({_amount(until)} expected)",
+                               "tested on last year's family income; it isn't paid unless applied for",
+                               (typical,)))
     if s.end_step is not None:
         acts.append(Action(plan.start_year + s.end_step, None, "RESP",
                            "Close the RESP: take contributions back, move growth to the RRSP "
