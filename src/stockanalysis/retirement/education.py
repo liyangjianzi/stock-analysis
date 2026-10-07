@@ -72,7 +72,7 @@ def schedule(plan, steps: int) -> Schedule | None:
         for i, (kid, born) in enumerate(zip(e.kids, births)):
             age = year - born
             if kid.start_age <= age < kid.start_age + kid.years:
-                cost[t] += e.costs[kid.living]
+                cost[t] += e.costs[kid.living] * (1 + plan.cost_growth.rate("education")) ** t
                 students[t] += 1
             if not e.contribute or t == 0 or age > c["last_age"]:
                 continue

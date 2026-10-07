@@ -8,7 +8,7 @@ import pytest
 from dataclasses import replace
 
 from stockanalysis.retirement import engine, rules, tax
-from stockanalysis.retirement.inputs import (Account, Education, Espp, Event, Home, Kid,
+from stockanalysis.retirement.inputs import (Account, CostGrowth, Education, Espp, Event, Home, Kid,
                                              NonregIncome, Person, PlanInputs, Returns, Spending,
                                              SpendingChange, Withdrawal)
 
@@ -29,6 +29,7 @@ def plan(people=None, accounts=(), base=30_000.0, end_age=63, strategy="rrsp_fir
     return PlanInputs(province="AB", start_year=2026, end_age=end_age,
                       people=tuple(people or (person(),)), spending=Spending(**spend),
                       home=home, returns=Returns(0.0, 0.0, 1, 1, inflation=0.0),
+                      cost_growth=CostGrowth(0.0, 0.0, 0.0, 0.0, 0.0),
                       withdrawal=Withdrawal(strategy, 58_000.0), accounts=tuple(accounts))
 
 
@@ -1028,3 +1029,56 @@ def test_price_level_and_nominal_cost_base_follow_each_path():
     proj = engine.simulate(p, np.zeros((T, 1)), None, infl)
     assert proj.price_level[0, 0] == 1.0 and proj.price_level[1, 0] == pytest.approx(1.10)
     assert proj.inflation[0, 0] == 0.10
+
+
+
+# -- costs that grow faster (or slower) than inflation --------------------------------------
+
+def _grow(p, **rates):
+    return replace(p, cost_growth=CostGrowth(**rates))
+
+
+def test_zero_growth_and_steady_inflation_change_nothing():
+    p = plan(accounts=[Account("A", "rrsp", 500_000.0)], base=40_000.0, end_age=66,
+             home=Home(value=800_000.0, property_tax=6_000.0, insurance=2_000.0))
+    zero = _grow(p, base=0.0, care=0.0, education=0.0, property_tax=0.0, insurance=0.0)
+    np.testing.assert_allclose(run_flat(zero).need[:, 0], 40_000.0)
+
+
+def test_base_and_home_costs_grow_at_their_own_rates():
+    p = plan(base=40_000.0, end_age=66, home=Home(value=800_000.0, property_tax=6_000.0, insurance=2_000.0),
+             accounts=[Account("A", "tfsa", 2_000_000.0)])
+    g = _grow(p, base=0.01, property_tax=0.05, insurance=0.0, care=0.0, education=0.0)
+    need = run_flat(g).need[:, 0]
+    t = 4
+    expected = (40_000 - 8_000) * 1.01 ** t + 6_000 * 1.05 ** t + 2_000
+    assert need[t] == pytest.approx(expected)
+
+
+def test_downsizing_scales_the_grown_home_costs():
+    home = Home(value=800_000.0, downsize_age=62, new_value=400_000.0, property_tax=6_000.0, insurance=2_000.0)
+    p = plan(base=40_000.0, end_age=66, home=home, accounts=[Account("A", "tfsa", 2_000_000.0)])
+    g = _grow(p, base=0.0, property_tax=0.05, insurance=0.0, care=0.0, education=0.0)
+    need = run_flat(g).need[:, 0]
+    t = 3                                            # after downsizing at 62 (age 60 at t=0)
+    expected = 32_000 + (6_000 * 1.05 ** t + 2_000) * 0.5
+    assert need[t] == pytest.approx(expected)
+
+
+def test_spending_can_lag_inflation():
+    p = plan(base=40_000.0, end_age=66, accounts=[Account("A", "tfsa", 2_000_000.0)])
+    need = run_flat(_grow(p, base=-0.01, care=0.0)).need[:, 0]
+    assert need[5] == pytest.approx(40_000 * 0.99 ** 5)
+
+
+def test_cost_growth_without_a_home():
+    p = plan(base=40_000.0, end_age=63, accounts=[Account("A", "tfsa", 1_000_000.0)])
+    need = run_flat(_grow(p, property_tax=0.1, insurance=0.1, base=0.0)).need[:, 0]
+    np.testing.assert_allclose(need, 40_000.0)
+
+
+def test_care_costs_grow():
+    p = plan(base=0.0, end_age=66, accounts=[Account("A", "tfsa", 2_000_000.0)],
+             no_go_age=60, care=10_000.0)
+    need = run_flat(_grow(p, care=0.02, base=0.0)).need[:, 0]
+    assert need[3] == pytest.approx(10_000 * 1.02 ** 3)

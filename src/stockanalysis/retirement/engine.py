@@ -163,6 +163,11 @@ def fixed_deaths(plan: PlanInputs, T: int, N: int) -> np.ndarray:
     return np.repeat(np.array([[p.age + T] for p in plan.people], dtype=int), N, axis=1)
 
 
+def growth(plan: PlanInputs, name: str, t: int) -> float:
+    """A cost's factor in year t, in today's dollars: its rate above CPI, compounded."""
+    return (1 + plan.cost_growth.rate(name)) ** t
+
+
 def stage_share(spending, age: int) -> float:
     """Go-go (1.0), slow-go or no-go share of the budget at the first person's ``age``."""
     if age >= spending.no_go_age:
@@ -681,15 +686,15 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 # Leftover growth goes to people[0]'s RRSP up to the limit; the rest is
                 # their income (plus the flat extra tax): on top of salary while they
                 # work, otherwise in the household tax below.
-                back, growth = leftover
+                back, resp_growth = leftover
                 # It goes to people[0], or to the partner once people[0] has died.
                 aip_share = (np.array([alive[0], ~alive[0]], dtype=float) if P == 2
                              else np.ones((1, N)))
-                to_rrsp = (np.minimum(growth, aip["rrsp_transfer_max"])
+                to_rrsp = (np.minimum(resp_growth, aip["rrsp_transfer_max"])
                            if plan.education.aip_to_rrsp else np.zeros(N))
                 room_left = np.where(aip_share > 0, rrsp_room, 0.0).sum(axis=0)
                 to_rrsp = np.minimum(to_rrsp, room_left)                          # within RRSP room
-                taxable = growth - to_rrsp
+                taxable = resp_growth - to_rrsp
                 resp_tax = aip["extra_tax"] * taxable
                 works = (aip_share * working).sum(axis=0) > 0
                 salary = sum(aip_share[i] * (p.salary or 0.0) for i, p in enumerate(people))
@@ -715,10 +720,16 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         bad_ref = np.where(np.isnan(bad_ref) & ~earning & household, invest[t], bad_ref)
         pension_jan1 = bal["pension"].copy()
 
-        # 2. The household's after-tax spending need.
+        # 2. The household's after-tax spending need, each part growing at its own rate.
         level = spend.base + sum(c.amount for c in spend.changes if c.year <= year)
-        if downsized:
-            level -= (home.property_tax + home.insurance) * (1 - home.new_value / home.value)
+        if home is not None:
+            tax_now, ins_now = home.property_tax, home.insurance
+            shrink = home.new_value / home.value if downsized else 1.0
+            level = ((level - tax_now - ins_now) * growth(plan, "base", t)
+                     + (tax_now * growth(plan, "property_tax", t)
+                        + ins_now * growth(plan, "insurance", t)) * shrink)
+        else:
+            level = level * growth(plan, "base", t)
         need = np.full(N, max(level, 0.0) * stage_share(spend, ages[0]))
         if guard:
             # Guyton-Klinger: once nobody earns, compare this year's withdrawal rate with the
@@ -743,7 +754,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if P == 2:
             need = np.where(alive.sum(axis=0) == 1, need * spend.survivor_share, need)
         if ages[0] >= spend.no_go_age:
-            need = need + spend.care
+            need = need + spend.care * growth(plan, "care", t)
         if school is not None:
             need = need + school.contribution[t]       # RESP contributions are paid like spending
         # School costs the RESP can't cover come from savings even while anyone works.

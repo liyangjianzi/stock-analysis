@@ -9,16 +9,17 @@ import pandas as pd
 import pytest
 
 from stockanalysis.retirement import education, engine, inputs, rules
-from stockanalysis.retirement.inputs import Account, NonregIncome
+from stockanalysis.retirement.inputs import Account, CostGrowth, NonregIncome
 
 CESG = rules.RESP["cesg"].value
 
 
 def plan_with(kids, **edu):
-    """The template household (no non-registered payouts, to isolate the RESP)."""
+    """The template household (no non-registered payouts or cost growth, to isolate the RESP)."""
     d = copy.deepcopy(inputs.TEMPLATE)
     d["education"] = {"kids": kids, **edu}
-    return replace(inputs.parse(d), nonreg_income=NonregIncome())
+    return replace(inputs.parse(d), nonreg_income=NonregIncome(),
+                   cost_growth=CostGrowth(0.0, 0.0, 0.0, 0.0, 0.0))
 
 
 def flat(p):
@@ -180,3 +181,9 @@ def test_a_retirees_leftover_resp_growth_is_taxed_with_their_other_income():
     # The same 100,000 of growth costs more tax on top of large RRSP withdrawals
     # than for a household living off its TFSA.
     assert leftover_tax("rrsp") > leftover_tax("tfsa")
+
+
+def test_education_costs_grow_with_their_rate():
+    p = plan_with([{"name": "K", "age": 15, "living": "home"}], costs={"home": 10_000, "away": 30_000})
+    s = education.schedule(replace(p, cost_growth=CostGrowth(education=0.02)), engine.steps(p))
+    assert s.cost[3] == pytest.approx(10_000 * 1.02 ** 3)
