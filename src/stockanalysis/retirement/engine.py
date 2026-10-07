@@ -68,6 +68,31 @@ def draw_returns(mean: float, sd: float, paths: int, years: int, seed: int) -> n
     return (np.exp(rng.normal(mu, s, (paths, years))) - 1).T
 
 
+INFLATION_BLOCK = 5      # years drawn together, so a 1986-91 or 2021-23 run stays a run
+INFLATION_STREAM = 1     # its own random stream: return and lifespan draws don't change
+
+
+def draw_inflation(plan: PlanInputs, paths: int, years: int, seed: int) -> np.ndarray:
+    """(years, paths) yearly inflation. Shocks on and no fixed rate: consecutive
+    INFLATION_BLOCK-year runs of rules.CPI, each starting at a random year that fits.
+    Otherwise a steady rate (returns.inflation, else the CPI average)."""
+    r = plan.returns
+    if not r.inflation_shocks or r.inflation is not None:
+        return np.full((years, paths), r.inflation_rate)
+    hist = np.array([rules.CPI.value[y] for y in sorted(rules.CPI.value)])
+    blocks = -(-years // INFLATION_BLOCK)
+    rng = np.random.default_rng([seed, INFLATION_STREAM])
+    starts = rng.integers(0, len(hist) - INFLATION_BLOCK + 1, size=(paths, blocks))
+    idx = (starts[:, :, None] + np.arange(INFLATION_BLOCK)).reshape(paths, -1)[:, :years]
+    return hist[idx].T
+
+
+def lag_returns(returns: np.ndarray, inflation: np.ndarray, average: float) -> np.ndarray:
+    """Real returns when investments don't react to inflation within the year: a
+    year at the average is unchanged, a high-inflation year loses, a low one gains."""
+    return (1 + returns) * (1 + average) / (1 + inflation) - 1
+
+
 def median_return(mean: float, sd: float) -> float:
     """The typical (median, geometric) yearly return: what a steady 'average future' earns."""
     return float(np.exp(lognormal_params(mean, sd)[0]) - 1)
@@ -174,6 +199,8 @@ class Projection:
     premiums: np.ndarray | None = None          # (T, N) CPP/EI premiums inside ``tax`` (not income tax)
     spend_adjust: np.ndarray | None = None      # (T, N) guardrail spending factor (1 = as planned)
     tfsa_top_up: np.ndarray | None = None       # (T, N) moved from non-registered into TFSAs in January
+    inflation: np.ndarray | None = None         # (T, N) yearly CPI change in each future
+    price_level: np.ndarray | None = None       # (T+1, N) price level on January 1 (today = 1)
     split_share: np.ndarray | None = None       # (T, N) pension-income split the tax used (0 = none)
     spousal_rrsp: np.ndarray | None = None      # (T, P, N) spousal RRSP contributions, by contributor
     lif_steps: tuple = ()                       # per person: step the LIF started (-1 before the plan, None never)
@@ -497,9 +524,12 @@ def payroll(people, ages, working, contrib, childcare=None) -> dict:
     return out
 
 
-def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None) -> Projection:
+def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None,
+             inflation: np.ndarray | None = None) -> Projection:
     """Project ``plan`` over ``returns``: (T, N) real yearly returns. ``deaths`` is a
-    (P, N) array of death ages (see mortality); None lets everyone live all T years."""
+    (P, N) array of death ages (see mortality); None lets everyone live all T years.
+    ``inflation`` (>=T, N) is each future's yearly CPI change; None is a steady
+    returns.inflation_rate."""
     people, prov, spend, home = plan.people, plan.province, plan.spending, plan.home
     returns = np.asarray(returns, dtype=float)
     if returns.ndim != 2 or returns.shape[0] < 1:
@@ -577,7 +607,10 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
     kids = plan.education.kids if plan.education is not None else ()
     rrsp_room = np.repeat(np.array([[np.inf if p.rrsp_room is None else p.rrsp_room] for p in people],
                                    dtype=float), N, axis=1)
-    deflate = 1 / (1 + plan.returns.inflation_rate)   # one year's loss of a fixed dollar amount
+    infl = (np.full((T, N), plan.returns.inflation_rate) if inflation is None
+            else np.asarray(inflation, dtype=float)[:T])
+    prices = np.ones((T + 1, N))                      # price level on January 1, today = 1
+    prices[1:] = np.cumprod(1 + infl, axis=0)
     spousal = np.zeros((P, N))                  # spousal-RRSP money inside each person's RRSP
     recent = np.zeros((ATTRIBUTION_YEARS, P, N))   # spousal money received this year and the 2 before
     spousal_rec = np.zeros((T, P, N))           # spousal RRSP contributions made, by contributor
@@ -898,11 +931,11 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         spousal *= 1 + r
         # Book values don't rise with prices: in today's dollars they shrink, so the
         # gains taxed later are nominal gains, inflation included.
-        cost *= deflate
+        cost /= 1 + infl[t]
         if school is not None:
             resp_bal *= 1 + r
-            resp_in *= deflate                   # contributions come back at face value
-            resp_grant *= deflate
+            resp_in /= 1 + infl[t]               # contributions come back at face value
+            resp_grant /= 1 + infl[t]
         for i in range(P):
             if not working[i].any():
                 continue
@@ -955,7 +988,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         death_ages=deaths, alive=alive_rec, end_step=end_step, final_investments=final,
         premiums=premium_rec, spend_adjust=adjust_rec, tfsa_top_up=topup_rec,
         split_share=split_rec, lif_steps=tuple(lif_step), downsize_step=downsize_step,
-        spousal_rrsp=spousal_rec)
+        spousal_rrsp=spousal_rec, inflation=infl, price_level=prices)
 
 
 @dataclass
@@ -990,10 +1023,12 @@ def average_deaths(plan: PlanInputs) -> np.ndarray:
 
 
 def draw_futures(plan: PlanInputs, paths: int, seed: int) -> tuple:
-    """(returns over life_steps, death ages): one set of futures every comparison shares."""
-    r = plan.returns
-    return (draw_returns(r.mean, r.sd, paths, life_steps(plan), seed),
-            mortality.draw_death_ages(plan.people, plan.start_year, paths, seed))
+    """(lagged real returns, death ages, inflation) over life_steps: one set of
+    futures every comparison shares."""
+    r, years = plan.returns, life_steps(plan)
+    inflation = draw_inflation(plan, paths, years, seed)
+    returns = lag_returns(draw_returns(r.mean, r.sd, paths, years, seed), inflation, r.inflation_rate)
+    return returns, mortality.draw_death_ages(plan.people, plan.start_year, paths, seed), inflation
 
 
 def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) -> PlanResult:
@@ -1001,11 +1036,11 @@ def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) 
     future (a steady median return) and the bad-luck future (the 10th-percentile path's
     returns, ranked and replayed with ``average_deaths`` over ``steps(plan)``)."""
     r = plan.returns
-    R, D = draw_futures(plan, r.paths if paths is None else paths, r.seed if seed is None else seed)
-    simulated = simulate(plan, R, D)
+    R, D, I = draw_futures(plan, r.paths if paths is None else paths, r.seed if seed is None else seed)
+    simulated = simulate(plan, R, D, I)
     T, g, fixed = steps(plan), median_return(r.mean, r.sd), average_deaths(plan)
     average = simulate(plan, np.full((T, 1), g), fixed)
     # Rank the returns with everyone on the same fixed deaths: ranked on the drawn
     # lifespans, an early death leaves little money and passes for bad markets.
-    k = bad_luck_index(simulate(plan, R[:T], np.repeat(fixed, R.shape[1], axis=1)))
-    return PlanResult(plan, simulated, average, simulate(plan, R[:T, [k]], fixed), g, k)
+    k = bad_luck_index(simulate(plan, R[:T], np.repeat(fixed, R.shape[1], axis=1), I[:T]))
+    return PlanResult(plan, simulated, average, simulate(plan, R[:T, [k]], fixed, I[:T, [k]]), g, k)

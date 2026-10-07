@@ -224,7 +224,7 @@ def test_run_uses_the_median_return_and_replays_the_bad_luck_path():
     assert result.average.paths == 1 and result.simulated.paths == 200
     assert len(result.simulated.years) == engine.life_steps(p)
     assert len(result.average.years) == engine.steps(p)
-    R, D = engine.draw_futures(p, 200, 3)
+    R, D, _ = engine.draw_futures(p, 200, 3)
     replay = engine.simulate(p, R[:engine.steps(p), [result.bad_luck_path]], engine.average_deaths(p))
     for s in engine.SOURCES:
         np.testing.assert_allclose(result.bad_luck.income[s], replay.income[s])
@@ -477,7 +477,7 @@ def test_bad_luck_path_is_ranked_on_returns_not_on_lifespans():
              base=30_000.0, end_age=95)
     p = replace(p, returns=Returns(0.05, 0.15, 300, 3))
     result = engine.run(p)
-    R, _ = engine.draw_futures(p, 300, 3)
+    R, _, _ = engine.draw_futures(p, 300, 3)
     T = engine.steps(p)
     fixed = engine.simulate(p, R[:T], np.repeat(engine.average_deaths(p), 300, axis=1))
     assert result.bad_luck_path == engine.bad_luck_index(fixed)
@@ -969,3 +969,62 @@ def test_default_inflation_is_canadas_40_year_average():
     assert Returns().inflation_rate == pytest.approx(rules.historical_inflation())
     assert 0.02 < rules.historical_inflation() < 0.03
     assert len(rules.CPI.value) == 40
+
+
+# -- inflation paths and the return lag ----------------------------------------------------
+
+def _shocky(**ret):
+    p = plan()
+    return replace(p, returns=replace(p.returns, **{"inflation": None, "inflation_shocks": True, **ret}))
+
+
+def test_inflation_paths_are_5_year_blocks_of_history():
+    hist = [rules.CPI.value[y] for y in sorted(rules.CPI.value)]
+    I = engine.draw_inflation(_shocky(), paths=50, years=12, seed=3)
+    assert I.shape == (12, 50)
+    for n in range(50):
+        for start in (0, 5):                      # each full block is a run of history
+            block = list(I[start:start + 5, n])
+            assert any(hist[k:k + 5] == block for k in range(len(hist) - 4))
+    assert np.array_equal(I, engine.draw_inflation(_shocky(), 50, 12, 3))   # seeded
+
+
+def test_paths_cover_horizons_longer_than_the_history():
+    I = engine.draw_inflation(_shocky(), paths=3, years=73, seed=1)
+    assert I.shape == (73, 3) and np.isfinite(I).all()
+
+
+def test_a_fixed_inflation_rate_means_no_shocks():
+    I = engine.draw_inflation(_shocky(inflation=0.03), paths=4, years=6, seed=1)
+    assert np.all(I == 0.03)
+    off = replace(_shocky(), returns=replace(_shocky().returns, inflation_shocks=False))
+    assert np.allclose(engine.draw_inflation(off, 4, 6, 1), rules.historical_inflation())
+
+
+def test_returns_lag_inflation_only_in_the_short_run():
+    avg = 0.025
+    R = np.array([[0.05], [0.05], [0.05]])
+    I = np.array([[avg], [0.068], [0.003]])
+    lagged = engine.lag_returns(R, I, avg)
+    assert lagged[0, 0] == pytest.approx(0.05)
+    assert lagged[1, 0] < 0.05 and lagged[2, 0] > 0.05
+
+
+def test_inflation_draws_leave_returns_and_lifespans_alone():
+    p = _shocky()
+    R1, D1, I1 = engine.draw_futures(p, 30, 5)
+    steady = replace(p, returns=replace(p.returns, inflation_shocks=False))
+    R0, D0, I0 = engine.draw_futures(steady, 30, 5)
+    assert np.array_equal(D1, D0)
+    unlagged = (1 + R1) * (1 + I1) / (1 + rules.historical_inflation()) - 1
+    assert np.allclose(unlagged, R0)
+
+
+def test_price_level_and_nominal_cost_base_follow_each_path():
+    p = plan(accounts=[Account("A", "nonreg", 1_000_000.0, cost=1_000_000.0)], base=0.0, end_age=63)
+    p = replace(p, withdrawal=replace(p.withdrawal, tfsa_top_up=False))
+    T = engine.steps(p)
+    infl = np.array([[0.10], [0.0], [0.0]])[:T]
+    proj = engine.simulate(p, np.zeros((T, 1)), None, infl)
+    assert proj.price_level[0, 0] == 1.0 and proj.price_level[1, 0] == pytest.approx(1.10)
+    assert proj.inflation[0, 0] == 0.10
