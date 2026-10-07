@@ -255,6 +255,30 @@ def lif_max_pct(province: str, age_jan1: int) -> float:
     return table[min(max(age_jan1, min(table)), max(table))]
 
 
+# Canada's all-items CPI, yearly change of the annual average (Statistics Canada
+# table 18-10-0004-01, vector v41690973, monthly, averaged by calendar year).
+_CPI = "https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1810000401"
+CPI = Rule({
+                  1986: 0.04195, 1987: 0.04356, 1988: 0.04028, 1989: 0.04984, 1990: 0.04780, 1991: 0.05626,
+                  1992: 0.01490, 1993: 0.01865, 1994: 0.00166, 1995: 0.02149, 1996: 0.01571, 1997: 0.01621,
+                  1998: 0.00996, 1999: 0.01735, 2000: 0.02719, 2001: 0.02525, 2002: 0.02258, 2003: 0.02759,
+                  2004: 0.01857, 2005: 0.02214, 2006: 0.02002, 2007: 0.02138, 2008: 0.02370, 2009: 0.00299,
+                  2010: 0.01777, 2011: 0.02912, 2012: 0.01516, 2013: 0.00938, 2014: 0.01907, 2015: 0.01125,
+                  2016: 0.01429, 2017: 0.01597, 2018: 0.02268, 2019: 0.01949, 2020: 0.00717, 2021: 0.03395,
+                  2022: 0.06803, 2023: 0.03879, 2024: 0.02382, 2025: 0.02072,
+}, 2025, _CPI)
+
+
+def historical_inflation(years: int = 40) -> float:
+    """Average yearly inflation over the last ``years`` years of :data:`CPI`
+    (geometric: what a dollar actually lost)."""
+    changes = [CPI.value[y] for y in sorted(CPI.value)[-years:]]
+    growth = 1.0
+    for c in changes:
+        growth *= 1 + c
+    return growth ** (1 / len(changes)) - 1
+
+
 def top_marginal_rate(province: str) -> float:
     """Combined top rate, used for tax on registered money at the second death."""
     return FEDERAL["brackets"].value[-1][1] + PROVINCIAL[province]["brackets"].value[-1][1]
@@ -271,7 +295,7 @@ def all_rules() -> list[tuple[str, Rule]]:
             for key, value in obj.items():
                 walk(f"{prefix}.{key}", value)
 
-    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "CCB", "RRSP_LIMIT", "CHILDCARE", "PENSION_SPLIT",
+    for name in ("FEDERAL", "PROVINCIAL", "CAPITAL_GAINS_INCLUSION", "DIVIDENDS", "RESP", "STUDENT_GRANT", "PAYROLL", "CCB", "RRSP_LIMIT", "CHILDCARE", "CPI", "PENSION_SPLIT",
                  "OAS", "CPP", "RRIF", "TFSA", "LIF"):
         walk(name.lower(), globals()[name])
     return found

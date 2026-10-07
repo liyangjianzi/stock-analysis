@@ -21,6 +21,9 @@ import pandas as pd
 from . import mortality, rules
 
 ACCOUNT_TYPES = ("rrsp", "pension", "tfsa", "nonreg")
+# Yearly contributions can also go to a spousal RRSP: the contributor deducts it, the
+# spouse owns it (withdrawals within 3 years are taxed back to the contributor).
+CONTRIBUTION_TYPES = ACCOUNT_TYPES + ("spousal_rrsp",)
 LIVING = ("home", "away")
 # Yearly cost per student in today's dollars: an editable estimate, not a rule.
 # Home ~ Alberta undergraduate tuition, fees and books; away adds residence and food.
@@ -112,6 +115,11 @@ class Home:
     property_tax: float = 0.0
     insurance: float = 0.0
 
+    @property
+    def released(self) -> float:
+        """Money freed by downsizing: the sale after costs, less the new home and the move."""
+        return self.value * (1 - self.selling_cost) - self.new_value - self.moving_cost
+
 
 @dataclass(frozen=True)
 class Returns:
@@ -119,12 +127,18 @@ class Returns:
     sd: float = 0.15
     paths: int = 10_000
     seed: int = 7
+    inflation: float | None = None   # yearly; None: Canada's 40-year average (rules.CPI)
+
+    @property
+    def inflation_rate(self) -> float:
+        return rules.historical_inflation() if self.inflation is None else self.inflation
 
 
 @dataclass(frozen=True)
 class Withdrawal:
     strategy: str = "rrsp_first"
     steady_income_target: float = 58_000.0
+    tfsa_top_up: bool = True    # each January a retiree moves non-registered money into new TFSA room
 
 
 @dataclass(frozen=True)
@@ -376,9 +390,21 @@ def limits(province: str) -> dict:
 
 def defaults() -> dict:
     """Defaults for the optional sections the GUI can add, for filling blanks."""
-    flags = {f.name: f.default for f in fields(Education) if isinstance(f.default, bool)}
+    flags = lambda cls: {f.name: f.default for f in fields(cls) if isinstance(f.default, bool)}  # noqa: E731
     kid = {f.name: f.default for f in fields(Kid) if f.default not in (MISSING, None)}
-    return {"education": {**flags, "costs": dict(EDUCATION_COSTS)}, "kid": kid}
+    return {"education": {**flags(Education), "costs": dict(EDUCATION_COSTS)}, "kid": kid,
+            "withdrawal": flags(Withdrawal)}
+
+
+def event_span(plan: PlanInputs, ev: Event) -> tuple:
+    """(person index, first year, last year or None) of an event. Ages are the event
+    person's, else people[0]'s."""
+    i = next((k for k, p in enumerate(plan.people) if p.id == ev.person), 0)
+    ref = plan.people[i]
+    start = ev.year if ev.year is not None else plan.start_year + ev.age - ref.age
+    end = (ev.until if ev.until is not None else
+           plan.start_year + ev.until_age - ref.age if ev.until_age is not None else None)
+    return i, start, end
 
 
 def validate(plan: PlanInputs) -> PlanInputs:
@@ -441,10 +467,12 @@ def validate(plan: PlanInputs) -> PlanInputs:
                                ("contributions_when_partner_retired",
                                 p.contributions_when_partner_retired or {})):
             for kind, amount in amounts.items():
-                if kind not in ACCOUNT_TYPES:
-                    _fail(f"{f}.{label}.{kind}", f"unknown account type (use {ACCOUNT_TYPES})")
+                if kind not in CONTRIBUTION_TYPES:
+                    _fail(f"{f}.{label}.{kind}", f"unknown account type (use {CONTRIBUTION_TYPES})")
                 if amount < 0:
                     _fail(f"{f}.{label}.{kind}", "must not be negative")
+                if kind == "spousal_rrsp" and amount > 0 and len(plan.people) < 2:
+                    _fail(f"{f}.{label}.{kind}", "a spousal RRSP needs a spouse in the plan")
     s = plan.spending
     if s.base < 0:
         _fail("spending.base", "must not be negative")
@@ -478,11 +506,13 @@ def validate(plan: PlanInputs) -> PlanInputs:
         if h.downsize_age is not None and h.downsize_age < plan.people[0].age:
             _fail("home.downsize_age", f"{h.downsize_age} has already passed "
                                        f"(people[0] is {plan.people[0].age}); set today's home value")
-        if h.downsize_age is not None and h.value * (1 - h.selling_cost) - h.new_value - h.moving_cost < 0:
+        if h.downsize_age is not None and h.released < 0:
             _fail("home.new_value", "the sale must cover the new home and the move")
     r = plan.returns
     if r.mean <= -1 or r.sd < 0 or r.paths < 1:
         _fail("returns", "need mean > -1, sd >= 0 and paths >= 1")
+    if r.inflation is not None and not -0.05 <= r.inflation <= 0.20:
+        _fail("returns.inflation", "a yearly rate between -0.05 and 0.20 (e.g. 0.025)")
     for name in ("eligible_dividends", "foreign_dividends", "interest"):
         if not 0 <= getattr(plan.nonreg_income, name) <= 0.2:
             _fail(f"nonreg_income.{name}", "a yearly share of the balance between 0 and 0.2")
@@ -514,7 +544,6 @@ def validate(plan: PlanInputs) -> PlanInputs:
             if kid.cesg_received is not None and not (
                     0 <= kid.cesg_received <= rules.RESP["cesg"].value["lifetime_max"]):
                 _fail(f"{f}.cesg_received", "between 0 and the lifetime grant maximum")
-    owner = {p.id: p for p in plan.people}
     for j, ev in enumerate(plan.events):
         f = f"events[{j}]"
         if not _is_number(ev.amount):
@@ -528,20 +557,14 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"{f}.year", "give exactly one of year or age")
         if ev.every is not None and ev.every < 1:
             _fail(f"{f}.every", "repeat every 1 year or more")
-        if ev.until is not None and ev.year is not None and ev.until < ev.year:
-            _fail(f"{f}.until", "must not be before the start year")
-        if ev.until_age is not None and ev.age is not None and ev.until_age < ev.age:
-            _fail(f"{f}.until_age", "must not be before the start age")
         if ev.kind == "income" and not ev.amount >= 0:
             _fail(f"{f}.amount", "yearly income must not be negative")
         if ev.person is not None and ev.person not in ids:
             _fail(f"{f}.person", f"{ev.person!r} is not one of the people {ids}")
-        ref = owner.get(ev.person, plan.people[0])
-        start = ev.year if ev.year is not None else plan.start_year + ev.age - ref.age
-        if ev.until_age is not None and plan.start_year + ev.until_age - ref.age < start:
-            _fail(f"{f}.until_age", "ends before it starts")
-        if ev.until is not None and ev.until < start:
-            _fail(f"{f}.until", "must not be before the start year")
+        _, start, end = event_span(plan, ev)
+        if end is not None and end < start:
+            _fail(f"{f}.until_age" if ev.until_age is not None else f"{f}.until",
+                  "ends before it starts")
         if start < plan.start_year and ev.every is None and ev.kind == "cash":
             _fail(f"{f}.year" if ev.year is not None else f"{f}.age", "is before the plan starts")
     for j, a in enumerate(plan.accounts):

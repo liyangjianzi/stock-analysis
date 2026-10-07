@@ -106,7 +106,7 @@ const TABS = [["people", "People"], ["spending", "Spending"], ["education", "Edu
               ["investing", "Investing"], ["optimize", "Optimize"], ["compare", "Compare"], ["advanced", "Advanced"]];
 const ACCOUNTS = [["pension", "Pension / LIRA"], ["rrsp", "RRSP"], ["tfsa", "TFSA"], ["nonreg", "Non-registered"]];
 let original = null, draft = null, saved = null, strategies = {}, limits = {}, reportPaths = null, lastPreview = null;
-let eduDefaults = {}, kidDefaults = {};   // from the server: inputs.defaults()
+let eduDefaults = {}, kidDefaults = {}, drawDefaults = {};   // from the server: inputs.defaults()
 let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
 let gen = 0, inflight = false, timer = null;
 // Optimizer results, with the draft they were computed for (shown as out of date after an edit).
@@ -164,7 +164,9 @@ function slider(path, label, o) {
 function number(path, label, o = {}) {
   return field(path, label, o, `<input type="number" ${attrs(path, o)} placeholder="${esc(o.placeholder ?? "")}">`);
 }
-const contribGrid = prefix => `<div class="grid2">${ACCOUNTS.map(([k, l]) =>
+// A couple can also contribute to a spousal RRSP: deducted by you, owned by your partner.
+const contribGrid = prefix => `<div class="grid2">${[...ACCOUNTS,
+  ...(draft.people.length === 2 ? [["spousal_rrsp", "Spousal RRSP (for your partner)"]] : [])].map(([k, l]) =>
   number(`${prefix}.${k}`, l, {min: 0, step: 500, optional: true, placeholder: "0"})).join("")}</div>`;
 function choice(path, label, options) {
   const v = get(draft, path) ?? "";
@@ -257,7 +259,7 @@ function spendingPanel() {
       ${slider("spending.guardrail_ceiling", "Never above", {min: limits.guardrail_ceiling[0], max: limits.guardrail_ceiling[1], step: 0.05, unit: "%"})}` : `
       ${slider("spending.bad_market_cut", "Cut spending by", {min: 0, max: 0.3, step: 0.01, unit: "%"})}
       ${slider("spending.bad_market_trigger", "…when investments drop below", {min: 0.5, max: 1, step: 0.01, unit: "%",
-               help: "Share of their value on retirement day."})}`}
+               help: "Share of their value in the first year nobody earns."})}`}
     </div></div>`;
 }
 const newKid = n => ({...kidDefaults, name: `Child ${n}`, age: 10});
@@ -341,6 +343,9 @@ function investingPanel() {
   return `<div class="card"><h3>Returns after inflation</h3>
       ${slider("returns.mean", "Average yearly return", {min: 0, max: 0.10, step: 0.0025, unit: "%", digits: 2})}
       ${slider("returns.sd", "Ups and downs (volatility)", {min: 0, max: 0.30, step: 0.01, unit: "%"})}
+      ${number("returns.inflation", "Inflation (% a year)", {min: -0.05, max: 0.2, step: 0.001, unit: "%",
+               nullable: true, placeholder: "Canada's last 40 years",
+               help: "Spending and benefits keep pace; it raises the tax on non-registered gains."})}
       <p class="note">Volatility pulls the typical return below the average · typical (median) return
         <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>
     </div>
@@ -355,6 +360,9 @@ function investingPanel() {
       ${Object.entries(strategies).map(([k, l]) => `<label class="radio"><input type="radio" name="strategy"
         value="${k}" ${w.strategy === k ? "checked" : ""}> ${esc(l)}</label>`).join("")}
       ${w.strategy === "steady_income" ? number("withdrawal.steady_income_target", "Target taxable income per person (C$/yr)", {min: 0, step: 1000}) : ""}
+      ${check("withdrawal.tfsa_top_up", "Each January after retiring, move non-registered money into new TFSA room", drawDefaults.tfsa_top_up)}
+      <p class="note">Moving shares into a TFSA counts as selling them, so any gain is taxed that year;
+        after that, their growth and payouts are tax-free.</p>
     </div>`;
 }
 function advancedPanel() {
@@ -399,11 +407,13 @@ function advancedPanel() {
       ${number("returns.seed", "Random seed", {min: 0, step: 1})}
     </div></div>`;
 }
+// A tool's result: its error, or a note when the plan changed after it ran.
+const staleNote = r => r && r.forDraft !== JSON.stringify(draft)
+  ? `<p class="note">You've edited the plan since; run it again for current numbers.</p>` : "";
+const errorNote = text => `<p class="note" style="color:var(--bad)">${esc(text)}</p>`;
 function optimizePanel() {
-  const stale = r => r && r.forDraft !== JSON.stringify(draft)
-    ? `<p class="note">You've edited the plan since; run it again for current numbers.</p>` : "";
   let a = "";
-  if (afford && afford.error) a = `<p class="note" style="color:var(--bad)">${esc(afford.error)}</p>`;
+  if (afford && afford.error) a = errorNote(afford.error);
   else if (afford) {
     const r = afford.result, goal = pct(r.target);
     const spend = r.max_spending == null
@@ -420,10 +430,10 @@ function optimizePanel() {
       : `<div class="answer"><span>Earliest retirement:</span><b>${when}</b>
            <span class="note">${shift} · ${pct(r.retire_success)} chance</span>
            ${s !== 0 ? `<button data-apply="retire">Use this</button>` : ""}</div>`;
-    a = `<p class="note">Chance the money lasts now: ${pct(r.success)}.</p>${spend}${retire}${stale(afford)}`;
+    a = `<p class="note">Chance the money lasts now: ${pct(r.success)}.</p>${spend}${retire}${staleNote(afford)}`;
   }
   let b = "";
-  if (benefits && benefits.error) b = `<p class="note" style="color:var(--bad)">${esc(benefits.error)}</p>`;
+  if (benefits && benefits.error) b = errorNote(benefits.error);
   else if (benefits) {
     const r = benefits.result, gain = r.best_legacy - r.legacy;
     const row = (label, values, best) => `<tr><td>${label}</td>${Object.entries(values).map(([age, v]) =>
@@ -436,10 +446,10 @@ function optimizePanel() {
          · chance the money lasts ${pct(r.success)} → ${pct(r.best_success)}</span>
          ${gain > 0 ? `<button data-apply="benefits">Use these ages</button>` : ""}</div>
       ${gain < 0.005 * Math.abs(r.legacy) ? `<p class="note">The difference is under 0.5% of the legacy, a near tie:
-         choose on other grounds, such as health or wanting the income sooner.</p>` : ""}${stale(benefits)}`;
+         choose on other grounds, such as health or wanting the income sooner.</p>` : ""}${staleNote(benefits)}`;
   }
   let dd = "";
-  if (drawdown && drawdown.error) dd = `<p class="note" style="color:var(--bad)">${esc(drawdown.error)}</p>`;
+  if (drawdown && drawdown.error) dd = errorNote(drawdown.error);
   else if (drawdown) {
     const r = drawdown.result, pick = r.best[goal], now = r.current;
     const sign = (x, f) => (x >= 0 ? "+" : "−") + f(Math.abs(x));
@@ -449,12 +459,12 @@ function optimizePanel() {
           lifetime tax ${short(pick.lifetime_tax)} (${sign(pick.lifetime_tax - now.lifetime_tax, short)}) ·
           ${pct(pick.success, 1)} chance (now ${pct(now.success, 1)})</span>
         <button data-apply="drawdown">Use this</button></div>
-      ${riskier ? `<p class="note" style="color:var(--bad)">This lowers the chance the money lasts by more than a point.</p>` : ""}
+      ${riskier ? errorNote("This lowers the chance the money lasts by more than a point.") : ""}
       <table class="ages"><tr><td>Each draws up to</td><td>Legacy</td><td>Lifetime tax</td><td>Chance</td><td>Tax, first retired year</td></tr>
       ${[now, ...r.rows].map(x => `<tr class="${x === pick || (x.target != null && x.target === pick.target) ? "best" : ""}">
           <td>${x.target == null ? esc(x.label) : money(x.target)}</td><td>${short(x.legacy)}</td>
           <td>${short(x.lifetime_tax)}</td><td>${pct(x.success, 1)}</td><td>${short(x.first_retired_tax)}</td></tr>`).join("")}
-      </table>${stale(drawdown)}`;
+      </table>${staleNote(drawdown)}`;
   }
   return `<div class="card"><h3>What can we afford?</h3>
       <div class="field"><label>Chance the money lasts to aim for <b id="target-out">${pct(target)}</b></label>
@@ -486,23 +496,20 @@ function optimizePanel() {
 // List items (events, kids, dated changes) are skipped: an index would point at the wrong
 // item once the list changes. Only the fixed people list is addressed by index.
 const SKIP_KEYS = ["saved_scenarios", "holdings", "balances", "_readme", "scenarios"];
-const LIST_OK = p => p === "people";
 function diffScalars(a, b, path = "", out = {changes: {}, skipped: false}) {
   const isObj = v => v !== null && typeof v === "object";
   for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
     if (!path && SKIP_KEYS.includes(k)) continue;
     const p = path ? `${path}.${k}` : k, x = a?.[k], y = b?.[k];
-    if (Array.isArray(x) && Array.isArray(y) && !LIST_OK(p)) {
+    if (Array.isArray(x) && Array.isArray(y) && p !== "people") {
       if (JSON.stringify(x) !== JSON.stringify(y)) out.skipped = true;
     } else if (isObj(x) && isObj(y) && Array.isArray(x) === Array.isArray(y) && (!Array.isArray(x) || x.length === y.length))
       diffScalars(x, y, p, out);
-    else if (!isObj(x) && !isObj(y)) { if (x !== y && y !== undefined) out.changes[p] = y ?? null; }
+    else if (!isObj(x) && !isObj(y)) { if (x !== y && y !== undefined) out.changes[p] = y; }
     else out.skipped = true;
   }
   return out;
 }
-const staleNote = r => r && r.forDraft !== JSON.stringify(draft)
-  ? `<p class="note">You've edited the plan since; run it again for current numbers.</p>` : "";
 function comparePanel() {
   const list = draft.saved_scenarios || [];
   const items = list.map((sc, i) => `<tr><td><b>${esc(sc.name)}</b></td>
@@ -510,7 +517,7 @@ function comparePanel() {
       <td><button data-apply-scenario="${i}">Apply to plan</button></td>
       <td><button class="x" data-remove-scenario="${i}" title="Remove">×</button></td></tr>`).join("");
   let table = "";
-  if (compared && compared.error) table = `<p class="note" style="color:var(--bad)">${esc(compared.error)}</p>`;
+  if (compared && compared.error) table = errorNote(compared.error);
   else if (compared) {
     const rows = compared.result.rows;
     const line = (label, f) => `<tr><td>${label}</td>${rows.map(r => `<td>${f(r)}</td>`).join("")}</tr>`;
@@ -616,9 +623,9 @@ document.addEventListener("click", e => {
     draft.spending.changes.push({year: draft.start_year + 1, amount: 0, label: ""});
     edited();
   }
-  if (el.id === "opt-afford") runOptimizer(el, "affordability", r => afford = r, {target});
-  if (el.id === "opt-benefits") runOptimizer(el, "benefits", r => benefits = r, {});
-  if (el.id === "opt-drawdown") runOptimizer(el, "drawdown", r => drawdown = r, {});
+  if (el.id === "opt-afford") runOptimizer(el, "/api/optimize/affordability", r => afford = r, {target});
+  if (el.id === "opt-benefits") runOptimizer(el, "/api/optimize/benefits", r => benefits = r, {});
+  if (el.id === "opt-drawdown") runOptimizer(el, "/api/optimize/drawdown", r => drawdown = r, {});
   if (el.dataset.apply) applyOptimizer(el.dataset.apply);
   if (el.dataset.addEspp != null) { draft.people[Number(el.dataset.addEspp)].espp = {rate: 0.1, cap: 25000, discount: 0.15}; edited(); }
   if (el.dataset.removeEspp != null) { draft.people[Number(el.dataset.removeEspp)].espp = null; edited(); }
@@ -636,11 +643,10 @@ document.addEventListener("input", e => {
   target = Number(e.target.value) / 100;
   $("target-out").textContent = pct(target);
 });
-async function runOptimizer(button, kind, keep, extra) {
+async function runOptimizer(button, url, keep, extra) {
   button.disabled = true;
   button.innerHTML = `<span class="spin"></span>Searching…`;
   const forDraft = JSON.stringify(draft);
-  const url = kind.startsWith("/") ? kind : "/api/optimize/" + kind;
   try { keep({result: await api(url, {plan: draft, ...extra}), forDraft}); }
   catch (err) { keep({error: err.message, forDraft}); }
   render();
@@ -736,7 +742,7 @@ function showResults(r) {
   $("balances").textContent = r.balances_source;
 }
 function load(state) {
-  ({education: eduDefaults, kid: kidDefaults} = state.defaults);
+  ({education: eduDefaults, kid: kidDefaults, withdrawal: drawDefaults} = state.defaults);
   const e = state.plan.education;      // show a child's defaulted fields instead of blanks
   if (e && e.kids) e.kids = e.kids.map(k => ({...kidDefaults, ...k}));
   original = state.plan; draft = clone(original); saved = state.saved;

@@ -22,9 +22,9 @@ import numpy as np
 import plotly.graph_objects as go
 
 from ..report import save_report  # noqa: F401  (re-exported: the same writer as the other reports)
-from . import engine, mortality, refund, rules
+from . import actions, engine, mortality, refund, rules
 from .engine import SOURCES, PlanResult, Projection
-from .inputs import STRATEGY_LABELS
+from .inputs import STRATEGY_LABELS, event_span
 
 SURFACE, PAGE = "#fcfcfb", "#f9f9f7"
 INK, INK_2, MUTED, GRID, AXIS = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
@@ -36,7 +36,8 @@ LABELS = {"earned": "Earned income", "cpp": "CPP", "oas": "OAS", "minimums": "RR
           "ccb": "Child benefit", "other": "One-time money", "shortfall": "⚠ Shortfall"}
 COLORS = {**dict(zip(SOURCES[:-1], SERIES)), "ccb": MUTED, "other": AXIS, "shortfall": CRITICAL}
 DRAWN = ("registered", "tfsa", "nonreg")   # year-table sources that are withdrawals from an account
-SECTION_IDS = ("summary", "suggestions", "income", "money-left", "years", "assumptions")
+ACTIONS_ID = "actions"
+SECTION_IDS = ("summary", ACTIONS_ID, "suggestions", "income", "money-left", "years", "assumptions")
 EDUCATION_ID = "education"          # only when the plan has children's education
 SAVED_ID = "saved"                  # only when the plan has saved scenarios
 
@@ -54,6 +55,7 @@ h1{{font-size:1.5rem;margin:.6rem 0 .2rem}} h2{{font-size:1.1rem;margin:1.2rem 0
 table{{border-collapse:collapse;width:100%;background:{SURFACE};font-size:.85rem}}
 th,td{{padding:6px 8px;border-bottom:1px solid {GRID};text-align:right}}
 th:first-child,td:first-child{{text-align:left}} td{{font-variant-numeric:tabular-nums}}
+table.actions th,table.actions td{{text-align:left;vertical-align:top}}
 .up{{color:{GOOD_TEXT}}} .down{{color:{CRITICAL}}} .flat{{color:{INK_2}}} tr.base td{{font-weight:600}}
 details summary{{cursor:pointer;font-weight:600;margin:.8rem 0}}
 .years{{overflow:auto;max-height:70vh;border:1px solid rgba(11,11,11,.10);border-radius:10px}}
@@ -251,8 +253,7 @@ def _lifespan_tiles(result: PlanResult) -> str:
     if life["alone_years"] is not None:
         tiles.append(_tile("Survivor alone (median)", f"{life['alone_years']:.0f} years",
                            f"Spending {result.inputs.spending.survivor_share:.0%} of the couple's"))
-    return (f"<div class='kpis' style='grid-template-columns:repeat({len(tiles)},1fr);margin-top:16px'>"
-            + "".join(tiles) + "</div>")
+    return _tile_row(tiles)
 
 
 def spending_flex(result: PlanResult) -> dict:
@@ -269,11 +270,10 @@ def _flex_tile(result: PlanResult) -> str:
         return ""
     f = spending_flex(result)
     pct = lambda x: f"{(x - 1):+.0%}"
-    return (f"<div class='kpis' style='grid-template-columns:repeat(2,1fr);margin-top:16px'>"
-            + _tile("Spending with guardrails: lowest level", pct(f["typical_low"]),
-                    f"Typical future; 1 in 10: {pct(f['bad_low'])}")
-            + _tile("Highest level reached", pct(f["typical_high"]), "Typical future, after strong years")
-            + "</div>")
+    return _tile_row([_tile("Spending with guardrails: lowest level", pct(f["typical_low"]),
+                            f"Typical future; 1 in 10: {pct(f['bad_low'])}"),
+                      _tile("Highest level reached", pct(f["typical_high"]),
+                            "Typical future, after strong years")])
 
 
 def _legacy_tile(plan, avg: Projection, bad: Projection) -> str:
@@ -293,6 +293,28 @@ def _kpis(result: PlanResult) -> str:
         ("Lifetime taxes", _short(avg.lifetime_tax[0]), "Income tax plus tax at death"),
     ]
     return "<div class='kpis'>" + "".join(_tile(*row) for row in rows) + "</div>"
+
+
+def _actions(result: PlanResult) -> str:
+    """The plan as a dated to-do list, plus the inputs it still guesses at."""
+    rows = "".join(
+        f"<tr><td>{a.year}{'–' + str(a.until) if a.until else ''}</td><td>{_esc(a.who)}</td>"
+        f"<td>{_esc(a.what)}</td><td>{_esc(a.why)}</td></tr>" for a in actions.plan_actions(result))
+    missing = actions.missing_inputs(result.inputs)
+    todo = ("<h3>Information to add</h3><p class='note'>The plan estimates these; the real figures "
+            "make it more accurate.</p><ul>" + "".join(f"<li>{_esc(m)}</li>" for m in missing)
+            + "</ul>") if missing else ""
+    return ("<p class='note'>What the plan assumes you do, and when. Amounts are in today's dollars "
+            "from the average future; the numbers above only hold if these happen.</p>"
+            "<table class='actions'><thead><tr><th>When</th><th>Who</th><th>What to do</th><th>Why</th>"
+            f"</tr></thead><tbody>{rows}</tbody></table>{todo}")
+
+
+def _tile_row(tiles: list, gap: bool = True) -> str:
+    """Tiles side by side, one column each."""
+    margin = ";margin-top:16px" if gap else ""
+    return (f"<div class='kpis' style='grid-template-columns:repeat({len(tiles)},1fr){margin}'>"
+            + "".join(tiles) + "</div>")
 
 
 def _tile(label: str, value: str, sub: str) -> str:
@@ -342,7 +364,7 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
     grants = avg.student_grant[:, 0]
     resp_pays = s.cost - grants - uncovered
     years = [t for t in range(len(avg.years)) if s.cost[t] > 0]
-    tiles = "".join([
+    tiles = _tile_row([
         _tile("School costs", _short(s.cost.sum()), f"{int(s.students.sum())} student-years"),
         _tile("Canada Student Grants", _short(grants.sum()),
              f"Bad luck: {_short(bad.student_grant[:, 0].sum())}" if plan.education.student_grant
@@ -350,7 +372,7 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
         _tile("Paid by the RESP", _short(resp_pays.sum()), f"RESP today {_short(s.balance)}"),
         _tile("Paid by you", _short(uncovered.sum()),
              f"plus {_short(s.contribution.sum())} of RESP contributions"),
-    ])
+    ], gap=False)
     names = {t: ", ".join(k.name for k in s.kids if avg.years[t] in k.school_years) for t in years}
     rows = "".join(
         f"<tr><td>{avg.years[t]}</td><td>{_esc(names[t])}</td><td>{_money(s.cost[t])}</td>"
@@ -361,7 +383,7 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
         hint = ("<p class='note'>The student grant is tested on last year's taxable family income: "
                 "RRSP/RRIF withdrawals count, TFSA withdrawals don't. Drawing proportionally from all "
                 "accounts (see Expert planning) can keep that income low enough in school years.</p>")
-    return (f"<div class='kpis' style='grid-template-columns:repeat(4,1fr)'>{tiles}</div>"
+    return (f"{tiles}"
             "<table><thead><tr><th>Year</th><th>In school</th><th>Cost</th><th>Student grant</th>"
             "<th>RESP pays</th><th>You pay</th><th>RESP after</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>{hint}"
@@ -474,7 +496,7 @@ def _refund_check(plan, refunds) -> str:
 
 
 def _event_text(plan, ev) -> str:
-    who = next((p.name for p in plan.people if p.id == ev.person), plan.people[0].name)
+    who = plan.people[event_span(plan, ev)[0]].name
     start = str(ev.year) if ev.year is not None else f"{who} at {ev.age}"
     end = (f" to {ev.until}" if ev.until is not None else
            f" to {who} at {ev.until_age}" if ev.until_age is not None else "")
@@ -498,8 +520,15 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
     s, h, r, ni = plan.spending, plan.home, plan.returns, plan.nonreg_income
     facts = [
         ("Withdrawal order", STRATEGY_LABELS[plan.withdrawal.strategy]),
+        ("TFSA top-up", "each January after retiring, non-registered money fills new TFSA room "
+                        "(gains on the shares moved are taxed that year)"
+                        if plan.withdrawal.tfsa_top_up else "off"),
         ("Returns", f"{r.mean:.1%} average, {r.sd:.0%} yearly swings; typical "
                     f"{result.average_return:.2%} a year after inflation"),
+        ("Inflation", f"{r.inflation_rate:.2%} a year"
+                      + (" (Canada's CPI, average of the last 40 years)" if r.inflation is None else "")
+                      + "; spending, benefits and tax brackets keep pace, but the book value of "
+                        "non-registered investments doesn't, so their gains are taxed on nominal values"),
         ("Spending", f"{_money(s.base)} a year after tax; slow-go from {s.slow_go_age} "
                      f"({s.slow_go_share:.0%}), no-go from {s.no_go_age} ({s.no_go_share:.0%}) "
                      f"plus {_money(s.care)} care"),
@@ -586,6 +615,7 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
            f"{_flex_tile(result)}")
     sections = [
         ("summary", "", top),
+        (ACTIONS_ID, "Action plan", _actions(result)),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
         *([(SAVED_ID, "Saved scenarios", _saved_table(saved))] if saved else []),
         *([(EDUCATION_ID, "Children's education", _education(plan, avg, bad))]

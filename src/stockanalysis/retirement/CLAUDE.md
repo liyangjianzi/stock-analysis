@@ -26,6 +26,7 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 | `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success; `compare_saved` evaluates the plan and its `saved_scenarios` side by side |
 | `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
 | `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers), `rrsp_drawdown` (every `steady_income` target in `DRAWDOWN_TARGETS` + the plan as it stands → `DrawdownTable`; `best("legacy" | "tax" | "success")`, ties keep the lower target) and `best_benefit_ages` (per-person CPP x OAS grid on the expected legacy over `LIFESPAN_DRAWS` lifespans, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
+| `actions.py` | The plan as a to-do list: `plan_actions(result)` reads dated `Action`s from what the average future recorded: `tfsa_top_up`, `income["registered"]`, `lif_steps`, `split_share`, `downsize_step`, the balances, and the RESP schedule. It never re-derives an engine decision from the inputs. `_runs` splits a yearly amount into phases (more than 40% and C$2,000 apart). `missing_inputs(plan)` lists the inputs still estimated. When the engine gains a behaviour the household must act on, record it on `Projection` and read it here |
 | `report.py` | `build_report` (pure; self-contained HTML string), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
 | `cli.py` | `stock-analysis retire`. `generate(plan, source, ...)` is **the one report path** (run → rank → build → save → summary); the CLI and the GUI both call it. `_with_balances(plan, path, load=_load_book)` is the one balance-precedence rule; the GUI passes a caching `load` |
 | `gui.py` + `static/planner.html` | `--gui`: stdlib `http.server` plan editor, tabs People / Spending (events, guardrails) / Education / Home / Investing / Optimize / Compare / Advanced (see below) |
@@ -196,6 +197,30 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   use small grids with `workers=1`, plus one pool-equivalence test.
 - Deferred ideas are listed under "Future improvements" in `README.md`. Add new
   ones there, not here.
+
+- **Inflation** (`returns.inflation`, default `rules.historical_inflation()`, the
+  40-year CPI average from `rules.CPI`). The model is real, so inflation acts only
+  through `deflate`: each year the non-registered `cost` base (and the RESP's
+  contributions and grants) shrink in today's dollars, so taxed gains are nominal.
+  Refresh `rules.CPI` from StatCan each January with the other rules.
+- **Spousal RRSP** (`contributions.spousal_rrsp`, `engine.CONTRIBUTIONS`). It is
+  a contribution kind, not an account: the money joins the partner's `rrsp`
+  balance, and `spousal` (P, N) tracks how much of it is spousal.
+  - Draws and RRIF minimums use the own money first (`spousal` is capped at the
+    balance after each).
+  - `recent` (3, P, N) keeps the last 3 calendar years of spousal money received,
+    for `_attribute`. That moves the spousal part of a top-up draw, up to
+    `recent`, onto the contributor's ordinary income while they live. RRIF
+    minimums are exempt.
+  - The deduction and the RRSP room belong to the contributor (`payroll`, the
+    room update).
+- **TFSA top-up** (`withdrawal.tfsa_top_up`, `engine._tfsa_top_up`). Each
+  January, before the withdrawals, a retiree's room (`room * retired`) is filled
+  from non-registered money, own account first, then the partner's.
+  - The shares moved realize their pro-rata gain. It goes to `_parts(realized=...)`,
+    so it is taxed in the household loop. Losses are floored at 0.
+  - Workers are skipped, because their planned TFSA contributions fill the room
+    at step 6. The amounts moved are recorded in `Projection.tfsa_top_up`.
 
 ## The GUI (`gui.py`)
 

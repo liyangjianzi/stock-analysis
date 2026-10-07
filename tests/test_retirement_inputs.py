@@ -277,6 +277,11 @@ def test_events_parse_and_default_to_none():
     ({"label": "x", "amount": 1, "year": 2030, "kind": "gift"}, "events[0].kind"),
     ({"label": "x", "amount": -1, "year": 2030, "kind": "income"}, "events[0].amount"),
     ({"label": "x", "amount": 1, "year": 2030, "kind": "income", "person": "Z"}, "events[0].person"),
+    ({"label": "x", "amount": None, "year": 2030}, "events[0].amount"),
+    ({"label": "x", "amount": "5", "year": 2030}, "events[0].amount"),
+    ({"label": "x", "amount": 1, "year": 2030.5}, "events[0].year"),
+    ({"label": "x", "amount": 1, "year": 2020}, "events[0].year"),                  # before the plan, once
+    ({"label": "x", "amount": 1, "year": 2030, "until_age": 40}, "events[0].until_age"),
 ])
 def test_bad_events_name_the_field(bad, field):
     d = copy.deepcopy(inputs.TEMPLATE)
@@ -288,9 +293,10 @@ def test_bad_events_name_the_field(bad, field):
 
 def test_guardrail_settings_default_and_validate():
     s = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).spending
-    assert (s.rule, s.guardrail_band, s.guardrail_step, s.guardrail_stop_years) == ("bad_market", 0.20, 0.10, 15)
+    assert (s.rule, s.guardrail_band, s.guardrail_step, s.guardrail_stop_years,
+            s.guardrail_floor, s.guardrail_ceiling) == ("bad_market", 0.20, 0.10, 15, 0.75, 1.5)
     for key, bad in (("rule", "yolo"), ("guardrail_band", 0.0), ("guardrail_step", 0.6),
-                     ("guardrail_stop_years", -1)):
+                     ("guardrail_stop_years", -1), ("guardrail_floor", 1.2)):
         d = copy.deepcopy(inputs.TEMPLATE)
         d["spending"][key] = bad
         with pytest.raises(inputs.PlanError) as e:
@@ -311,21 +317,6 @@ def test_saved_scenarios_parse_and_bad_ones_name_the_scenario():
         assert e.value.field == "saved_scenarios[0]"
 
 
-@pytest.mark.parametrize("bad, field", [
-    ({"label": "x", "amount": None, "year": 2030}, "events[0].amount"),
-    ({"label": "x", "amount": "5", "year": 2030}, "events[0].amount"),
-    ({"label": "x", "amount": 1, "year": 2030.5}, "events[0].year"),
-    ({"label": "x", "amount": 1, "year": 2020}, "events[0].year"),                  # before the plan, once
-    ({"label": "x", "amount": 1, "year": 2030, "until_age": 40}, "events[0].until_age"),
-])
-def test_more_bad_events(bad, field):
-    d = copy.deepcopy(inputs.TEMPLATE)
-    d["events"] = [bad]
-    with pytest.raises(inputs.PlanError) as e:
-        inputs.parse(d)
-    assert e.value.field == field
-
-
 @pytest.mark.parametrize("changes", [{"people.0.retire_age": "62"}, {"spending": 5}, {"home.value": None}])
 def test_wrong_typed_scenario_values_are_plan_errors(changes):
     d = copy.deepcopy(inputs.TEMPLATE)
@@ -343,11 +334,23 @@ def test_scenarios_can_change_contributions_and_education_costs():
     assert v.people[0].contributions["rrsp"] == 15_000 and plan.people[0].contributions["rrsp"] != 15_000
 
 
-def test_guardrail_floor_and_ceiling_validate():
-    s = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).spending
-    assert (s.guardrail_floor, s.guardrail_ceiling) == (0.75, 1.5)
+
+def test_spousal_rrsp_needs_a_spouse():
     d = copy.deepcopy(inputs.TEMPLATE)
-    d["spending"]["guardrail_floor"] = 1.2
+    d["people"][0]["contributions"]["spousal_rrsp"] = 5_000
+    assert inputs.parse(d).people[0].contributions["spousal_rrsp"] == 5_000
+    d["people"] = d["people"][:1]
+    d.pop("balances", None)
+    d["balances"] = [{"owner": "A", "type": "rrsp", "balance": 1_000}]
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
-    assert e.value.field == "spending.guardrail_floor"
+    assert e.value.field == "people[0].contributions.spousal_rrsp"
+
+
+
+def test_inflation_is_bounded():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"]["inflation"] = 0.5
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "returns.inflation"

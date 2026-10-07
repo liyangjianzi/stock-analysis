@@ -72,7 +72,8 @@ def generate(plan, source, *, paths=None, scenario_paths=None, seed=None, out_ro
     previous = report.latest_summary(root)
     now = dt.datetime.now()
     run_dir = root / now.strftime("%Y-%m-%d_%H%M%S")
-    saved = (scenarios.compare_saved(plan, paths=scenario_paths or result.simulated.paths, seed=seed)
+    saved = (scenarios.compare_saved(plan, paths=scenario_paths or result.simulated.paths, seed=seed,
+                                         baseline=baseline)
              if plan.saved_scenarios else None)
     html_doc = report.build_report(result, baseline, ranked, generated_at=now.strftime("%Y-%m-%d %H:%M"),
                                    holdings_source=source, previous=previous,

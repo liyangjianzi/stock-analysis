@@ -102,11 +102,11 @@ keeps it. Library: `optimize.affordability(plan, target=0.9)` and
 
 | Section | Holds |
 |---|---|
-| `people[]` (1–2) | `age`, `retire_age`, `sex` (`female` / `male` for the life table; omit to average), `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
+| `people[]` (1–2) | `age`, `retire_age`, `sex` (`female` / `male` for the life table; omit to average), `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`, and for a couple `spousal_rrsp`) |
 | `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), `survivor_share` (0.70), `rule`: `bad_market` (cut `bad_market_cut` when investments fall below `bad_market_trigger` × their value the first year nobody earns) or `guardrails` (`guardrail_band`, `guardrail_step`, `guardrail_stop_years`, `guardrail_floor`, `guardrail_ceiling`) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, `selling_cost`, `moving_cost`, `property_tax`, `insurance` |
-| `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed` |
-| `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`) |
+| `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed`; `inflation` (yearly; default Canada's CPI average over the last 40 years, 2.42% for 1985–2025) |
+| `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`); `tfsa_top_up` (default on): each January a retiree fills new TFSA room from non-registered money |
 | `education` (optional) | `kids[]` (`name`, `age`, `start_age` 18, `years` 4, `living` `home`/`away`, `cesg_received`), `costs` per student-year (`home` 11,000 / `away` 25,000 today's $, editable estimates), RESP `resp_balance` (default: the holdings' RESP), `contributed` / `grants` so far (default: estimated as if every year's grant was collected), `contribute` (each January while it still earns the grant), `aip_to_rrsp`, `student_grant` (apply for the Canada Student Grant), `childcare` (yearly child care already in spending, for the deduction). The kids also drive the Canada Child Benefit |
 | `nonreg_income` (optional) | yearly payouts of the non-registered accounts as shares of their balance: `eligible_dividends` (Canadian companies), `foreign_dividends`, `interest`. Part of `returns.mean`, reinvested, taxed every year. Omit for none |
 | `balances` (optional) | `{owner, type, balance, cost}` rows; omit to read the holdings workbook |
@@ -153,6 +153,18 @@ contributed before the year the child turns 15).
 
 ## The report
 
+- **Action plan:** the plan as a dated to-do list. It lists everything the
+  projection assumes you do, with years and amounts from the average future:
+  - retiring and the TFSA top-ups;
+  - how much to withdraw from RRSPs/RRIFs in each phase;
+  - converting to a RRIF and moving the LIRA into a LIF;
+  - starting CPP and OAS;
+  - electing pension splitting;
+  - downsizing;
+  - RESP contributions, Canada Student Grant applications and closing the RESP.
+
+  Below it, **Information to add** lists the inputs the plan still estimates
+  (Notice of Assessment RRSP limits, the CPP statement, RESP statement figures).
 - **Chance the money lasts as long as either of you lives:** the share of futures
   with no short year while anyone is alive. Each future draws when each person dies
   (see Lifespans below); `end_age` is only the "plan to" age of the average and
@@ -214,6 +226,55 @@ result.simulated.success, result.average.legacy[0]
 baseline, ranked = scenarios.rank(plan, paths=2000, seed=7)   # one-change what-ifs
 out, result = cli.generate(plan, "plan.json balances")        # writes report + summary
 ```
+
+## Inflation
+
+Everything is in today's dollars, so spending, CPP, OAS, tax brackets and TFSA
+limits keep pace with inflation without further input. Inflation still matters in
+one place: a non-registered investment's book value is fixed in dollars, so in
+today's dollars it shrinks every year. The gain taxed on a sale, a TFSA top-up or
+at death is therefore the nominal gain, inflation included.
+
+The default rate is the average of Canada's all-items CPI over the last 40 years,
+from Statistics Canada table 18-10-0004-01, stored in `rules.CPI`: 2.42% a year
+for 1985–2025. Year by year it ranged from 0.2% to 6.8% (2022). Set
+`returns.inflation` to plan with another rate.
+
+Fixed dollar amounts that aren't indexed are still held flat in today's dollars,
+a small overstatement. These include the C$2,000 federal pension credit, RESP
+grant limits, the C$50,000 RESP-to-RRSP transfer and the student grant amount.
+
+## Spousal RRSP and pension splitting
+
+- **Pension income splitting** is automatic. Each year, once someone is 65+ with
+  RRIF/LIF income, the tax tries every split from 0% to 50% and uses the
+  cheapest. The Action plan dates the first year, when you elect it on Form T1032.
+  Plain RRSP withdrawals and anything before 65 can't be split.
+- **A spousal RRSP** (`contributions.spousal_rrsp`, for a couple) moves money to
+  the partner *before* 65, when splitting isn't allowed:
+  - The contributor deducts it, and it uses their RRSP room together with their
+    own RRSP contributions; the own RRSP is trimmed first when room runs out.
+  - The money lands in the partner's RRSP and is taxed in their hands later.
+  - The plan draws the partner's own RRSP money first.
+  - Spousal money withdrawn within 3 calendar years of a contribution is taxed
+    back to the contributor (the attribution rule), except RRIF minimums and
+    after the contributor's death.
+  - The Action plan says until when to leave it alone.
+
+  It helps most when one spouse would retire with much more registered money
+  or a much higher income than the other.
+
+## TFSA top-up
+
+New TFSA room appears every January (the annual limit, plus last year's
+withdrawals). While you work, your planned TFSA contributions fill it. Once
+you're retired there's no surplus left to save, so with `tfsa_top_up` on (the
+default) the plan moves non-registered money into each retiree's room every
+January: their own first, then their partner's. That money's growth and payouts
+are tax-free from then on, and less is left to be taxed at death. Moving shares
+in counts as selling them, so the gain on them is taxed that year with the
+household's other income. A loss isn't claimed. Turn it off on the Investing tab
+or with `"tfsa_top_up": false`.
 
 ## Known simplifications
 

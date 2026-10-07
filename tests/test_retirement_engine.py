@@ -8,8 +8,9 @@ import pytest
 from dataclasses import replace
 
 from stockanalysis.retirement import engine, rules, tax
-from stockanalysis.retirement.inputs import (Account, Home, NonregIncome, Person, PlanInputs,
-                                             Returns, Spending, SpendingChange, Withdrawal)
+from stockanalysis.retirement.inputs import (Account, Education, Espp, Event, Home, Kid,
+                                             NonregIncome, Person, PlanInputs, Returns, Spending,
+                                             SpendingChange, Withdrawal)
 
 
 def person(**kw) -> Person:
@@ -27,7 +28,7 @@ def plan(people=None, accounts=(), base=30_000.0, end_age=63, strategy="rrsp_fir
     spend.update(spend_kw)
     return PlanInputs(province="AB", start_year=2026, end_age=end_age,
                       people=tuple(people or (person(),)), spending=Spending(**spend),
-                      home=home, returns=Returns(0.0, 0.0, 1, 1),
+                      home=home, returns=Returns(0.0, 0.0, 1, 1, inflation=0.0),
                       withdrawal=Withdrawal(strategy, 58_000.0), accounts=tuple(accounts))
 
 
@@ -548,7 +549,6 @@ def test_lifetime_tax_leaves_out_cpp_and_ei_premiums():
 
 # -- ESPP --------------------------------------------------------------------------
 
-from stockanalysis.retirement.inputs import Espp  # noqa: E402
 
 
 def test_espp_buys_discounted_shares_into_nonreg_and_the_discount_is_taxed():
@@ -588,7 +588,6 @@ def test_no_salary_means_no_espp():
 
 # -- child benefit, childcare, RRSP room ------------------------------------------------
 
-from stockanalysis.retirement.inputs import Education, Kid  # noqa: E402
 
 
 def with_kids(p, ages, childcare=0.0):
@@ -689,7 +688,7 @@ def test_leftover_resp_money_goes_to_the_living_parent_whatever_the_order():
     d_ba = np.array([[90], [71]])          # (B, A)
     one = engine.simulate(ab, np.zeros((engine.steps(ab), 1)), d_ab)
     two = engine.simulate(ba, np.zeros((engine.steps(ba), 1)), d_ba)
-    end = ab.education and one.school.end_step
+    end = one.school.end_step
     assert one.tax[end, 0] == pytest.approx(two.tax[end, 0], abs=1.0)
 
 
@@ -721,7 +720,6 @@ def test_leftover_resp_growth_into_the_rrsp_respects_rrsp_room():
 
 # -- one-time money events ----------------------------------------------------------
 
-from stockanalysis.retirement.inputs import Event  # noqa: E402
 
 
 def test_money_in_is_saved_untaxed():
@@ -830,7 +828,144 @@ def test_guardrails_wait_for_a_portfolio_before_setting_the_starting_rate():
 
 def test_guardrail_cuts_stop_at_the_floor_and_raises_at_the_ceiling():
     down = _guarded(-0.25)
-    assert down.spend_adjust[:, 0].min() == pytest.approx(0.75, abs=0.081)       # 0.9^3 = 0.729 → held at 0.75
-    assert down.spend_adjust[:, 0].min() >= 0.75
+    assert down.spend_adjust[:, 0].min() == pytest.approx(0.75)    # 0.9^3 = 0.729 → held at the floor
     up = _guarded(0.30)
     assert up.spend_adjust[:, 0].max() <= 1.5 + 1e-9
+
+
+# -- TFSA top-up from non-registered money --------------------------------------------
+
+LIMIT = rules.TFSA["annual_limit"].value
+
+
+def _no_top_up(p):
+    return replace(p, withdrawal=replace(p.withdrawal, tfsa_top_up=False))
+
+
+def test_a_retiree_moves_new_tfsa_room_out_of_non_registered():
+    p = plan(accounts=[Account("A", "nonreg", 500_000.0, cost=500_000.0)], base=0.0)
+    proj = run_flat(p)
+    assert proj.tfsa_top_up[0, 0] == LIMIT and proj.tfsa_top_up[1, 0] == LIMIT
+    assert proj.balances["tfsa"][1, 0] == LIMIT and proj.balances["nonreg"][1, 0] == 500_000 - LIMIT
+    assert proj.investments[1, 0] == pytest.approx(500_000.0)    # a transfer, not spending
+    assert proj.tax[0, 0] == pytest.approx(0.0, abs=1e-6)          # no gain: nothing to tax
+    off = run_flat(_no_top_up(p))
+    assert off.tfsa_top_up[0, 0] == 0.0 and off.balances["tfsa"][1, 0] == 0.0
+
+
+def test_moving_shares_in_realizes_their_gain():
+    # Half the non-registered value is gain, so a 7,000 move realizes 3,500 of gain.
+    p = plan(accounts=[Account("A", "nonreg", 500_000.0, cost=250_000.0)], base=0.0,
+             people=[person(age=60)])
+    proj, off = run_flat(p), run_flat(_no_top_up(p))
+    expected = float(tax.income_tax(gains=LIMIT / 2, age=60))
+    assert proj.tax[0, 0] - off.tax[0, 0] == pytest.approx(expected, abs=1.0)
+
+
+def test_unused_room_carried_in_is_filled_too():
+    p = plan(people=[person(tfsa_room=20_000.0)], base=0.0,
+             accounts=[Account("A", "nonreg", 500_000.0, cost=500_000.0)])
+    assert run_flat(p).tfsa_top_up[0, 0] == 20_000.0 + LIMIT
+
+
+def test_a_partners_non_registered_money_fills_the_room():
+    a, b = person(id="A", name="A"), person(id="B", name="B")
+    p = plan(people=[a, b], base=0.0, accounts=[Account("B", "nonreg", 500_000.0, cost=500_000.0)])
+    proj = run_flat(p)
+    assert proj.tfsa_top_up[0, 0] == 2 * LIMIT                      # both TFSAs, from B's money
+
+
+def test_no_top_up_while_working():
+    p = plan(people=[person(age=55, retire_age=60)], base=0.0, end_age=62,
+             accounts=[Account("A", "nonreg", 500_000.0, cost=500_000.0)])
+    proj = run_flat(p)
+    assert proj.tfsa_top_up[:5, 0].sum() == 0.0 and proj.tfsa_top_up[5, 0] > 0
+
+
+# -- spousal RRSP ---------------------------------------------------------------------
+
+def _couple(a_kw=None, b_kw=None, **plan_kw):
+    a = person(id="A", name="A", **(a_kw or {}))
+    b = person(id="B", name="B", **(b_kw or {}))
+    return plan(people=[a, b], **plan_kw)
+
+
+def test_a_spousal_contribution_lands_in_the_partners_rrsp():
+    worker = {"age": 50, "retire_age": 55, "salary": 120_000.0, "contributions": {"spousal_rrsp": 10_000.0}}
+    p = _couple(worker, {"age": 50, "retire_age": 55}, base=0.0, end_age=56)
+    proj = run_flat(p)
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(10_000.0)       # B's RRSP holds it
+    assert proj.spousal_rrsp[0, 0, 0] == 10_000.0 and proj.spousal_rrsp[0, 1, 0] == 0.0
+    own = _couple({**worker, "contributions": {"rrsp": 10_000.0}}, {"age": 50, "retire_age": 55},
+                  base=0.0, end_age=56)
+    assert proj.tax[0, 0] == pytest.approx(run_flat(own).tax[0, 0], abs=1.0)   # same deduction for A
+
+
+def test_spousal_and_own_contributions_share_the_contributors_room():
+    worker = {"age": 50, "retire_age": 55, "salary": 120_000.0, "rrsp_room": 12_000.0,
+              "contributions": {"rrsp": 8_000.0, "spousal_rrsp": 8_000.0}}
+    proj = run_flat(_couple(worker, {"age": 50, "retire_age": 55}, base=0.0, end_age=56))
+    # 16,000 planned against 12,000 of room: own RRSP trimmed first, 4,000 to the TFSA.
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(12_000.0)
+    assert proj.balances["tfsa"][1, 0] == pytest.approx(4_000.0)
+
+
+def _parts_pair():
+    zero = np.zeros(1)
+    mk = lambda age: {"ordinary": np.array([30_000.0]), "pension": zero.copy(), "gains": zero,
+                      "dividends": zero, "oas": zero, "age": age}
+    return [mk(60), mk(60)]
+
+
+def test_attribution_moves_recent_spousal_withdrawals_to_the_contributor():
+    parts = _parts_pair()
+    draw = np.array([[0.0], [30_000.0]])
+    bal = np.array([[0.0], [50_000.0]])
+    spousal = np.array([[0.0], [40_000.0]])            # B has 10,000 of own money
+    recent = np.zeros((3, 2, 1)); recent[1, 1] = 15_000.0
+    alive = np.ones((2, 1), dtype=bool)
+    engine._attribute(parts, [60, 60], [False, False], draw, bal, spousal, recent, alive)
+    # 30,000 drawn: 10,000 own money first, 20,000 spousal, of which 15,000 is recent.
+    assert parts[1]["ordinary"][0] == pytest.approx(15_000.0)
+    assert parts[0]["ordinary"][0] == pytest.approx(45_000.0)
+
+
+def test_no_attribution_when_own_money_covers_the_draw_or_the_contributor_died():
+    draw = np.array([[0.0], [10_000.0]])
+    bal = np.array([[0.0], [50_000.0]])
+    spousal = np.array([[0.0], [20_000.0]])
+    recent = np.zeros((3, 2, 1)); recent[0, 1] = 20_000.0
+    parts = _parts_pair()
+    engine._attribute(parts, [60, 60], [False, False], draw, bal, spousal, recent,
+                      np.ones((2, 1), dtype=bool))
+    assert parts[0]["ordinary"][0] == parts[1]["ordinary"][0] == 30_000.0
+    parts = _parts_pair()
+    engine._attribute(parts, [60, 60], [False, False], np.array([[0.0], [50_000.0]]), bal, spousal,
+                      recent, np.array([[False], [True]]))
+    assert parts[0]["ordinary"][0] == parts[1]["ordinary"][0] == 30_000.0
+
+
+
+# -- inflation ------------------------------------------------------------------------------
+
+def test_inflation_erodes_the_cost_base_so_gains_are_nominal():
+    # A retiree sells non-registered money bought at today's prices; with 3% inflation
+    # its book value is 3% lower in today's dollars each year, so selling it later
+    # realizes a (nominal) gain and costs tax even with flat real returns.
+    p = plan(accounts=[Account("A", "nonreg", 6_000_000.0, cost=6_000_000.0)], base=400_000.0,
+             end_age=75)
+    p = replace(p, withdrawal=replace(p.withdrawal, tfsa_top_up=False))
+    flat = run_flat(p)
+    hot = run_flat(replace(p, returns=replace(p.returns, inflation=0.03)))
+    assert flat.tax.sum() == pytest.approx(0.0, abs=1.0)              # no real gain, no tax
+    assert hot.tax.sum() > 10_000
+    # Money left at death carries the same nominal gain into the tax at death.
+    q = replace(p, spending=replace(p.spending, base=150_000.0))
+    assert run_flat(replace(q, returns=replace(q.returns, inflation=0.03))).death_tax[0] > run_flat(q).death_tax[0]
+
+
+def test_default_inflation_is_canadas_40_year_average():
+    assert Returns().inflation is None
+    assert Returns().inflation_rate == pytest.approx(rules.historical_inflation())
+    assert 0.02 < rules.historical_inflation() < 0.03
+    assert len(rules.CPI.value) == 40

@@ -1,7 +1,7 @@
 """What-if suggestions: each changes one thing; ranked by change in success."""
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import pytest
 
@@ -44,7 +44,6 @@ def test_rank_is_sorted_by_change_in_success(plan):
 
 
 def test_no_retire_later_suggestion_for_someone_already_retired(plan):
-    from dataclasses import replace
     retired = replace(plan, people=(replace(plan.people[0], retire_age=plan.people[0].age),
                                     plan.people[1]))
     keys = {k for k, _, _ in scenarios.variants(retired)}
@@ -63,9 +62,7 @@ def test_suggestion_baseline_matches_the_gauge_at_the_same_paths(plan):
 
 
 def test_guardrails_are_offered_as_a_what_if_both_ways():
-    from dataclasses import replace
-    from stockanalysis.retirement import inputs as _inputs
-    p = _inputs.parse(_inputs.TEMPLATE)
+    p = inputs.parse(inputs.TEMPLATE)
     keys = [k for k, _, _ in scenarios.variants(p)]
     assert "spend_guardrails" in keys
     guarded = replace(p, spending=replace(p.spending, rule="guardrails"))
@@ -75,17 +72,24 @@ def test_guardrails_are_offered_as_a_what_if_both_ways():
 # -- saved scenarios side by side ---------------------------------------------------------
 
 def test_apply_changes_sets_nested_fields(plan):
-    v = scenarios.apply_changes(plan, {"people.1.retire_age": 60, "spending.base": 70_000,
+    v = inputs.apply_changes(plan, {"people.1.retire_age": 60, "spending.base": 70_000,
                                        "home.downsize_age": None})
     assert v.people[1].retire_age == 60 and v.people[0] == plan.people[0]
     assert v.spending.base == 70_000 and v.home.downsize_age is None and plan.spending.base != 70_000
 
 
 def test_compare_saved_puts_the_plan_first_on_shared_futures(plan):
-    from dataclasses import replace
     p = replace(plan, saved_scenarios=(("Spend less", {"spending.base": plan.spending.base * 0.8}),))
     rows = scenarios.compare_saved(p, paths=20, seed=1)
     assert [r.name for r in rows] == ["Current plan", "Spend less"]
     s0, t0, l0 = scenarios.evaluate(p, paths=20, seed=1)
     assert (rows[0].success, rows[0].lifetime_tax, rows[0].legacy) == (s0, t0, l0)
     assert rows[1].spending == plan.spending.base * 0.8 and rows[1].success >= rows[0].success
+
+
+def test_compare_saved_reuses_the_ranked_baseline(plan):
+    p = replace(plan, saved_scenarios=(("Spend less", {"spending.base": plan.spending.base * 0.8}),))
+    baseline, _ = scenarios.rank(p, paths=20, seed=1)
+    rows = scenarios.compare_saved(p, paths=20, seed=1, baseline=baseline)
+    assert (rows[0].success, rows[0].lifetime_tax, rows[0].legacy) == (
+        baseline.success, baseline.lifetime_tax, baseline.legacy)

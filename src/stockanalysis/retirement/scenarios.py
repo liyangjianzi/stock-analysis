@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from . import engine
-from .inputs import STRATEGIES, STRATEGY_LABELS, PlanInputs, apply_changes  # noqa: F401
+from .inputs import STRATEGIES, STRATEGY_LABELS, PlanInputs, apply_changes
 
 
 @dataclass(frozen=True)
@@ -97,13 +97,17 @@ class SavedRow:
     retire_ages: tuple
 
 
-def compare_saved(plan: PlanInputs, *, paths: int, seed: int) -> list:
+def compare_saved(plan: PlanInputs, *, paths: int, seed: int, baseline: Suggestion | None = None) -> list:
     """The plan and each of ``plan.saved_scenarios``, on the same seed (so the same
-    random futures), the plan first."""
+    random futures), the plan first. ``baseline`` is the plan's own row from
+    :func:`rank` on the same paths and seed, reused instead of rerun."""
     base = replace(plan, saved_scenarios=())
     rows = []
     for name, changes in (("Current plan", {}), *plan.saved_scenarios):
         v = apply_changes(base, changes)
-        s, t, legacy = evaluate(v, paths=paths, seed=seed)
+        if not changes and baseline is not None:
+            s, t, legacy = baseline.success, baseline.lifetime_tax, baseline.legacy
+        else:
+            s, t, legacy = evaluate(v, paths=paths, seed=seed)
         rows.append(SavedRow(name, s, legacy, t, v.spending.base, tuple(p.retire_age for p in v.people)))
     return rows
