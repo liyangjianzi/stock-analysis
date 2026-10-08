@@ -984,9 +984,9 @@ def test_inflation_paths_are_5_year_blocks_of_history():
     I = engine.draw_inflation(_shocky(), paths=50, years=12, seed=3)
     assert I.shape == (12, 50)
     for n in range(50):
-        for start in (0, 5):                      # each full block is a run of history
+        for start in (0, 5):                      # each full block is a run of history (wrapping)
             block = list(I[start:start + 5, n])
-            assert any(hist[k:k + 5] == block for k in range(len(hist) - 4))
+            assert any((hist + hist)[k:k + 5] == block for k in range(len(hist)))
     assert np.array_equal(I, engine.draw_inflation(_shocky(), 50, 12, 3))   # seeded
 
 
@@ -1092,3 +1092,9 @@ def test_fixed_amounts_shrink_in_the_engine():
     steady = engine.simulate(p, np.zeros((T, 1)), None, np.zeros((T, 1)))
     hot = engine.simulate(p, np.zeros((T, 1)), None, np.full((T, 1), 0.10))
     assert hot.tax[4, 0] > steady.tax[4, 0]              # a smaller pension credit
+
+
+def test_shock_paths_average_the_history_so_the_lag_is_unbiased():
+    I = engine.draw_inflation(_shocky(), paths=20_000, years=40, seed=2)
+    lag = np.log((1 + rules.historical_inflation()) / (1 + I))
+    assert abs(lag.mean()) < 3e-4        # every year of history weighs the same

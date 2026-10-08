@@ -93,3 +93,13 @@ def test_action_amounts_render_in_future_dollars(result):
     assert a.text() != a.text(f) or f == 1.0
     assert f"C${a.amounts[0] * f:,.0f}" in a.text(f)
     assert "{" not in a.text()
+
+
+def test_names_with_braces_never_break_the_action_text():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["contributions"]["spousal_rrsp"] = 6_000
+    d["people"][1]["name"] = "Sam {jr}"
+    acts = actions.plan_actions(engine.run(inputs.parse(d), paths=40))
+    texts = [a.text() for a in acts]
+    assert any("spousal RRSP for Sam {jr}" in t for t in texts)
+    assert actions.Action(2030, None, "x", "Thanks {jr}", "y").text() == "Thanks {jr}"

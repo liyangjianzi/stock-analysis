@@ -74,16 +74,18 @@ INFLATION_STREAM = 1     # its own random stream: return and lifespan draws don'
 
 def draw_inflation(plan: PlanInputs, paths: int, years: int, seed: int) -> np.ndarray:
     """(years, paths) yearly inflation. Shocks on and no fixed rate: consecutive
-    INFLATION_BLOCK-year runs of rules.CPI, each starting at a random year that fits.
-    Otherwise a steady rate (returns.inflation, else the CPI average)."""
+    INFLATION_BLOCK-year runs of rules.CPI from a random start year, wrapping from the
+    last year to the first, so every year is drawn equally often and the paths average
+    the CPI history (the lag in lag_returns then has no drift). Otherwise a steady
+    rate (returns.inflation, else the CPI average)."""
     r = plan.returns
     if not r.inflation_shocks or r.inflation is not None:
         return np.full((years, paths), r.inflation_rate)
     hist = np.array([rules.CPI.value[y] for y in sorted(rules.CPI.value)])
     blocks = -(-years // INFLATION_BLOCK)
     rng = np.random.default_rng([seed, INFLATION_STREAM])
-    starts = rng.integers(0, len(hist) - INFLATION_BLOCK + 1, size=(paths, blocks))
-    idx = (starts[:, :, None] + np.arange(INFLATION_BLOCK)).reshape(paths, -1)[:, :years]
+    starts = rng.integers(0, len(hist), size=(paths, blocks))
+    idx = ((starts[:, :, None] + np.arange(INFLATION_BLOCK)) % len(hist)).reshape(paths, -1)[:, :years]
     return hist[idx].T
 
 

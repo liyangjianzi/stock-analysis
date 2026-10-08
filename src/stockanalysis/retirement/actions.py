@@ -37,12 +37,19 @@ class Action:
 
     def text(self, factor: float = 1.0) -> str:
         """``what`` with its amounts filled in, scaled by ``factor`` (see future_factor)."""
+        if not self.amounts:
+            return self.what
         return self.what.format(*(_money(a * factor) for a in self.amounts))
 
 
 def future_factor(plan, year: int) -> float:
     """Today's dollars → that year's dollars on the average inflation path."""
     return (1 + plan.returns.inflation_rate) ** (year - plan.start_year)
+
+
+def _literal(name: str) -> str:
+    """A name typed by the user, safe inside a ``what`` template that has amounts."""
+    return name.replace("{", "{{").replace("}", "}}")
 
 
 def _money(x: float) -> str:
@@ -133,7 +140,7 @@ def plan_actions(result: PlanResult) -> list:
             spouse = people[1 - i].name
             for first, until, typical in _runs(years, avg.spousal_rrsp[:, i, 0]):
                 acts.append(Action(first, until, p.name,
-                                   f"Contribute {_amount(until)} to a spousal RRSP for {spouse}",
+                                   f"Contribute {_amount(until)} to a spousal RRSP for {_literal(spouse)}",
                                    f"you take the deduction now; {spouse} is taxed on it later, "
                                    "usually at a lower rate", (typical,)))
             made = np.flatnonzero(avg.spousal_rrsp[:, i, 0] >= MIN_AMOUNT)

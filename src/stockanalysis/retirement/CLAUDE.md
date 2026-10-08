@@ -200,7 +200,8 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 
 - **Inflation** (`returns.inflation`, default `rules.historical_inflation()`, the
   40-year CPI average from `rules.CPI`). The model stays real.
-  - `draw_inflation` gives each future 5-year blocks of `rules.CPI` (own RNG stream
+  - `draw_inflation` gives each future 5-year blocks of `rules.CPI`, wrapping from
+    2025 to 1986 so every year weighs the same and the lag has no drift (own RNG stream
     `[seed, INFLATION_STREAM]`, so return and lifespan draws don't change);
     `returns.inflation_shocks=False` or a fixed `returns.inflation` gives a steady
     rate. `lag_returns` turns the drawn returns into lagged real returns;
