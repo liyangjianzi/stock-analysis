@@ -22,7 +22,7 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 | `refund.py` | The tax-refund check, display only: `expected_refund(plan)` (first-year tax withheld without the RRSP and child care deductions minus true tax, RRSP capped by room) vs `actual_refunds(path)` ("TAX REFUND" deposits in the bank CSVs' last 12 months; `retirement/bank/`, gitignored). Never feeds the projection |
 | `tax.py` | Vectorized person tax (`income_tax(..., salary=, deductions=)`: payroll credits, enhanced-CPP deduction, employment amount), household tax, the 5%-step pension-split search (`best_split`), `payroll_premiums` / `payroll_parts`, `child_benefit`, `childcare_deduction`, `rrsp_new_room` |
 | `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `Event` (money events), `Espp`; `apply_changes` (dotted-path edits, used by saved scenarios); `TEMPLATE` is the invented `--init` plan |
-| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None)`): the alive mask and survivor rules (`roll_over`, `survivor_cpp`), salary-driven working years (`planned_contributions`, `payroll`, `espp_purchase`, `childcare_claims`), money events (`event_flows`), the spending rules (bad-market cut or guardrails); `draw_futures` (returns over `life_steps` + death ages); `run` simulates the drawn futures and adds the average future (steady median return) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
+| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None, inflation=None)`): the alive mask and survivor rules (`roll_over`, `survivor_cpp`), salary-driven working years (`planned_contributions`, `payroll`, `espp_purchase`, `childcare_claims`), money events (`event_flows`), the spending rules (bad-market cut or guardrails); `draw_futures` (lagged returns over `life_steps`, death ages and inflation paths, via `draw_inflation` and `lag_returns`); `growth` (cost growth above CPI); `run` simulates the drawn futures and adds the average future (steady median return) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
 | `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success; `compare_saved` evaluates the plan and its `saved_scenarios` side by side |
 | `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
 | `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers), `rrsp_drawdown` (every `steady_income` target in `DRAWDOWN_TARGETS` + the plan as it stands → `DrawdownTable`; `best("legacy" | "tax" | "success")`, ties keep the lower target) and `best_benefit_ages` (per-person CPP x OAS grid on the expected legacy over `LIFESPAN_DRAWS` lifespans, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
@@ -199,10 +199,23 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   ones there, not here.
 
 - **Inflation** (`returns.inflation`, default `rules.historical_inflation()`, the
-  40-year CPI average from `rules.CPI`). The model is real, so inflation acts only
-  through `deflate`: each year the non-registered `cost` base (and the RESP's
-  contributions and grants) shrink in today's dollars, so taxed gains are nominal.
-  Refresh `rules.CPI` from StatCan each January with the other rules.
+  40-year CPI average from `rules.CPI`). The model stays real.
+  - `draw_inflation` gives each future 5-year blocks of `rules.CPI` (own RNG stream
+    `[seed, INFLATION_STREAM]`, so return and lifespan draws don't change);
+    `returns.inflation_shocks=False` or a fixed `returns.inflation` gives a steady
+    rate. `lag_returns` turns the drawn returns into lagged real returns;
+    `draw_futures` returns `(returns, deaths, inflation)`.
+  - Inside `simulate`, `infl` (T, N) and the price level `prices` (T+1, N) shrink
+    what is fixed in dollars: the non-registered `cost` base, the RESP's
+    contributions and grants, the C$2,000 pension credit (`part["fixed_scale"]` →
+    `tax.income_tax(fixed_scale=)`), the student grant and the RESP-to-RRSP limit.
+  - `growth(plan, name, t)` compounds `plan.cost_growth.rate(name)`: base spending,
+    property tax and insurance (scaled by downsizing), care; education in
+    `education.schedule`.
+  - Display: `report.future_scale` / `actions.future_factor` turn today's dollars
+    into each year's on the average path; the report's switch and the GUI's
+    "Show future dollars" use them. Never feed future dollars back into the engine.
+  - Refresh `rules.CPI` and `rules.COST_GROWTH` each January with the other rules.
 - **Spousal RRSP** (`contributions.spousal_rrsp`, `engine.CONTRIBUTIONS`). It is
   a contribution kind, not an account: the money joins the partner's `rrsp`
   balance, and `spousal` (P, N) tracks how much of it is spousal.
