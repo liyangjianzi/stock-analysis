@@ -54,8 +54,12 @@ def _error_body(e: Exception) -> dict:
 def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
     """The report's headline numbers plus the bad-luck future, the report's gauge
     (against ``previous``, the saved plan's success) and money-left chart."""
-    plan, sim, bad = result.inputs, result.simulated, result.bad_luck
+    plan, sim, bad, avg = result.inputs, result.simulated, result.bad_luck, result.average
     first = int(bad.first_shortfall_step[0])
+    chart = report.money_left_chart(sim, plan)
+    n = len(chart.data[0].x)
+    scale = report.future_scale(plan, max(n, len(avg.years) + 1))    # today's → each year's dollars
+    end = int(avg.end_step[0]) if avg.end_step is not None else len(avg.years)
     return {
         **report.headline(result),
         "legacy_bad": float(bad.legacy[0]),
@@ -64,7 +68,11 @@ def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
         "median_return": result.average_return,
         "gauge": json.loads(report.success_meter(sim.success, previous,
                                                  title=report.lasts_label(plan)).to_json()),
-        "chart": json.loads(report.money_left_chart(sim, plan).to_json()),
+        "chart": json.loads(chart.to_json()),
+        "chart_future": json.loads(report.money_left_chart(sim, plan, scale).to_json()),
+        "future_factor": scale[:n].tolist(),
+        "legacy_factor": float(scale[min(end, len(scale) - 1)]),
+        "retire_factor": float(scale[min(avg.retire_step, len(scale) - 1)]),
         "education": _education_summary(result),
     }
 

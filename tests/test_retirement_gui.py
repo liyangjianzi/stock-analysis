@@ -223,3 +223,13 @@ def test_compare_endpoint_and_tab(server):
     assert status == 200 and [x["name"] for x in r["rows"]] == ["Current plan", "Spend less"]
     page = _req(server, "GET", "/")[1].decode()
     assert '"compare"' in page and 'id="save-scenario"' in page and "data-apply-scenario" in page
+
+
+def test_preview_carries_future_dollar_factors(server):
+    status, r = _req(server, "POST", "/api/preview", {"plan": inputs.TEMPLATE})
+    assert status == 200
+    x = r["chart"]["data"][0]["x"]
+    assert len(r["future_factor"]) == len(x) and r["future_factor"][0] == 1.0
+    assert r["legacy_factor"] > 1.0 and r["retire_factor"] >= 1.0
+    page = _req(server, "GET", "/")[1].decode()
+    assert 'id="dollars-switch"' in page and "cost_growth." in page

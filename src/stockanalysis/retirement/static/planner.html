@@ -93,6 +93,7 @@ aside{position:sticky;top:70px;align-self:start}
   <aside>
     <div id="error"></div>
     <div id="results">
+      <div id="dollars-switch" class="answer"><label class="check"><input type="checkbox" id="future-dollars"> Show future dollars</label></div>
       <div class="card" style="padding:4px"><div id="gauge"></div></div>
       <div class="tiles" id="tiles"></div>
       <div class="card" style="padding:4px"><div id="chart"></div></div>
@@ -106,7 +107,7 @@ const TABS = [["people", "People"], ["spending", "Spending"], ["education", "Edu
               ["investing", "Investing"], ["optimize", "Optimize"], ["compare", "Compare"], ["advanced", "Advanced"]];
 const ACCOUNTS = [["pension", "Pension / LIRA"], ["rrsp", "RRSP"], ["tfsa", "TFSA"], ["nonreg", "Non-registered"]];
 let original = null, draft = null, saved = null, strategies = {}, limits = {}, reportPaths = null, lastPreview = null;
-let eduDefaults = {}, kidDefaults = {}, drawDefaults = {};   // from the server: inputs.defaults()
+let eduDefaults = {}, kidDefaults = {}, drawDefaults = {}, costDefaults = {}, retDefaults = {};   // from the server: inputs.defaults()
 let activeTab = TABS.some(([k]) => "#" + k === location.hash) ? location.hash.slice(1) : "people";
 let gen = 0, inflight = false, timer = null;
 // Optimizer results, with the draft they were computed for (shown as out of date after an edit).
@@ -346,8 +347,17 @@ function investingPanel() {
       ${number("returns.inflation", "Inflation (% a year)", {min: -0.05, max: 0.2, step: 0.001, unit: "%",
                nullable: true, placeholder: "Canada's last 40 years",
                help: "Spending and benefits keep pace; it raises the tax on non-registered gains."})}
+      ${check("returns.inflation_shocks", "Inflation shocks: each future replays runs of past inflation, and returns lag it", retDefaults.inflation_shocks)}
       <p class="note">Volatility pulls the typical return below the average · typical (median) return
         <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>
+    </div>
+    <div class="card"><h3>Costs rising faster than inflation (% a year above CPI)</h3><div class="grid2">
+      ${[["base", "Base spending"], ["care", "Care"], ["education", "Education"],
+         ["property_tax", "Property tax"], ["insurance", "Home insurance"]].map(([k, l]) =>
+        number(`cost_growth.${k}`, l, {min: -0.05, max: 0.15, step: 0.001, unit: "%", nullable: true,
+               placeholder: pct(costDefaults[k], 2)})).join("")}
+    </div><p class="note">Blank uses the default shown (Statistics Canada / City of Calgary data).
+      A negative rate means the cost lags inflation.</p>
     </div>
     <div class="card"><h3>Non-registered payouts</h3><div class="grid2">
       ${number("nonreg_income.eligible_dividends", "Canadian dividends (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
@@ -721,12 +731,16 @@ function delta(now, then, fmt, lowerIsBetter = false) {
 function showResults(r) {
   lastPreview = r;
   const s = saved || {};
+  const future = $("future-dollars").checked, f = (x, k) => future && x != null ? x * k : x;
+  const unit = future ? " (future dollars)" : "";
   const shortTile = r.first_short_age_bad == null ? "Never runs short" : `Runs short at ${r.first_short_age_bad}`;
   const tiles = [
-    ["Legacy at " + draft.end_age, short(r.legacy) + delta(r.legacy, s.legacy, short), "After tax, home included · bad luck " + short(r.legacy_bad)],
-    ["Investments at retirement", short(r.investments_at_retirement) + delta(r.investments_at_retirement, s.investments_at_retirement, short), "Average future"],
+    ["Legacy at " + draft.end_age + unit, short(f(r.legacy, r.legacy_factor)) + delta(f(r.legacy, r.legacy_factor), f(s.legacy, r.legacy_factor), short),
+     "After tax, home included · bad luck " + short(r.legacy_bad) + (future ? " today" : "")],
+    ["Investments at retirement" + unit, short(f(r.investments_at_retirement, r.retire_factor)) +
+     delta(f(r.investments_at_retirement, r.retire_factor), f(s.investments_at_retirement, r.retire_factor), short), "Average future"],
     ["Bad-luck future", shortTile, r.short_years_bad + " short year" + (r.short_years_bad === 1 ? "" : "s") + " (1-in-10 bad run)"],
-    ["Lifetime taxes", short(r.lifetime_tax) + delta(r.lifetime_tax, s.lifetime_tax, short, true), "Income tax plus tax at death"],
+    ["Lifetime taxes" + (future ? " (today's dollars)" : ""), short(r.lifetime_tax) + delta(r.lifetime_tax, s.lifetime_tax, short, true), "Income tax plus tax at death"],
     ...(r.lifespans ? [["Median age at death", r.lifespans.people.map(x => `${esc(x.name)} ${x.median_age_at_death}`).join(" · "),
         `Chance someone reaches 95: ${pct(r.lifespans.reach_95)}`]] : []),
   ];
@@ -734,7 +748,8 @@ function showResults(r) {
     <div class="value">${b}</div><div class="sub">${esc(c)}</div></div>`).join("");
   const cfg = {displaylogo: false, responsive: true};
   Plotly.react("gauge", r.gauge.data, r.gauge.layout, cfg);
-  Plotly.react("chart", r.chart.data, Object.assign(r.chart.layout, {height: 420}), cfg);
+  const chart = future ? r.chart_future : r.chart;     // the server scales it (Plotly packs the numbers)
+  Plotly.react("chart", chart.data, Object.assign(chart.layout, {height: 420}), cfg);
   $("note").textContent = `Quick estimate over ${r.paths.toLocaleString()} futures, compared with the saved plan on the same futures. ` +
     `The report uses ${(reportPaths || r.paths).toLocaleString()} and adds the what-if suggestions.`;
   if ($("median")) $("median").textContent = pct(r.median_return, 2);
@@ -742,7 +757,8 @@ function showResults(r) {
   $("balances").textContent = r.balances_source;
 }
 function load(state) {
-  ({education: eduDefaults, kid: kidDefaults, withdrawal: drawDefaults} = state.defaults);
+  ({education: eduDefaults, kid: kidDefaults, withdrawal: drawDefaults, cost_growth: costDefaults,
+    returns: retDefaults} = state.defaults);
   const e = state.plan.education;      // show a child's defaulted fields instead of blanks
   if (e && e.kids) e.kids = e.kids.map(k => ({...kidDefaults, ...k}));
   original = state.plan; draft = clone(original); saved = state.saved;
@@ -753,6 +769,7 @@ function load(state) {
   if (state.error) showError(state.error);
 }
 
+$("future-dollars").addEventListener("change", () => { if (lastPreview) showResults(lastPreview); });
 $("revert").onclick = () => { draft = clone(original); edited(); };
 $("save").onclick = async () => {
   try { load(await api("/api/plan", {plan: draft})); } catch (err) { showError(err); }
