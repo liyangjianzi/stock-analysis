@@ -40,6 +40,7 @@ ACTIONS_ID = "actions"
 SECTION_IDS = ("summary", ACTIONS_ID, "suggestions", "income", "money-left", "years", "assumptions")
 EDUCATION_ID = "education"          # only when the plan has children's education
 SAVED_ID = "saved"                  # only when the plan has saved scenarios
+DOLLARS_ID = "dollars"              # the today's / future dollars switch
 
 _STYLE = f"""
 body{{margin:0;background:{PAGE};color:{INK};font-family:{FONT}}}
@@ -71,7 +72,20 @@ details summary{{cursor:pointer;font-weight:600;margin:.8rem 0}}
 .years tbody tr{{background:{SURFACE}}} .years tbody tr:nth-child(even){{background:{PAGE}}}
 .years tbody tr:hover{{background:{TRACK}}} .years tbody tr.short{{background:#fbe9e9}}
 .years tr.short td:first-child{{box-shadow:inset 3px 0 {CRITICAL}}}
+body:not(.future) .dollars-future{{display:none}} body.future .dollars-today{{display:none}}
+.switch{{margin:.4rem 0}} .switch button{{border:1px solid {AXIS};background:#fff;padding:4px 10px;border-radius:6px;cursor:pointer}}
+.switch button.on{{background:{SERIES[0]};color:#fff}}
 """
+
+
+def future_scale(plan, n: int) -> np.ndarray:
+    """Today's dollars → each year's dollars on the average inflation path."""
+    return (1 + plan.returns.inflation_rate) ** np.arange(n)
+
+
+def _dollars(scale) -> str:
+    """How a section's amounts are measured, for its note."""
+    return "today's dollars" if scale is None else "each year's dollars (average inflation)"
 
 
 def _esc(x) -> str:
@@ -131,22 +145,24 @@ def success_meter(success: float, previous: float | None = None,
     return fig
 
 
-def income_chart(avg: Projection, bad: Projection) -> go.Figure:
-    """Stacked income by source per year; buttons switch the average / bad-luck future."""
+def income_chart(avg: Projection, bad: Projection, scale=None) -> go.Figure:
+    """Stacked income by source per year; buttons switch the average / bad-luck future.
+    ``scale`` (see future_scale) turns today's dollars into each year's."""
     fig = go.Figure()
     for proj, visible in ((avg, True), (bad, False)):
         x, zeros = proj.years, [0] * len(proj.years)
+        k = 1 if scale is None else np.asarray(scale)[:len(proj.years)]
         fig.add_trace(go.Scatter(x=x, y=zeros, mode="markers", marker=dict(opacity=0),
                                  visible=visible, showlegend=False, name="Ages",
                                  customdata=[age_label(a) for a in proj.ages],
                                  hovertemplate="Ages %{customdata}<extra></extra>"))
         for s in SOURCES:
-            fig.add_trace(go.Bar(x=x, y=proj.income[s][:, 0], name=LABELS[s], visible=visible,
+            fig.add_trace(go.Bar(x=x, y=proj.income[s][:, 0] * k, name=LABELS[s], visible=visible,
                                  marker=dict(color=COLORS[s], line=dict(color=SURFACE, width=1)),
                                  hovertemplate=f"{LABELS[s]}: C$%{{y:,.0f}}<extra></extra>"))
         fig.add_trace(go.Scatter(x=x, y=zeros, mode="markers", marker=dict(opacity=0),
                                  visible=visible, showlegend=False, name="Income tax",
-                                 customdata=proj.tax[:, 0],
+                                 customdata=proj.tax[:, 0] * k,
                                  hovertemplate="Income tax: C$%{customdata:,.0f}<extra></extra>"))
     per_set = len(SOURCES) + 2
 
@@ -171,11 +187,13 @@ def income_chart(avg: Projection, bad: Projection) -> go.Figure:
     return fig
 
 
-def money_left_chart(sim: Projection, plan) -> go.Figure:
-    """Investments by age as a bad / typical / good band, plus the home's value."""
+def money_left_chart(sim: Projection, plan, scale=None) -> go.Figure:
+    """Investments by age as a bad / typical / good band, plus the home's value.
+    ``scale`` (see future_scale) turns today's dollars into each year's."""
     ref = plan.people[0]
     rows = min(sim.investments.shape[0], engine.steps(plan) + 1)   # stop when the youngest reaches end_age
-    inv = sim.investments[:rows]
+    k = np.ones(rows) if scale is None else np.asarray(scale)[:rows]
+    inv = sim.investments[:rows] * k[:, None]
     x = [ref.age + t for t in range(rows)]
     with warnings.catch_warnings():                       # a year where every future has ended
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -189,7 +207,7 @@ def money_left_chart(sim: Projection, plan) -> go.Figure:
                    hovertemplate="Typical: C$%{y:,.0f}<extra></extra>"),
     ])
     if plan.home is not None:
-        fig.add_trace(go.Scatter(x=x, y=sim.home_value[:rows], name="Home value",
+        fig.add_trace(go.Scatter(x=x, y=sim.home_value[:rows] * k, name="Home value",
                                  line=dict(color=SERIES[1], width=2, dash="dot"),
                                  hovertemplate="Home: C$%{y:,.0f}<extra></extra>"))
     def at(p, age):                    # p's age -> the chart's x (people[0]'s age)
@@ -295,17 +313,21 @@ def _kpis(result: PlanResult) -> str:
     return "<div class='kpis'>" + "".join(_tile(*row) for row in rows) + "</div>"
 
 
-def _actions(result: PlanResult) -> str:
-    """The plan as a dated to-do list, plus the inputs it still guesses at."""
+def _actions(result: PlanResult, future: bool = False) -> str:
+    """The plan as a dated to-do list, plus the inputs it still guesses at. ``future``
+    shows each amount in its year's dollars."""
+    def factor(a):
+        return actions.future_factor(result.inputs, a.year) if future else 1.0
     rows = "".join(
         f"<tr><td>{a.year}{'–' + str(a.until) if a.until else ''}</td><td>{_esc(a.who)}</td>"
-        f"<td>{_esc(a.text())}</td><td>{_esc(a.why)}</td></tr>" for a in actions.plan_actions(result))
+        f"<td>{_esc(a.text(factor(a)))}</td><td>{_esc(a.why)}</td></tr>" for a in actions.plan_actions(result))
     missing = actions.missing_inputs(result.inputs)
     todo = ("<h3>Information to add</h3><p class='note'>The plan estimates these; the real figures "
             "make it more accurate.</p><ul>" + "".join(f"<li>{_esc(m)}</li>" for m in missing)
             + "</ul>") if missing else ""
-    return ("<p class='note'>What the plan assumes you do, and when. Amounts are in today's dollars "
-            "from the average future; the numbers above only hold if these happen.</p>"
+    return ("<p class='note'>What the plan assumes you do, and when. Amounts are in "
+            + ("each year's dollars (average inflation; a range uses its first year)" if future
+               else "today's dollars") + " from the average future; the numbers above only hold if these happen.</p>"
             "<table class='actions'><thead><tr><th>When</th><th>Who</th><th>What to do</th><th>Why</th>"
             f"</tr></thead><tbody>{rows}</tbody></table>{todo}")
 
@@ -357,8 +379,9 @@ def _saved_table(rows) -> str:
             f"random futures.</p><table><thead><tr><th></th>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
-def _education(plan, avg: Projection, bad: Projection) -> str:
-    """Children's school in the average future: who pays, year by year."""
+def _education(plan, avg: Projection, bad: Projection, scale=None) -> str:
+    """Children's school in the average future: who pays, year by year. ``scale`` puts
+    the table (not the totals) in each year's dollars."""
     s = avg.school
     uncovered = avg.education[:, 0] - s.contribution
     grants = avg.student_grant[:, 0]
@@ -374,10 +397,12 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
              f"plus {_short(s.contribution.sum())} of RESP contributions"),
     ], gap=False)
     names = {t: ", ".join(k.name for k in s.kids if avg.years[t] in k.school_years) for t in years}
+    k = np.ones(len(avg.years)) if scale is None else np.asarray(scale)
     rows = "".join(
-        f"<tr><td>{avg.years[t]}</td><td>{_esc(names[t])}</td><td>{_money(s.cost[t])}</td>"
-        f"<td>{_money(grants[t])}</td><td>{_money(resp_pays[t])}</td><td>{_money(uncovered[t])}</td>"
-        f"<td>{_money(avg.resp[t, 0])}</td></tr>" for t in years)
+        f"<tr><td>{avg.years[t]}</td><td>{_esc(names[t])}</td><td>{_money(s.cost[t] * k[t])}</td>"
+        f"<td>{_money(grants[t] * k[t])}</td><td>{_money(resp_pays[t] * k[t])}</td>"
+        f"<td>{_money(uncovered[t] * k[t])}</td><td>{_money(avg.resp[t, 0] * k[t])}</td></tr>"
+        for t in years)
     hint = ""
     if plan.education.student_grant and plan.withdrawal.strategy != "proportional":
         hint = ("<p class='note'>The student grant is tested on last year's taxable family income: "
@@ -387,7 +412,7 @@ def _education(plan, avg: Projection, bad: Projection) -> str:
             "<table><thead><tr><th>Year</th><th>In school</th><th>Cost</th><th>Student grant</th>"
             "<th>RESP pays</th><th>You pay</th><th>RESP after</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>{hint}"
-            "<p class='note'>Average future, today's dollars. Each grant uses the family income of the "
+            f"<p class='note'>Average future; totals in today's dollars, the table in {_dollars(scale)}. Each grant uses the family income of the "
             "year before; a year with no known prior income gets none.</p>")
 
 
@@ -404,7 +429,7 @@ def _compact(x) -> str:
     return f"{sign}{x:.0f}"
 
 
-def _year_table(proj: Projection) -> str:
+def _year_table(proj: Projection, scale=None) -> str:
     # (group, header, series). Sources are what was drawn that year; balances are January 1.
     cols = [("", "Spending", proj.need[:, 0]), ("", "Tax", proj.tax[:, 0]),
             *[("Income by source", LABELS[s] + (" drawn" if s in DRAWN else ""), proj.income[s][:, 0])
@@ -417,6 +442,8 @@ def _year_table(proj: Projection) -> str:
         cols += [("Education", "Household", proj.education[:, 0]),
                  ("Education", "Student grants", proj.student_grant[:, 0]),
                  ("Education", "RESP", proj.resp[:, 0])]
+    if scale is not None:
+        cols = [(g, h, v * np.asarray(scale)[:len(v)]) for g, h, v in cols]
     keep = {"Spending", "Tax", "Total invested"}
     cols = [c for c in cols if c[1] in keep or np.any(np.round(c[2]) != 0)]   # all-zero columns say nothing
 
@@ -444,7 +471,7 @@ def _year_table(proj: Projection) -> str:
                         for i, a in enumerate(proj.ages[t]))
         rows.append(f"<tr{cls}><td class='stick'>{year}</td>"
                     f"<td class='stick s2'>{_esc(ages)}</td>{cells}</tr>")
-    return ("<p class='note'>C$, today's dollars; k = thousand, M = million, – = none. Hover a cell "
+    return (f"<p class='note'>C$, {_dollars(scale)}; k = thousand, M = million, – = none. Hover a cell "
             "for the exact amount. Columns that are zero every year are hidden; short years are "
             "shaded red; † = has died (the survivor's years follow). Tax includes CPP/EI premiums while working; Saved includes your planned contributions (not an employer's pension match).</p><div class='years'><table><thead>" + top + sub + "</thead><tbody>"
             + "".join(rows) + "</tbody></table></div>")
@@ -525,10 +552,18 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
                         if plan.withdrawal.tfsa_top_up else "off"),
         ("Returns", f"{r.mean:.1%} average, {r.sd:.0%} yearly swings; typical "
                     f"{result.average_return:.2%} a year after inflation"),
-        ("Inflation", f"{r.inflation_rate:.2%} a year"
-                      + (" (Canada's CPI, average of the last 40 years)" if r.inflation is None else "")
+        ("Inflation", f"{r.inflation_rate:.2%} a year on average"
+                      + (" (Canada's CPI, last 40 years)" if r.inflation is None else "")
+                      + ("; each future replays 5-year runs of past inflation and returns lag it in "
+                         "high-inflation years" if r.inflation_shocks and r.inflation is None
+                         else "; steady")
                       + "; spending, benefits and tax brackets keep pace, but the book value of "
                         "non-registered investments doesn't, so their gains are taxed on nominal values"),
+        ("Costs rising faster than inflation", ", ".join(
+            f"{label} {plan.cost_growth.rate(name):+.2%}" for name, label in (
+                ("base", "base spending"), ("care", "care"), ("education", "education"),
+                ("property_tax", "property tax"), ("insurance", "home insurance")))
+         + " a year; shown in today's dollars, so the Future dollars view adds inflation on top"),
         ("Spending", f"{_money(s.base)} a year after tax; slow-go from {s.slow_go_age} "
                      f"({s.slow_go_share:.0%}), no-go from {s.no_go_age} ({s.no_go_share:.0%}) "
                      f"plus {_money(s.care)} care"),
@@ -613,31 +648,47 @@ def build_report(result: PlanResult, baseline, suggestions, *, generated_at: str
     top = (f"<div class='top'><div class='card'>{_fig(meter, 'cdn')}</div>"
            f"{_legacy_tile(plan, avg, bad)}{_kpis(result)}</div>{_lifespan_tiles(result)}"
            f"{_flex_tile(result)}")
+    scale = future_scale(plan, len(avg.years) + 1)
+
+    def both(today_html: str, future_html: str) -> str:
+        return (f"<div class='dollars-today'>{today_html}</div>"
+                f"<div class='dollars-future'>{future_html}</div>")
+
     sections = [
         ("summary", "", top),
-        (ACTIONS_ID, "Action plan", _actions(result)),
+        (ACTIONS_ID, "Action plan", both(_actions(result), _actions(result, future=True))),
         ("suggestions", "Expert planning", _suggestions(baseline, suggestions)),
         *([(SAVED_ID, "Saved scenarios", _saved_table(saved))] if saved else []),
-        *([(EDUCATION_ID, "Children's education", _education(plan, avg, bad))]
+        *([(EDUCATION_ID, "Children's education", both(_education(plan, avg, bad),
+                                                          _education(plan, avg, bad, scale)))]
           if avg.education is not None else []),
         ("income", "Detailed income projection",
          "<p class='note'>Each bar is one year's spending plus income tax, by where the money "
          "comes from. Switch to the bad-luck future (the 1-in-10 bad run of returns) to see "
-         "short years in red.</p>" + _fig(income_chart(avg, bad), False)),
+         "short years in red.</p>"
+         + both(_fig(income_chart(avg, bad), False), _fig(income_chart(avg, bad, scale), False))),
         ("money-left", "Money left",
-         "<p class='note'>Investments only, in today's dollars; the home is the dotted line.</p>"
-         + _fig(money_left_chart(sim, plan), False)),
+         both("<p class='note'>Investments only, in today's dollars; the home is the dotted line.</p>"
+              + _fig(money_left_chart(sim, plan), False),
+              f"<p class='note'>Investments only, in {_dollars(scale)}; the home is the dotted line.</p>"
+              + _fig(money_left_chart(sim, plan, scale), False))),
         ("years", "", "<details><summary>Year-by-year table (average future)</summary>"
-                      f"{_year_table(avg)}</details>"),
+                      f"{both(_year_table(avg), _year_table(avg, scale))}</details>"),
         ("assumptions", "Assumptions &amp; rules", _assumptions(plan, result, holdings_source, refunds)),
     ]
+    switch = (f'<div id="{DOLLARS_ID}" class="switch">'
+              "<button class='on' onclick=\"setDollars(false,this)\">Today's dollars</button> "
+              "<button onclick=\"setDollars(true,this)\">Future dollars</button></div>"
+              "<script>function setDollars(f,b){document.body.classList.toggle('future',f);"
+              "for(const x of b.parentNode.children)x.classList.toggle('on',x===b);"
+              "window.dispatchEvent(new Event('resize'));}</script>")
     body = "".join(f'<section id="{sid}">' + (f"<h2>{title}</h2>" if title else "") + content
                    + "</section>" for sid, title, content in sections)
     return ("<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>Retirement plan</title><style>{_STYLE}</style></head><body>"
             f"<header><h1>Retirement plan</h1><p class='generated'>Generated {_esc(generated_at)} · "
-            f"{sim.paths:,} simulated futures · all amounts in today's dollars (CAD)</p>{banner}"
+            f"{sim.paths:,} simulated futures · amounts in CAD</p>{switch}{banner}"
             f"</header>{body}</body></html>")
 
 

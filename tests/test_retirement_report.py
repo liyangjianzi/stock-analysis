@@ -260,3 +260,31 @@ def test_saved_scenarios_table_when_given(built):
     html = _html(built, saved=rows)
     assert "Saved scenarios" in html and "Retire at 62" in html and "62/58" in html
     assert "Saved scenarios" not in _html(built)
+
+
+def test_future_scale_compounds_the_average_inflation():
+    p = inputs.parse(inputs.TEMPLATE)
+    s = report.future_scale(p, 3)
+    pi = p.returns.inflation_rate
+    np.testing.assert_allclose(s, [1, 1 + pi, (1 + pi) ** 2])
+
+
+def test_report_has_both_dollar_views_and_a_switch(built):
+    html = _html(built)
+    assert 'id="dollars"' in html and "dollars-today" in html and "dollars-future" in html
+    assert "Future dollars" in html and "Today's dollars" in html
+
+
+def test_charts_scale_into_future_dollars(built):
+    _, result, _, _ = built
+    avg, bad = result.average, result.bad_luck
+    scale = report.future_scale(result.inputs, len(avg.years))
+    today = report.income_chart(avg, bad)
+    future = report.income_chart(avg, bad, scale)
+    bar = next(i for i, tr in enumerate(today.data) if tr.type == "bar")
+    assert future.data[bar].y[-1] == pytest.approx(today.data[bar].y[-1] * scale[-1])
+
+
+def test_assumptions_name_the_inflation_and_cost_growth(built):
+    html = _html(built)
+    assert "Costs rising faster than inflation" in html and "Canada&#x27;s CPI" in html
