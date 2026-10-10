@@ -340,14 +340,37 @@ function homePanel() {
                       help: "The rest of the sale, after costs, is invested."}) : ""}
     </div>`;
 }
-function investingPanel() {
-  const w = draft.withdrawal;
+function returnsCard() {
+  const r = draft.returns, hist = (r.model ?? retDefaults.model) === "history";
+  const [lo, hi] = limits.expected_return;
+  const mix = r.mix ?? retDefaults.mix;
+  const rows = mix.map((p, j) => `<tr>
+      <td><input type="number" data-path="returns.mix.${j}.0" step="1" min="0" max="110" value="${p[0]}"></td>
+      <td><input type="number" data-path="returns.mix.${j}.1" data-scale="100" step="5" min="0" max="100"
+          value="${+(p[1] * 100).toFixed(4)}"></td>
+      <td>${mix.length > 1 ? `<button class="x" data-remove-mix="${j}" title="Remove">×</button>` : ""}</td></tr>`).join("");
   return `<div class="card"><h3>Returns after inflation</h3>
+      ${choice("returns.model", "Model", [["history", "Historical (recommended)"], ["lognormal", "Smooth (old model)"]])}
+      ${hist ? `
+      ${number("returns.stocks", "Stocks: expected yearly return", {min: lo, max: hi, step: 0.001, unit: "%", nullable: true,
+               placeholder: `FP Canada: ${pct(retDefaults.stocks, 2)}`})}
+      ${number("returns.bonds", "Bonds: expected yearly return", {min: lo, max: hi, step: 0.001, unit: "%", nullable: true,
+               placeholder: `FP Canada: ${pct(retDefaults.bonds, 2)}`})}
+      <table class="changes"><tr class="note"><td>From age (${esc(draft.people[0].name)})</td><td>% stocks</td><td></td></tr>${rows}</table>
+      <button id="add-mix" style="margin-top:6px">+ Add an age</button>
+      <p class="note">Each future strings together 5-year runs of 1928–2025 stock and bond returns with the
+        inflation of the same years, shifted to these averages. The mix moves in a straight line between ages
+        and is rebalanced every January · typical return
+        <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>` : `
       ${slider("returns.mean", "Average yearly return", {min: 0, max: 0.10, step: 0.0025, unit: "%", digits: 2})}
       ${slider("returns.sd", "Ups and downs (volatility)", {min: 0, max: 0.30, step: 0.01, unit: "%"})}
       <p class="note">Volatility pulls the typical return below the average · typical (median) return
-        <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>
-    </div>
+        <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>`}
+    </div>`;
+}
+function investingPanel() {
+  const w = draft.withdrawal;
+  return `${returnsCard()}
     <div class="card"><h3>Non-registered payouts</h3><div class="grid2">
       ${number("nonreg_income.eligible_dividends", "Canadian dividends (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
       ${number("nonreg_income.foreign_dividends", "Foreign dividends (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
@@ -369,7 +392,7 @@ function inflationPanel() {
       ${number("returns.inflation", "Inflation (% a year)", {min: -0.05, max: 0.2, step: 0.001, unit: "%",
                nullable: true, placeholder: "Canada's last 40 years",
                help: "Spending and benefits keep pace; it raises the tax on non-registered gains."})}
-      ${check("returns.inflation_shocks", "Inflation shocks: each future replays runs of past inflation, and returns lag it", retDefaults.inflation_shocks)}
+      ${check("returns.inflation_shocks", "Inflation shocks: each future replays runs of past inflation (with the matching returns in the historical model)", retDefaults.inflation_shocks)}
     </div>
     <div class="card"><h3>Costs rising faster than inflation (% a year above CPI)</h3><div class="grid2">
       ${[["base", "Base spending"], ["care", "Care"], ["education", "Education"],
@@ -574,6 +597,8 @@ document.addEventListener("input", e => {
   const el = e.target;
   if (!el.dataset.path) return;
   const v = readInput(el);
+  // set() makes objects, not arrays, for missing keys: start from the default mix
+  if (el.dataset.path.startsWith("returns.mix.") && !draft.returns.mix) draft.returns.mix = clone(retDefaults.mix);
   set(draft, el.dataset.path, v);
   // keep a slider and its number box in step
   if (el.type === "range" || el.type === "number")
@@ -591,6 +616,7 @@ document.addEventListener("change", e => {
   if (el.name === "drawdown-goal") { goal = el.value; render(); }
   if (el.name === "spending-rule") { draft.spending.rule = el.value; edited(); }
   if (el.dataset.path && /^events\.\d+\.kind$/.test(el.dataset.path)) edited();   // show or hide "Whose"
+  if (el.dataset.path === "returns.model") edited();   // swap the history / smooth inputs
   if (el.id === "downsize") {
     const age0 = draft.people[0].age;
     draft.home.downsize_age = el.checked ? Math.max(age0, Math.min(65, draft.end_age - 1)) : null;
@@ -634,6 +660,17 @@ document.addEventListener("click", e => {
     edited();
   }
   if (el.dataset.removeEvent != null) { draft.events.splice(Number(el.dataset.removeEvent), 1); edited(); }
+  if (el.id === "add-mix") {
+    const mix = draft.returns.mix = clone(draft.returns.mix ?? retDefaults.mix);
+    const [age, share] = mix[mix.length - 1];
+    mix.push([Math.min(age + 10, 110), Math.max(0, +(share - 0.2).toFixed(2))]);
+    edited();
+  }
+  if (el.dataset.removeMix != null) {
+    draft.returns.mix = clone(draft.returns.mix ?? retDefaults.mix);
+    draft.returns.mix.splice(Number(el.dataset.removeMix), 1);
+    edited();
+  }
   if (el.id === "add-change") {
     draft.spending.changes = draft.spending.changes || [];
     draft.spending.changes.push({year: draft.start_year + 1, amount: 0, label: ""});

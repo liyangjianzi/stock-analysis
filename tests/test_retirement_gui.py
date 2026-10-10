@@ -239,3 +239,27 @@ def test_preview_carries_future_dollar_factors(server):
     assert r["legacy_factor"] > 1.0 and r["retire_factor"] >= 1.0
     page = _req(server, "GET", "/")[1].decode()
     assert 'id="dollars-switch"' in page and "cost_growth." in page
+
+
+def test_defaults_carry_the_return_assumptions(server):
+    status, st = _req(server, "GET", "/api/plan")
+    assert status == 200
+    ret = st["defaults"]["returns"]
+    assert ret["model"] == "history" and ret["mix"] == [[0, 0.8]]
+    assert st["limits"]["expected_return"] == [-0.05, 0.15]
+
+
+def test_mix_and_model_round_trip_through_save(server):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"].update(model="history", stocks=0.04, mix=[[50, 0.9], [75, 0.4]])
+    status, _ = _req(server, "POST", "/api/plan", {"plan": d})
+    assert status == 200
+    on_disk = json.loads(server.app.plan_path.read_text())
+    assert on_disk["returns"]["mix"] == [[50, 0.9], [75, 0.4]] and on_disk["returns"]["stocks"] == 0.04
+    assert inputs.load_inputs(server.app.plan_path).returns.mix == ((50, 0.9), (75, 0.4))
+
+
+def test_page_has_the_mix_table_and_model_switch(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert '"returns.model"' in page and "returnsCard()" in page
+    assert "add-mix" in page and "data-remove-mix" in page and "removeMix" in page
