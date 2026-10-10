@@ -82,7 +82,7 @@ Library: `from stockanalysis.retirement import load_inputs, run` then
 | `people[]` (1–2) | `age`, `retire_age`, `sex`, `salary`, `pension_match`, `espp`, `rrsp_room`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
 | `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), `survivor_share`, `rule` (`bad_market`: one cut when investments fall below `bad_market_trigger` × their value the first year nobody earns; `guardrails`: Guyton-Klinger steps between `guardrail_floor` and `guardrail_ceiling`) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, costs, `property_tax`, `insurance` |
-| `returns` | real `mean`, `sd`, `paths`, `seed`; `inflation`, `inflation_shocks` |
+| `returns` | `model` (`history` default / `lognormal`), `stocks` / `bonds` (expected real returns; default FP Canada), `mix` (`[[age, stock share], ...]` on people[0]'s age); real `mean`, `sd` (lognormal only), `paths`, `seed`; `inflation`, `inflation_shocks` |
 | `cost_growth` | yearly growth above inflation for `base`, `care`, `education`, `property_tax`, `insurance` (defaults in `rules.COST_GROWTH`, base 0) |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`) |
 | `education` | kids (`age`, `start_age`, `years`, `living` home/away), costs per student-year, family RESP (`resp_balance` from holdings by default; `contribute` while the grant is still earned), `student_grant` (Canada Student Grant, tested on last year's taxable family income, so the withdrawal order matters), `childcare` (for the deduction); the kids also drive the Canada Child Benefit |
@@ -121,6 +121,9 @@ big decisions.
   page (CRA T4127 + TD1/TD1AB forms, Service Canada OAS/CPP pages, the CRA RRIF
   factor chart, Alberta's Superintendent of Pensions interest-rate tables) —
   **never from memory** — bump `TAX_YEAR`, and run `pytest tests/test_retirement_*.py`.
+  The historical series `CPI`, `US_RETURNS` (Damodaran `histretSP`) and `US_CPI`
+  (BLS CUUR0000SA0 annual average) gain a year each January; `RETURN_ASSUMPTIONS`
+  follows FP Canada's Projection Assumption Guidelines each spring.
   The CPP survivor amounts (`rules.CPP["survivor"]`, `death_benefit`) change every
   January with the rest of `rules.CPP`. The life table in `mortality.py` changes only
   when Statistics Canada publishes a new three-year table (13-10-0114-01) or the

@@ -22,7 +22,7 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 | `refund.py` | The tax-refund check, display only: `expected_refund(plan)` (first-year tax withheld without the RRSP and child care deductions minus true tax, RRSP capped by room) vs `actual_refunds(path)` ("TAX REFUND" deposits in the bank CSVs' last 12 months; `retirement/bank/`, gitignored). Never feeds the projection |
 | `tax.py` | Vectorized person tax (`income_tax(..., salary=, deductions=)`: payroll credits, enhanced-CPP deduction, employment amount), household tax, the 5%-step pension-split search (`best_split`), `payroll_premiums` / `payroll_parts`, `child_benefit`, `childcare_deduction`, `rrsp_new_room` |
 | `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `Event` (money events), `Espp`; `apply_changes` (dotted-path edits, used by saved scenarios); `TEMPLATE` is the invented `--init` plan |
-| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None, inflation=None)`): the alive mask and survivor rules (`roll_over`, `survivor_cpp`), salary-driven working years (`planned_contributions`, `payroll`, `espp_purchase`, `childcare_claims`), money events (`event_flows`), the spending rules (bad-market cut or guardrails); `draw_futures` (lagged returns over `life_steps`, death ages and inflation paths, via `draw_inflation` and `lag_returns`); `growth` (cost growth above CPI); `run` simulates the drawn futures and adds the average future (steady median return) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
+| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None, inflation=None)`): the alive mask and survivor rules (`roll_over`, `survivor_cpp`), salary-driven working years (`planned_contributions`, `payroll`, `espp_purchase`, `childcare_claims`), money events (`event_flows`), the spending rules (bad-market cut or guardrails); `draw_futures` (returns over `life_steps`, death ages and inflation paths: historical blocks via `draw_history` + `portfolio_returns`, or lognormal via `draw_inflation` + `lag_returns`); `average_returns` (the average future's steady returns); `growth` (cost growth above CPI); `run` simulates the drawn futures and adds the average future (steady returns from `average_returns`) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
 | `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success; `compare_saved` evaluates the plan and its `saved_scenarios` side by side |
 | `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
 | `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers), `rrsp_drawdown` (every `steady_income` target in `DRAWDOWN_TARGETS` + the plan as it stands → `DrawdownTable`; `best("legacy" | "tax" | "success")`, ties keep the lower target) and `best_benefit_ages` (per-person CPP x OAS grid on the expected legacy over `LIFESPAN_DRAWS` lifespans, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
@@ -200,9 +200,9 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 
 - **Inflation** (`returns.inflation`, default `rules.historical_inflation()`, the
   40-year CPI average from `rules.CPI`). The model stays real.
-  - `draw_inflation` gives each future 5-year blocks of `rules.CPI` (from 1950, so
-    1970s runs are drawn), wrapping from 2025 to 1950 so every year weighs the same.
-    Each year is shifted by `(1+avg₄₀)/(1+avg_all)` so the history averages
+  - `draw_inflation` gives each future 5-year blocks of `rules.CPI` (from 1928, so
+    1930s and 1970s runs are drawn), wrapping from 2025 to 1928 so every year weighs
+    the same (`_block_index`). Each year is shifted by `_centre` so the history averages
     `inflation_rate` (the last 40 years) and the lag has no drift; don't drop the
     shift or extend `CPI` without it, or every future loses real return (own RNG stream
     `[seed, INFLATION_STREAM]`, so return and lifespan draws don't change);
@@ -220,6 +220,27 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
     into each year's on the average path; the report's switch and the GUI's
     "Show future dollars" use them. Never feed future dollars back into the engine.
   - Refresh `rules.CPI` and `rules.COST_GROWTH` each January with the other rules.
+- **Historical returns** (`returns.model == "history"`, the default).
+  - `draw_history` draws `(stocks, bonds, inflation)` from `history_real()`
+    (`rules.US_RETURNS` made real with `rules.US_CPI`, paired with `rules.CPI` of the
+    same year) with the **same** `_block_index` as `draw_inflation`, so a drawn year
+    is always a whole historical year. Each series goes through `_centre`: stocks to
+    `returns.stock_return`, bonds to `bond_return`, CPI to `inflation_rate`.
+  - `portfolio_returns` blends them by `inputs.stock_share(mix, people[0]'s age)`,
+    rebalanced each January, into the one (T, N) array `simulate` takes. History
+    mode **never** calls `lag_returns`: history's real returns already hold what
+    inflation did, so lagging them would count it twice.
+  - `average_returns(plan, T)` is the one source of the average future's returns
+    (`run`, `scenarios.evaluate`, `optimize`): the year's mix of the expected
+    returns, or `median_return(mean, sd)` in lognormal mode. Don't call
+    `median_return` elsewhere.
+  - Defaults come from `rules.RETURN_ASSUMPTIONS` via `rules.real_return` (FP Canada,
+    geometric, before fees), never hardcoded.
+  - The lognormal model is the regression anchor: the engine tests' `plan()` helper
+    pins `model="lognormal"`.
+  - Refresh `US_RETURNS` and `US_CPI` each January with `CPI` (Damodaran
+    `histretSP`, BLS CUUR0000SA0 annual average), and `RETURN_ASSUMPTIONS` each
+    spring when FP Canada publishes.
 - **Spousal RRSP** (`contributions.spousal_rrsp`, `engine.CONTRIBUTIONS`). It is
   a contribution kind, not an account: the money joins the partner's `rrsp`
   balance, and `spousal` (P, N) tracks how much of it is spousal.

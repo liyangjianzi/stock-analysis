@@ -109,7 +109,7 @@ keeps it. Library: `optimize.affordability(plan, target=0.9)` and
 | `people[]` (1–2) | `age`, `retire_age`, `sex` (`female` / `male` for the life table; omit to average), `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`, and for a couple `spousal_rrsp`) |
 | `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), `survivor_share` (0.70), `rule`: `bad_market` (cut `bad_market_cut` when investments fall below `bad_market_trigger` × their value the first year nobody earns) or `guardrails` (`guardrail_band`, `guardrail_step`, `guardrail_stop_years`, `guardrail_floor`, `guardrail_ceiling`) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, `selling_cost`, `moving_cost`, `property_tax`, `insurance` |
-| `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed`; `inflation` (yearly; default Canada's CPI average over the last 40 years, 2.42% for 1986–2025); `inflation_shocks` (default `true`: each future replays 5-year runs of 1950–2025 inflation, centred on the 40-year average) |
+| `returns` | `model`: `history` (default, see Returns below) or `lognormal`; `stocks` / `bonds`: expected compound real returns (default FP Canada 2026: equities 6.3% and fixed income 3.2% nominal with 2.1% inflation, so 4.11% / 1.08% real, before fees); `mix`: `[[age, stock share], ...]` on people[0]'s age (default `[[0, 0.8]]`); `mean`, `sd` (real, `lognormal` model only), `paths`, `seed`; `inflation` (yearly; default Canada's CPI average over the last 40 years, 2.42% for 1986–2025); `inflation_shocks` (default `true`: each future replays 5-year runs of 1928–2025 inflation, centred on the 40-year average) |
 | `cost_growth` (optional) | yearly growth above inflation per cost: `base`, `care`, `education`, `property_tax`, `insurance` (between −0.05 and 0.15). Omitted ones use the defaults in `rules.COST_GROWTH`; `base` defaults to 0 |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`); `tfsa_top_up` (default on): each January a retiree fills new TFSA room from non-registered money |
 | `education` (optional) | `kids[]` (`name`, `age`, `start_age` 18, `years` 4, `living` `home`/`away`, `cesg_received`), `costs` per student-year (`home` 11,000 / `away` 25,000 today's $, editable estimates), RESP `resp_balance` (default: the holdings' RESP), `contributed` / `grants` so far (default: estimated as if every year's grant was collected), `contribute` (each January while it still earns the grant), `aip_to_rrsp`, `student_grant` (apply for the Canada Student Grant), `childcare` (yearly child care already in spending, for the deduction). The kids also drive the Canada Child Benefit |
@@ -252,6 +252,28 @@ baseline, ranked = scenarios.rank(plan, paths=2000, seed=7)   # one-change what-
 out, result = cli.generate(plan, "plan.json balances")        # writes report + summary
 ```
 
+## Returns
+
+- **Historical model (the default).** Each simulated future strings together
+  5-year runs of real years from 1928–2025: the US stock return (S&P 500 with
+  dividends), the US bond return (10-year Treasury), both after US inflation, and
+  Canada's inflation in the same year. So the Depression (1929–32), the 1970s
+  (high inflation *and* poor returns together), 2000–02 and 2008 can all happen.
+- **Your averages, history's shape.** Each series is shifted so it averages your
+  `stocks` and `bonds` returns (defaults: the FP Canada Projection Assumption
+  Guidelines, which planners in Canada use). The swings, streaks and crashes stay.
+- **The mix.** `mix` lists `[age, stock share]` points on people[0]'s age; the share
+  moves in a straight line between them and stays flat outside. The portfolio is
+  rebalanced every January. More bonds lowers both the swings and the average.
+- **Limits.** It's US market history for a Canadian portfolio, and no future can be
+  worse than the worst five years on record (1937–41: about −46% for stocks after
+  inflation, even at the FP Canada average). Fees aren't modelled: lower `stocks`
+  and `bonds` by what you pay.
+- **The old model.** `model: "lognormal"` uses `mean` and `sd` (a bell curve of
+  returns, unrelated to inflation). The what-ifs include "Smooth returns (old
+  model)", which shows how much the model changes the answer, and "10 points more
+  bonds".
+
 ## Inflation
 
 Everything is in today's dollars, so spending, CPP, OAS, tax brackets and TFSA
@@ -259,14 +281,16 @@ limits keep pace with general inflation without further input. Inflation still
 reaches the plan in four ways.
 
 - **The rate.** General inflation is Canada's all-items CPI from Statistics Canada
-  table 18-10-0004-01, stored in `rules.CPI` from 1950: 2.42% a year on average
+  table 18-10-0004-01, stored in `rules.CPI` from 1928: 2.42% a year on average
   over the last 40 years (0.2% to 6.8% year by year), the planner's default rate.
-- **Shocks.** Each simulated future replays 5-year runs of 1950–2025, so a
-  1970s-, 1980s- or 2022-style stretch can happen. The runs are shifted so the
-  whole history averages the last 40 years' 2.42% (1950–2025 averaged 3.5%): they
-  keep their shape, so 1974–81 still reads as eight years of 6–11%, but the
-  average rate doesn't rise. Investments don't keep up within the
-  year: a high-inflation year cuts that year's real return, a low one adds to it.
+- **Shocks.** Each simulated future replays 5-year runs of 1928–2025, so a
+  1930s-, 1970s-, 1980s- or 2022-style stretch can happen. The runs are shifted so
+  the whole history averages the last 40 years' 2.42% (1928–2025 averaged about
+  3%): they keep their shape, so 1974–81 still reads as eight years of high
+  inflation, but the average rate doesn't rise. In the historical model the returns
+  of the same years come along, so they already hold what inflation did. In the
+  `lognormal` model investments don't keep up within the year instead: a
+  high-inflation year cuts that year's real return, a low one adds to it.
   Set `returns.inflation_shocks` to `false`, or `returns.inflation` to a number,
   for steady inflation. The what-ifs include "Steady inflation (no shocks)".
 - **Costs that outpace it.** `cost_growth` sets each cost's yearly growth above
