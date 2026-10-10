@@ -427,3 +427,24 @@ def test_rate_of_return_tile_describes_the_history_mix(built):
     assert "80% stocks" in tiles and f"{plan.returns.mean:.0%} average" not in tiles
     lo = replace(plan, returns=replace(plan.returns, model="lognormal"))
     assert f"{plan.returns.mean:.0%} average" in report._kpis(replace(result, inputs=lo))
+
+
+def test_history_years_in_the_text_follow_the_data(built, monkeypatch):
+    plan, result, _, _ = built
+    monkeypatch.setattr(rules, "CPI", replace(rules.CPI, year=2031))
+    html = report._assumptions(plan, result, None)
+    assert f"{engine.HISTORY_FROM}–2031" in html and "1928–2025" not in html
+
+
+def test_source_note_labels_each_average(built):
+    plan, result, _, _ = built
+    one = replace(plan, returns=replace(plan.returns, stocks=0.05, bonds=None))
+    html = report._assumptions(one, replace(result, inputs=one), None)
+    assert "stocks 5.00% (your figure)" in html
+    assert f"(FP Canada {rules.RETURN_ASSUMPTIONS.year}, before fees)" in html
+
+
+def test_worst_stretch_reads_as_the_portfolio_return(built):
+    plan, result, _, _ = built
+    html = report._assumptions(plan, result, None)
+    assert "investments earn" in html and "change investments by" not in html

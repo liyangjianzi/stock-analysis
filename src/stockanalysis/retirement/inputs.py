@@ -147,7 +147,9 @@ class Returns:
     def __post_init__(self):
         # JSON lists, apply_changes or library code may hand in lists: keep one shape,
         # a tuple of tuples, so the frozen plan stays hashable and validate sees pairs
-        mix = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in (self.mix or ()))
+        # (None, a JSON null, means the default mix, like stocks/bonds/inflation)
+        mix = (DEFAULT_MIX if self.mix is None else
+               tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in self.mix))
         object.__setattr__(self, "mix", mix)
 
     @property
@@ -435,6 +437,7 @@ def limits(province: str) -> dict:
             "unlock_share": lif["unlock_share"].value,
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
             "survivor_share": (0.4, 1.0), "expected_return": RETURN_RANGE,
+            "mix_age": (0, mortality.OMEGA),
             "guardrail_band": (0.05, 0.5), "guardrail_step": (0.02, 0.5),
             "guardrail_floor": (0.3, 1.0), "guardrail_ceiling": (1.0, 3.0),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
@@ -451,7 +454,8 @@ def defaults() -> dict:
             "returns": {**flags(Returns), "model": Returns.model,
                         "stocks": rules.real_return("canadian_equities"),
                         "bonds": rules.real_return("fixed_income"),
-                        "mix": [list(p) for p in DEFAULT_MIX]},
+                        "mix": [list(p) for p in DEFAULT_MIX],
+                        "history_years": [min(rules.CPI.value), rules.CPI.year]},
             "cost_growth": {name: CostGrowth().rate(name) for name in COST_KINDS}}
 
 

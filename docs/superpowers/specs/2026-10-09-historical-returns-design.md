@@ -134,7 +134,10 @@ The bad-luck future is unchanged: it ranks the drawn paths and replays one.
 
 Added, both history mode only:
 
-- "Smooth returns (old model)": `model="lognormal"` with the plan's `mean`/`sd`.
+- "Smooth returns (old model, same average and swings)": `model="lognormal"` with
+  `mean`/`sd` matched to the mix's historical returns (`engine.matched_lognormal`).
+  (Changed after review: the plan's own `mean`/`sd` mixed the model change with a
+  different average.)
   This shows how much the model itself changes the answer.
 - "10 points more bonds": every mix point's share − 0.10, floored at 0.
 

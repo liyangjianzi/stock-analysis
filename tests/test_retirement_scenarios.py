@@ -112,7 +112,7 @@ def _hist_plan():
 
 def test_history_plans_get_the_model_and_bond_what_ifs():
     v = {k: (label, plan) for k, label, plan in scenarios.variants(_hist_plan())}
-    assert v["smooth_returns"][0] == "Smooth returns (old model)"
+    assert v["smooth_returns"][0] == "Smooth returns (old model, same average and swings)"
     assert v["smooth_returns"][1].returns.model == "lognormal"
     assert v["more_bonds"][0] == "10 points more bonds"
     assert np.allclose(v["more_bonds"][1].returns.mix, ((50, 0.7), (80, 0.0)))
@@ -135,3 +135,14 @@ def test_evaluate_uses_the_mix_for_the_average_future():
     _, tax, legacy = scenarios.evaluate(p, paths=20, seed=1)
     avg = engine.simulate(p, engine.average_returns(p, engine.steps(p)), engine.average_deaths(p))
     assert legacy == pytest.approx(float(avg.legacy[0])) and tax == pytest.approx(float(avg.lifetime_tax[0]))
+
+
+def test_smooth_returns_what_if_matches_the_mix_average_and_swings():
+    p = _hist_plan()
+    smooth = {k: plan for k, _, plan in scenarios.variants(p)}["smooth_returns"]
+    mean, sd = engine.matched_lognormal(p)
+    assert smooth.returns.model == "lognormal"
+    assert (smooth.returns.mean, smooth.returns.sd) == pytest.approx((mean, sd))
+    R, _, _ = engine.draw_futures(p, 4000, 3)
+    assert mean == pytest.approx(R[:engine.steps(p)].mean(), abs=3e-3)
+    assert sd == pytest.approx(R[:engine.steps(p)].std(), abs=5e-3)

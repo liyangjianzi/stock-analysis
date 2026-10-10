@@ -271,3 +271,11 @@ def test_page_tolerates_a_plan_without_returns(server):
     page = _req(server, "GET", "/")[1].decode()
     assert "const r = draft.returns ?? {}" in page
     assert "draft.returns = draft.returns || {}" in page
+
+
+def test_page_mix_rows_follow_the_limits_and_the_alert_names_the_mix(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert 'max="${limits.mix_age[1]}"' in page and 'max="110"' not in page
+    assert "Math.max(age, draft.people[0].age) + 10" in page
+    assert "the stock/bond mix" in page
+    assert "retDefaults.history_years" in page and "1928–2025" not in page

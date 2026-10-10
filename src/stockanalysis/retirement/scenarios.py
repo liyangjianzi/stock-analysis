@@ -63,8 +63,9 @@ def variants(plan: PlanInputs) -> list:
         out.append(("steady_inflation", "Steady inflation (no shocks)",
                     replace(plan, returns=replace(r, inflation_shocks=False))))
     if r.model == "history":
-        out.append(("smooth_returns", "Smooth returns (old model)",
-                    replace(plan, returns=replace(r, model="lognormal"))))
+        mean, sd = engine.matched_lognormal(plan)
+        out.append(("smooth_returns", "Smooth returns (old model, same average and swings)",
+                    replace(plan, returns=replace(r, model="lognormal", mean=mean, sd=sd))))
         more = tuple((age, max(0.0, share - 0.10)) for age, share in r.mix)
         if more != r.mix:
             out.append(("more_bonds", "10 points more bonds", replace(plan, returns=replace(r, mix=more))))
