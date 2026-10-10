@@ -70,8 +70,8 @@ def test_the_process_pool_gives_the_same_answer():
 def test_expected_legacy_averages_the_lifespan_draws():
     from stockanalysis.retirement import mortality
     D = mortality.draw_death_ages(PLAN.people, PLAN.start_year, 20, 7)
-    g = engine.median_return(PLAN.returns.mean, PLAN.returns.sd)
-    proj = engine.simulate(PLAN, np.full((engine.life_steps(PLAN), 20), g), D)
+    g = engine.average_returns(PLAN, engine.life_steps(PLAN))
+    proj = engine.simulate(PLAN, np.repeat(g, 20, axis=1), D)
     assert optimize._expected_legacy(PLAN, D) == pytest.approx(float(proj.legacy.mean()))
 
 

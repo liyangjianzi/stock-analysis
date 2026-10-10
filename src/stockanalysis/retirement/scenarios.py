@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-import numpy as np
-
 from . import engine
 from .inputs import STRATEGIES, STRATEGY_LABELS, PlanInputs, apply_changes
 
@@ -64,16 +62,21 @@ def variants(plan: PlanInputs) -> list:
     if r.inflation_shocks and r.inflation is None:
         out.append(("steady_inflation", "Steady inflation (no shocks)",
                     replace(plan, returns=replace(r, inflation_shocks=False))))
+    if r.model == "history":
+        out.append(("smooth_returns", "Smooth returns (old model)",
+                    replace(plan, returns=replace(r, model="lognormal"))))
+        more = tuple((age, max(0.0, share - 0.10)) for age, share in r.mix)
+        if more != r.mix:
+            out.append(("more_bonds", "10 points more bonds", replace(plan, returns=replace(r, mix=more))))
     return out
 
 
 def evaluate(plan: PlanInputs, *, paths: int, seed: int) -> tuple:
     """(success over ``paths`` futures with drawn lifespans, average-future lifetime tax,
     average-future legacy)."""
-    r, T = plan.returns, engine.steps(plan)
+    T = engine.steps(plan)
     simulated = engine.simulate(plan, *engine.draw_futures(plan, paths, seed))
-    average = engine.simulate(plan, np.full((T, 1), engine.median_return(r.mean, r.sd)),
-                              engine.average_deaths(plan))
+    average = engine.simulate(plan, engine.average_returns(plan, T), engine.average_deaths(plan))
     return simulated.success, float(average.lifetime_tax[0]), float(average.legacy[0])
 
 
