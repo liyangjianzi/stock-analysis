@@ -377,5 +377,56 @@ def test_cost_growth_overrides_and_validation():
 def test_inflation_shocks_default_on_and_defaults_cover_the_new_inputs():
     assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).returns.inflation_shocks is True
     dflt = inputs.defaults()
-    assert dflt["returns"] == {"inflation_shocks": True}
+    assert dflt["returns"] == {"inflation_shocks": True, "model": "history",
+                               "stocks": pytest.approx(rules.real_return("canadian_equities")),
+                               "bonds": pytest.approx(rules.real_return("fixed_income")),
+                               "mix": [[0, 0.8]]}
     assert dflt["cost_growth"]["base"] == 0.0 and dflt["cost_growth"]["care"] == rules.COST_GROWTH["care"].value
+
+
+def test_returns_default_to_history_with_fp_canada_averages():
+    r = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).returns
+    assert r.model == "history" and r.mix == ((0, 0.8),)
+    assert r.stock_return == pytest.approx(rules.real_return("canadian_equities"))
+    assert r.bond_return == pytest.approx(rules.real_return("fixed_income"))
+
+
+def test_a_plan_without_the_new_fields_loads_with_the_defaults():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"] = {"mean": 0.05, "sd": 0.15, "paths": 100, "seed": 7}
+    r = inputs.parse(d).returns
+    assert r.model == "history" and r.stocks is None and r.bonds is None and r.mix == inputs.DEFAULT_MIX
+
+
+def test_stock_share_glides_between_points_and_is_flat_outside():
+    mix = ((45, 0.9), (65, 0.6), (80, 0.4))
+    assert inputs.stock_share(mix, 30) == 0.9
+    assert inputs.stock_share(mix, 55) == pytest.approx(0.75)
+    assert inputs.stock_share(mix, 90) == 0.4
+    assert np.allclose(inputs.stock_share(mix, np.array([45, 65, 72.5])), [0.9, 0.6, 0.5])
+    assert inputs.stock_share(((0, 0.8),), 70) == 0.8
+
+
+@pytest.mark.parametrize("ret, field", [
+    ({"model": "bootstrap"}, "returns.model"),
+    ({"stocks": 0.2}, "returns.stocks"),
+    ({"bonds": -0.1}, "returns.bonds"),
+    ({"mix": []}, "returns.mix"),
+    ({"mix": [[60]]}, "returns.mix[0]"),
+    ({"mix": [[60, 1.2]]}, "returns.mix[0]"),
+    ({"mix": [[200, 0.5]]}, "returns.mix[0]"),
+    ({"mix": [[60, 0.5], [60, 0.4]]}, "returns.mix[1]"),
+])
+def test_bad_return_inputs_name_the_field(ret, field):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"].update(ret)
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == field
+
+
+def test_a_saved_scenario_can_change_a_mix_point():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"]["mix"] = [[50, 0.9], [70, 0.5]]
+    p = inputs.apply_changes(inputs.parse(d), {"returns.mix.1.1": 0.4})
+    assert p.returns.mix == ((50, 0.9), (70, 0.4))

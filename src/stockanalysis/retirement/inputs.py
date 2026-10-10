@@ -121,6 +121,11 @@ class Home:
         return self.value * (1 - self.selling_cost) - self.new_value - self.moving_cost
 
 
+RETURN_MODELS = ("history", "lognormal")
+DEFAULT_MIX = ((0, 0.8),)          # 80% stocks: about today's 15% yearly swings
+RETURN_RANGE = (-0.05, 0.15)       # plan bounds for an expected real return, not rules
+
+
 @dataclass(frozen=True)
 class Returns:
     mean: float = 0.05
@@ -129,10 +134,36 @@ class Returns:
     seed: int = 7
     inflation: float | None = None   # yearly; None: Canada's 40-year average (rules.CPI)
     inflation_shocks: bool = True    # each future replays runs of past inflation; returns lag it
+    model: str = "history"           # "history": joint runs of 1928- returns and inflation; "lognormal": mean/sd
+    stocks: float | None = None      # expected compound real return; None: FP Canada (rules.RETURN_ASSUMPTIONS)
+    bonds: float | None = None
+    mix: tuple = DEFAULT_MIX         # ((people[0]'s age, stock share), ...): straight lines between, flat outside
 
     @property
     def inflation_rate(self) -> float:
         return rules.historical_inflation() if self.inflation is None else self.inflation
+
+    @property
+    def stock_return(self) -> float:
+        return rules.real_return("canadian_equities") if self.stocks is None else self.stocks
+
+    @property
+    def bond_return(self) -> float:
+        return rules.real_return("fixed_income") if self.bonds is None else self.bonds
+
+
+def stock_share(mix, age):
+    """The stock share at ``age`` (a number or an array): straight lines between the
+    mix points, flat before the first and after the last."""
+    ages, shares = zip(*mix)
+    return np.interp(age, ages, shares)
+
+
+def _returns(d: dict) -> Returns:
+    d = dict(d)
+    if "mix" in d:      # JSON lists -> tuples, so the frozen plan stays hashable and apply_changes works
+        d["mix"] = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in d["mix"] or ())
+    return Returns(**d)
 
 
 @dataclass(frozen=True)
@@ -286,7 +317,7 @@ TEMPLATE = {
                  "survivor_share": 0.70},
     "home": {"value": 900000, "downsize_age": 65, "new_value": 600000, "selling_cost": 0.04,
              "moving_cost": 20000, "property_tax": 6000, "insurance": 2000},
-    "returns": {"mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
+    "returns": {"model": "history", "mix": [[0, 0.8]], "mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
     "withdrawal": {"strategy": "rrsp_first", "steady_income_target": 58000},
     "nonreg_income": {"eligible_dividends": 0.015, "foreign_dividends": 0.01, "interest": 0.0},
     "balances": [
@@ -311,7 +342,7 @@ def _build(d: dict) -> PlanInputs:
             people=tuple(_person(p) for p in d["people"]),
             spending=Spending(**spending),
             home=None if d.get("home") is None else Home(**d["home"]),
-            returns=Returns(**d.get("returns", {})),
+            returns=_returns(d.get("returns", {})),
             withdrawal=Withdrawal(**d.get("withdrawal", {})),
             accounts=tuple(Account(**a) for a in d.get("balances") or []),
             nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
@@ -403,7 +434,7 @@ def limits(province: str) -> dict:
             "lif_min_age": lif["min_age"].value,
             "unlock_share": lif["unlock_share"].value,
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
-            "survivor_share": (0.4, 1.0),
+            "survivor_share": (0.4, 1.0), "expected_return": RETURN_RANGE,
             "guardrail_band": (0.05, 0.5), "guardrail_step": (0.02, 0.5),
             "guardrail_floor": (0.3, 1.0), "guardrail_ceiling": (1.0, 3.0),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
@@ -417,7 +448,10 @@ def defaults() -> dict:
     kid = {f.name: f.default for f in fields(Kid) if f.default not in (MISSING, None)}
     return {"education": {**flags(Education), "costs": dict(EDUCATION_COSTS)}, "kid": kid,
             "withdrawal": flags(Withdrawal),
-            "returns": flags(Returns),
+            "returns": {**flags(Returns), "model": Returns.model,
+                        "stocks": rules.real_return("canadian_equities"),
+                        "bonds": rules.real_return("fixed_income"),
+                        "mix": [list(p) for p in DEFAULT_MIX]},
             "cost_growth": {name: CostGrowth().rate(name) for name in COST_KINDS}}
 
 
@@ -538,6 +572,27 @@ def validate(plan: PlanInputs) -> PlanInputs:
         _fail("returns", "need mean > -1, sd >= 0 and paths >= 1")
     if r.inflation is not None and not -0.05 <= r.inflation <= 0.20:
         _fail("returns.inflation", "a yearly rate between -0.05 and 0.20 (e.g. 0.025)")
+    if r.model not in RETURN_MODELS:
+        _fail("returns.model", f"one of {', '.join(RETURN_MODELS)}")
+    lo, hi = RETURN_RANGE
+    for name in ("stocks", "bonds"):
+        v = getattr(r, name)
+        if v is not None and not (_is_number(v) and lo <= v <= hi):
+            _fail(f"returns.{name}", f"an expected real return between {lo} and {hi} (e.g. 0.04)")
+    if not r.mix:
+        _fail("returns.mix", "needs at least one [age, stock share] point")
+    prev = None
+    for i, pt in enumerate(r.mix):
+        if not (isinstance(pt, tuple) and len(pt) == 2 and all(_is_number(x) for x in pt)):
+            _fail(f"returns.mix[{i}]", "an [age, stock share] pair, e.g. [65, 0.6]")
+        age, share = pt
+        if not 0 <= age <= mortality.OMEGA:
+            _fail(f"returns.mix[{i}]", f"age between 0 and {mortality.OMEGA}")
+        if not 0 <= share <= 1:
+            _fail(f"returns.mix[{i}]", "stock share between 0 and 1 (e.g. 0.6)")
+        if prev is not None and age <= prev:
+            _fail(f"returns.mix[{i}]", "ages must increase down the list")
+        prev = age
     for name in COST_KINDS:
         v = getattr(plan.cost_growth, name)
         if v is not None and not (_is_number(v) and -0.05 <= v <= 0.15):
