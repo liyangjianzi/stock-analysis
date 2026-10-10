@@ -162,8 +162,10 @@ the model and the averages can.
   today's line.
 - The inflation line says "joint runs of 1928–2025 returns and inflation" in
   history mode.
-- Investing tab: a row giving the worst 5-year real loss of the portfolio in the
-  10th-percentile future, so the reader can see history show up.
+- Details tab (assumptions table): a row giving the worst 5-year real loss of the
+  portfolio in the bad-luck (10th-percentile) future, so the reader can see history
+  show up. `PlanResult` gains `bad_luck_returns` (the replayed path's yearly returns)
+  for it.
 
 ## Docs
 
