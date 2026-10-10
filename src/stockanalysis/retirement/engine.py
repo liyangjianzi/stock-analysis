@@ -50,7 +50,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import education, mortality, rules, tax
-from .inputs import PlanInputs, event_span
+from .inputs import PlanInputs, event_span, stock_share
 
 
 # -- returns ----------------------------------------------------------------------
@@ -74,7 +74,7 @@ INFLATION_STREAM = 1     # its own random stream: return and lifespan draws don'
 
 def draw_inflation(plan: PlanInputs, paths: int, years: int, seed: int) -> np.ndarray:
     """(years, paths) yearly inflation. Shocks on and no fixed rate: consecutive
-    INFLATION_BLOCK-year runs of rules.CPI (since 1950, so 1970s runs are drawn) from
+    INFLATION_BLOCK-year runs of rules.CPI (since 1928, so 1930s and 1970s runs are drawn) from
     a random start year, wrapping from the last year to the first, so every year is
     drawn equally often. Each year is then shifted so the whole history averages the
     default rate (the last 40 years): runs keep their shape, the paths average
@@ -84,12 +84,7 @@ def draw_inflation(plan: PlanInputs, paths: int, years: int, seed: int) -> np.nd
     if not r.inflation_shocks or r.inflation is not None:
         return np.full((years, paths), r.inflation_rate)
     hist = np.array([rules.CPI.value[y] for y in sorted(rules.CPI.value)])
-    hist = (1 + hist) * (1 + r.inflation_rate) / (1 + rules.historical_inflation(len(hist))) - 1
-    blocks = -(-years // INFLATION_BLOCK)
-    rng = np.random.default_rng([seed, INFLATION_STREAM])
-    starts = rng.integers(0, len(hist), size=(paths, blocks))
-    idx = ((starts[:, :, None] + np.arange(INFLATION_BLOCK)) % len(hist)).reshape(paths, -1)[:, :years]
-    return hist[idx].T
+    return _centre(hist, r.inflation_rate)[_block_index(len(hist), paths, years, seed)]
 
 
 def lag_returns(returns: np.ndarray, inflation: np.ndarray, average: float) -> np.ndarray:
@@ -101,6 +96,68 @@ def lag_returns(returns: np.ndarray, inflation: np.ndarray, average: float) -> n
 def median_return(mean: float, sd: float) -> float:
     """The typical (median, geometric) yearly return: what a steady 'average future' earns."""
     return float(np.exp(lognormal_params(mean, sd)[0]) - 1)
+
+
+HISTORY_FROM = 1928      # first year of rules.US_RETURNS, US_CPI and CPI
+
+
+def _block_index(n: int, paths: int, years: int, seed: int) -> np.ndarray:
+    """(years, paths) indices into an n-year history: INFLATION_BLOCK-year runs from a
+    random start, wrapping from the last year to the first, on the inflation stream.
+    History draws and inflation-only draws share them, so the two models see the same years."""
+    blocks = -(-years // INFLATION_BLOCK)
+    rng = np.random.default_rng([seed, INFLATION_STREAM])
+    starts = rng.integers(0, n, size=(paths, blocks))
+    return ((starts[:, :, None] + np.arange(INFLATION_BLOCK)) % n).reshape(paths, -1)[:, :years].T
+
+
+def _centre(x: np.ndarray, target: float) -> np.ndarray:
+    """``x`` shifted by one factor so its compound average over the whole history is
+    ``target``: the runs keep their shape, the average is the plan's."""
+    return (1 + x) * (1 + target) / np.exp(np.log1p(x).mean()) - 1
+
+
+def history_real() -> tuple:
+    """(stocks, bonds, inflation), one entry per year from HISTORY_FROM: US real returns,
+    (1 + nominal) / (1 + US CPI) - 1, and Canada's CPI change in the same year."""
+    years = range(HISTORY_FROM, rules.CPI.year + 1)
+    nominal = np.array([rules.US_RETURNS.value[y] for y in years])
+    us_cpi = np.array([rules.US_CPI.value[y] for y in years])
+    real = (1 + nominal) / (1 + us_cpi)[:, None] - 1
+    return real[:, 0], real[:, 1], np.array([rules.CPI.value[y] for y in years])
+
+
+def draw_history(plan: PlanInputs, paths: int, years: int, seed: int) -> tuple:
+    """(stocks, bonds, inflation), each (years, paths): runs of whole historical years,
+    every series shifted to its target (returns.stock_return, bond_return,
+    inflation_rate). Steady inflation when shocks are off or the rate is fixed."""
+    r = plan.returns
+    s, b, ca = history_real()
+    idx = _block_index(len(ca), paths, years, seed)
+    infl = (_centre(ca, r.inflation_rate)[idx] if r.inflation_shocks and r.inflation is None
+            else np.full((years, paths), r.inflation_rate))
+    return _centre(s, r.stock_return)[idx], _centre(b, r.bond_return)[idx], infl
+
+
+def _mix_path(plan: PlanInputs, T: int) -> np.ndarray:
+    """(T,) stock share each year, on people[0]'s age."""
+    return stock_share(plan.returns.mix, plan.people[0].age + np.arange(T))
+
+
+def portfolio_returns(plan: PlanInputs, stocks: np.ndarray, bonds: np.ndarray) -> np.ndarray:
+    """(years, paths) household returns: the year's mix, rebalanced every January."""
+    w = _mix_path(plan, stocks.shape[0])[:, None]
+    return w * stocks + (1 - w) * bonds
+
+
+def average_returns(plan: PlanInputs, T: int) -> np.ndarray:
+    """(T, 1) steady returns of the average future: the median lognormal return, or the
+    year's mix of the expected stock and bond returns."""
+    r = plan.returns
+    if r.model == "lognormal":
+        return np.full((T, 1), median_return(r.mean, r.sd))
+    w = _mix_path(plan, T)[:, None]
+    return w * r.stock_return + (1 - w) * r.bond_return
 
 
 # -- government benefits ----------------------------------------------------------
@@ -1045,6 +1102,7 @@ class PlanResult:
     bad_luck: Projection
     average_return: float
     bad_luck_path: int
+    bad_luck_returns: np.ndarray | None = None   # (steps,) the bad-luck future's yearly returns
 
 
 def bad_luck_index(proj: Projection, pct: float = 0.10) -> int:
@@ -1069,24 +1127,33 @@ def average_deaths(plan: PlanInputs) -> np.ndarray:
 
 
 def draw_futures(plan: PlanInputs, paths: int, seed: int) -> tuple:
-    """(lagged real returns, death ages, inflation) over life_steps: one set of
-    futures every comparison shares."""
+    """(real returns, death ages, inflation) over life_steps: one set of futures every
+    comparison shares. History mode: the mix of historical stock and bond runs, with
+    the inflation of the same years (already real, so not lagged). Lognormal mode:
+    lognormal returns lagged against the drawn inflation."""
     r, years = plan.returns, life_steps(plan)
-    inflation = draw_inflation(plan, paths, years, seed)
-    returns = lag_returns(draw_returns(r.mean, r.sd, paths, years, seed), inflation, r.inflation_rate)
+    if r.model == "history":
+        stocks, bonds, inflation = draw_history(plan, paths, years, seed)
+        returns = portfolio_returns(plan, stocks, bonds)      # already real: no lag
+    else:
+        inflation = draw_inflation(plan, paths, years, seed)
+        returns = lag_returns(draw_returns(r.mean, r.sd, paths, years, seed), inflation, r.inflation_rate)
     return returns, mortality.draw_death_ages(plan.people, plan.start_year, paths, seed), inflation
 
 
 def run(plan: PlanInputs, *, paths: int | None = None, seed: int | None = None) -> PlanResult:
     """The plan over ``paths`` simulated futures with drawn lifespans, plus the average
-    future (a steady median return) and the bad-luck future (the 10th-percentile path's
+    future (steady returns, ``average_returns``) and the bad-luck future (the 10th-percentile path's
     returns, ranked and replayed with ``average_deaths`` over ``steps(plan)``)."""
     r = plan.returns
     R, D, I = draw_futures(plan, r.paths if paths is None else paths, r.seed if seed is None else seed)
     simulated = simulate(plan, R, D, I)
-    T, g, fixed = steps(plan), median_return(r.mean, r.sd), average_deaths(plan)
-    average = simulate(plan, np.full((T, 1), g), fixed)
+    T, fixed = steps(plan), average_deaths(plan)
+    g = average_returns(plan, T)
+    average = simulate(plan, g, fixed)
     # Rank the returns with everyone on the same fixed deaths: ranked on the drawn
     # lifespans, an early death leaves little money and passes for bad markets.
     k = bad_luck_index(simulate(plan, R[:T], np.repeat(fixed, R.shape[1], axis=1), I[:T]))
-    return PlanResult(plan, simulated, average, simulate(plan, R[:T, [k]], fixed, I[:T, [k]]), g, k)
+    steady = float(g[0, 0]) if np.all(g == g[0, 0]) else float(g.mean())   # a steady rate reads back exactly
+    return PlanResult(plan, simulated, average, simulate(plan, R[:T, [k]], fixed, I[:T, [k]]), steady, k,
+                      R[:T, k].copy())

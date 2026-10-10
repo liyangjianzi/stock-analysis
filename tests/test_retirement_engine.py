@@ -28,7 +28,7 @@ def plan(people=None, accounts=(), base=30_000.0, end_age=63, strategy="rrsp_fir
     spend.update(spend_kw)
     return PlanInputs(province="AB", start_year=2026, end_age=end_age,
                       people=tuple(people or (person(),)), spending=Spending(**spend),
-                      home=home, returns=Returns(0.0, 0.0, 1, 1, inflation=0.0),
+                      home=home, returns=Returns(0.0, 0.0, 1, 1, inflation=0.0, model="lognormal"),
                       cost_growth=CostGrowth(0.0, 0.0, 0.0, 0.0, 0.0),
                       withdrawal=Withdrawal(strategy, 58_000.0), accounts=tuple(accounts))
 
@@ -219,7 +219,7 @@ def test_bad_luck_is_the_tenth_percentile_path():
 
 def test_run_uses_the_median_return_and_replays_the_bad_luck_path():
     p = plan(accounts=[Account("A", "rrsp", 400_000.0)], base=30_000.0, end_age=80)
-    p = replace(p, returns=Returns(0.05, 0.15, 200, 3))
+    p = replace(p, returns=Returns(0.05, 0.15, 200, 3, model="lognormal"))
     result = engine.run(p)
     assert result.average_return == engine.median_return(0.05, 0.15)
     assert result.average.paths == 1 and result.simulated.paths == 200
@@ -977,7 +977,7 @@ def test_default_inflation_is_canadas_40_year_average():
 
 def _shocky(**ret):
     p = plan()
-    return replace(p, returns=replace(p.returns, **{"inflation": None, "inflation_shocks": True, **ret}))
+    return replace(p, returns=replace(p.returns, **{"inflation": None, "inflation_shocks": True, "model": "lognormal", **ret}))
 
 
 def _centered_history():
@@ -1113,3 +1113,87 @@ def test_shock_paths_average_the_history_so_the_lag_is_unbiased():
     I = engine.draw_inflation(_shocky(), paths=20_000, years=40, seed=2)
     lag = np.log((1 + rules.historical_inflation()) / (1 + I))
     assert abs(lag.mean()) < 3e-4        # every year of history weighs the same
+
+
+# -- historical returns ---------------------------------------------------------------------
+
+def _hist(**ret):
+    p = plan()
+    return replace(p, returns=replace(p.returns, **{"model": "history", "inflation": None,
+                                                    "inflation_shocks": True, **ret}))
+
+
+def test_history_blocks_are_whole_matched_years():
+    s, b, ca = engine.history_real()
+    S, B, I = engine.draw_history(_hist(stocks=0.04, bonds=0.01), paths=30, years=12, seed=5)
+    cs, cb = engine._centre(s, 0.04), engine._centre(b, 0.01)
+    ci = engine._centre(ca, rules.historical_inflation())
+    for n in range(30):
+        ks = [int(np.flatnonzero(np.isclose(cs, S[t, n], rtol=0, atol=1e-12))[0]) for t in range(12)]
+        assert np.allclose(cb[ks], B[:, n]) and np.allclose(ci[ks], I[:, n])   # one year, three series
+        assert all(ks[t + 1] == (ks[t] + 1) % len(cs) for t in range(11) if t % 5 != 4)
+
+
+def test_history_is_seeded_and_centred_on_the_targets():
+    p = _hist(stocks=0.04, bonds=0.01)
+    S, B, I = engine.draw_history(p, paths=20_000, years=40, seed=2)
+    geo = lambda x: np.exp(np.log1p(x).mean()) - 1    # noqa: E731
+    assert geo(S) == pytest.approx(0.04, abs=2e-3)
+    assert geo(B) == pytest.approx(0.01, abs=1e-3)
+    assert geo(I) == pytest.approx(rules.historical_inflation(), abs=1e-3)
+    assert all(np.array_equal(x, y) for x, y in zip((S, B, I), engine.draw_history(p, 20_000, 40, 2)))
+
+
+def test_history_reaches_the_worst_stretches():
+    S, _, _ = engine.draw_history(_hist(), paths=2_000, years=40, seed=4)
+    worst5 = min(np.prod(1 + S[t:t + 5], axis=0).min() for t in range(36)) - 1
+    assert worst5 < -0.40      # 1937-41 loses 46% in real terms even at the FP Canada average
+
+
+def test_history_with_steady_inflation_keeps_historical_returns():
+    S, _, I = engine.draw_history(_hist(inflation=0.02), 10, 8, 1)
+    assert np.allclose(I, 0.02) and S.std() > 0.05
+    S2, _, I2 = engine.draw_history(_hist(inflation_shocks=False), 10, 8, 1)
+    assert np.allclose(I2, rules.historical_inflation()) and np.array_equal(S, S2)
+
+
+def test_history_wraps_for_horizons_longer_than_the_record():
+    S, B, I = engine.draw_history(_hist(), paths=3, years=150, seed=1)
+    assert S.shape == B.shape == I.shape == (150, 3) and np.isfinite(S).all()
+
+
+def test_lognormal_inflation_uses_the_same_blocks_as_history():
+    _, _, I = engine.draw_history(_hist(), 50, 12, 3)
+    assert np.allclose(engine.draw_inflation(_shocky(), 50, 12, 3), I)
+
+
+def test_portfolio_is_the_mix_of_stocks_and_bonds_by_people0_age():
+    S, B = np.full((4, 2), 0.10), np.full((4, 2), 0.02)
+    a = person().age
+    R = engine.portfolio_returns(_hist(mix=((a, 1.0), (a + 2, 0.0))), S, B)
+    assert np.allclose(R[:, 0], [0.10, 0.06, 0.02, 0.02])
+    assert np.allclose(engine.portfolio_returns(_hist(mix=((0, 1.0),)), S, B), S)
+    assert np.allclose(engine.portfolio_returns(_hist(mix=((0, 0.0),)), S, B), B)
+
+
+def test_average_returns_lognormal_is_unchanged_and_history_follows_the_mix():
+    lo = plan()
+    lo = replace(lo, returns=replace(lo.returns, mean=0.05, sd=0.15))
+    assert np.array_equal(engine.average_returns(lo, 5), np.full((5, 1), engine.median_return(0.05, 0.15)))
+    a = person().age
+    p = _hist(stocks=0.04, bonds=0.01, mix=((a, 1.0), (a + 2, 0.0)))
+    assert np.allclose(engine.average_returns(p, 3)[:, 0], [0.04, 0.025, 0.01])
+
+
+def test_history_mode_feeds_simulate_without_the_lag():
+    p = _hist(stocks=0.04, bonds=0.01, mix=((0, 0.6),))
+    R, _, I = engine.draw_futures(p, paths=10, seed=3)
+    S, B, I2 = engine.draw_history(p, 10, engine.life_steps(p), 3)
+    assert np.allclose(R, 0.6 * S + 0.4 * B) and np.array_equal(I, I2)
+
+
+def test_run_records_the_bad_luck_returns_and_a_steady_average():
+    res = engine.run(_hist(), paths=40, seed=1)
+    assert res.bad_luck_returns.shape == (engine.steps(res.inputs),)
+    lo = engine.run(plan(), paths=40, seed=1)
+    assert lo.average_return == engine.median_return(0.0, 0.0)
