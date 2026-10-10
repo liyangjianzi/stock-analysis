@@ -53,6 +53,11 @@ def test_serves_the_page_and_plotly(server):
     assert status == 200 and b"Retirement planner" in page
     status, js = _req(server, "GET", "/plotly.js")
     assert status == 200 and len(js) > 100_000
+    status, css = _req(server, "GET", "/theme.css")
+    assert status == 200 and b"[data-theme=dark]" in css
+    status, js = _req(server, "GET", "/theme.js")
+    assert status == 200 and b"window.theme" in js
+    assert b'href="/theme.css"' in page and b"theme.draw(" in page
 
 
 def test_plan_round_trips_with_a_preview_of_the_saved_plan(server):
@@ -61,6 +66,7 @@ def test_plan_round_trips_with_a_preview_of_the_saved_plan(server):
     saved = st["saved"]
     assert 0 <= saved["success"] <= 1 and saved["paths"] == 40
     assert saved["chart"]["data"] and saved["gauge"]["data"]
+    assert saved["gauge_title"] == "Chance the money lasts as long as either of you lives"
     assert saved["balances_source"] == "plan.json balances"
 
 

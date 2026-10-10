@@ -52,7 +52,7 @@ be sorted **stops the run** rather than being dropped silently.
 A local page at `http://127.0.0.1:8765/` (only reachable from this machine):
 
 - **Tabs:** People, Spending (money events, guardrails), Education, Home, Investing,
-  Optimize, Compare (saved scenarios) and Advanced (pension match, ESPP, RRSP room).
+  Inflation (the rate, shocks, costs above CPI), Optimize, Compare (saved scenarios) and Advanced (pension match, ESPP, RRSP room).
   Retirement, CPP/OAS and RRIF ages, spending and downsizing are sliders.
 - **Live estimate:** each edit re-runs a 1,000-future estimate (~0.8 s). It shows
   the report's gauge and money-left chart, plus tiles that give the change against
@@ -66,6 +66,10 @@ A local page at `http://127.0.0.1:8765/` (only reachable from this machine):
   Compare tab.
 
 Press Ctrl-C in the terminal to stop it.
+
+
+Both the editor and the report have a **Theme** button: Auto (follow the system's light or
+dark setting), Dark or Light. The choice is remembered by the browser.
 
 ## Planning tools (`--optimize`, the GUI's Optimize tab)
 
@@ -105,7 +109,7 @@ keeps it. Library: `optimize.affordability(plan, target=0.9)` and
 | `people[]` (1–2) | `age`, `retire_age`, `sex` (`female` / `male` for the life table; omit to average), `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `salary` (gross pay while working: it pays income tax and CPP/EI premiums, then spending, then contributions; the rest is saved or the gap drawn), `pension_match` (employer match as a multiple of your own pension contribution, e.g. 1.75; only your part comes out of salary), `espp` (`{"rate": 0.25, "cap": 25000, "discount": 0.15}`: paid from salary, shares at market value into non-registered, the discount taxed as salary), `rrsp_room` (the "RRSP deduction limit" on your Notice of Assessment; contributions above your room go to the TFSA; left out, room isn't checked), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`, and for a couple `spousal_rrsp`) |
 | `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), `survivor_share` (0.70), `rule`: `bad_market` (cut `bad_market_cut` when investments fall below `bad_market_trigger` × their value the first year nobody earns) or `guardrails` (`guardrail_band`, `guardrail_step`, `guardrail_stop_years`, `guardrail_floor`, `guardrail_ceiling`) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, `selling_cost`, `moving_cost`, `property_tax`, `insurance` |
-| `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed`; `inflation` (yearly; default Canada's CPI average over the last 40 years, 2.42% for 1985–2025); `inflation_shocks` (default `true`: each future replays 5-year runs of past inflation) |
+| `returns` | real (after-inflation) `mean`, `sd`, `paths`, `seed`; `inflation` (yearly; default Canada's CPI average over the last 40 years, 2.42% for 1986–2025); `inflation_shocks` (default `true`: each future replays 5-year runs of 1950–2025 inflation, centred on the 40-year average) |
 | `cost_growth` (optional) | yearly growth above inflation per cost: `base`, `care`, `education`, `property_tax`, `insurance` (between −0.05 and 0.15). Omitted ones use the defaults in `rules.COST_GROWTH`; `base` defaults to 0 |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`); `tfsa_top_up` (default on): each January a retiree fills new TFSA room from non-registered money |
 | `education` (optional) | `kids[]` (`name`, `age`, `start_age` 18, `years` 4, `living` `home`/`away`, `cesg_received`), `costs` per student-year (`home` 11,000 / `away` 25,000 today's $, editable estimates), RESP `resp_balance` (default: the holdings' RESP), `contributed` / `grants` so far (default: estimated as if every year's grant was collected), `contribute` (each January while it still earns the grant), `aip_to_rrsp`, `student_grant` (apply for the Canada Student Grant), `childcare` (yearly child care already in spending, for the deduction). The kids also drive the Canada Child Benefit |
@@ -154,6 +158,13 @@ contributed before the year the child turns 15).
 
 ## The report
 
+The headline numbers (chance of success, legacy, lifespans) stay at the top. Everything
+else is in tabs: **Plan** (the action plan), **Options** (expert planning, saved
+scenarios), **Children's education** (when the plan has children), **Income
+projection**, **Net worth** (with the range of outcomes), **Cash flow** (the
+year-by-year statement) and **Details** (assumptions, the refund check, the rules). A link ending in a
+section's id, such as `#money-left`, opens its tab. Printing shows every tab.
+
 - **Action plan:** the plan as a dated to-do list. It lists everything the
   projection assumes you do, with years and amounts from the average future:
   - retiring and the TFSA top-ups;
@@ -182,8 +193,21 @@ contributed before the year the child turns 15).
   difference is that change's effect. Rows are ranked by change in success.
 - **Income projection:** each year's spending + tax, stacked by source. The
   Bad-luck button shows short years in red.
-- **Money left by age**, a **year-by-year table**, and **every rule** with its
-  official source.
+- **Every rule** with its official source.
+- **Cash flow:** one row per year of the average future. Sources (income and
+  withdrawals, plus any shortfall) add up to the uses (spending, tax, saved). The
+  investments then roll from one January 1 to the next row's: less the drawn
+  sources, plus what was saved and the year's growth, plus Other (an employer's
+  pension match, home-sale money, RESP leftovers, the CPP death benefit). No column
+  repeats another, so there is no separate uses total, drawn or next-January-1 column.
+- **Net worth:** a balance sheet for each January: every account, the home, and the
+  tax due if everything were cashed in that day (RRSP/RRIF and pension/LIF at the top
+  rate, plus the taxable part of investment gains). It's the same rule as the legacy,
+  so the Estate column is the Legacy tile. Drawing the money out slowly usually costs
+  less tax than this. A chart by age and a table at key moments (today, retirements,
+  65, 72, the first death, the estate).
+  Below them, **How wide the range is** shows investments by age across all the
+  simulated futures: the 1-in-10 bad to 1-in-10 good band, the typical line, the home.
 - **Child benefit:** the Canada Child Benefit for the children in `education.kids`
   under 18, on last year's net family income, as its own income bar. Set
   `education.childcare` (yearly child care already in your spending) to get the
@@ -235,10 +259,13 @@ limits keep pace with general inflation without further input. Inflation still
 reaches the plan in four ways.
 
 - **The rate.** General inflation is Canada's all-items CPI from Statistics Canada
-  table 18-10-0004-01, stored in `rules.CPI`: 2.42% a year on average over the
-  last 40 years (0.2% to 6.8% year by year).
-- **Shocks.** Each simulated future replays 5-year runs of that history, so a
-  1980s- or 2022-style stretch can happen. Investments don't keep up within the
+  table 18-10-0004-01, stored in `rules.CPI` from 1950: 2.42% a year on average
+  over the last 40 years (0.2% to 6.8% year by year), the planner's default rate.
+- **Shocks.** Each simulated future replays 5-year runs of 1950–2025, so a
+  1970s-, 1980s- or 2022-style stretch can happen. The runs are shifted so the
+  whole history averages the last 40 years' 2.42% (1950–2025 averaged 3.5%): they
+  keep their shape, so 1974–81 still reads as eight years of 6–11%, but the
+  average rate doesn't rise. Investments don't keep up within the
   year: a high-inflation year cuts that year's real return, a low one adds to it.
   Set `returns.inflation_shocks` to `false`, or `returns.inflation` to a number,
   for steady inflation. The what-ifs include "Steady inflation (no shocks)".

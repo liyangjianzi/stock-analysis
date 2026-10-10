@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import re
 from dataclasses import replace
 
 import numpy as np
@@ -29,6 +31,50 @@ def test_report_has_all_sections(built):
     for sid in report.SECTION_IDS:
         assert f'id="{sid}"' in html
     assert "Expert planning" in html and "Detailed income projection" in html
+
+
+def test_sections_sit_in_their_tabs(built):
+    html = _html(built)
+    present = [t for t in report.TABS if any(f'id="{s}"' in html for s in t[2])]
+    assert len(present) >= 5                                     # education is the optional one
+    starts = {tid: html.find(f'id="{tid}"') for tid, _, _ in present}
+    assert all(i > 0 for i in starts.values())
+    assert html.find('id="summary"') < min(starts.values())      # the headline stays above the tabs
+    for tid, label, sids in present:
+        assert f"showTab('{tid}')" in html and f">{label}</button>" in html
+        for sid in sids:
+            at = html.find(f'id="{sid}"')
+            if at < 0:                                         # optional section (saved, education)
+                continue
+            owner = max((t for t, i in starts.items() if i < at), key=starts.get)
+            assert owner == tid, sid
+    assert html.count("class='panel on'") == 1
+    assert "<details><summary>Year-by-year" not in html          # the tab is the fold now
+
+
+def test_net_worth_at_the_estate_is_the_legacy(built):
+    plan, result, _, _ = built
+    for proj in (result.average, result.bad_luck):
+        nw = report.net_worth(proj, plan)
+        end = int(proj.end_step[0])
+        assert nw["after_tax"][end] == pytest.approx(proj.legacy[0])
+        assert nw["total"][end] - nw["after_tax"][end] == pytest.approx(proj.death_tax[0])
+        assert np.isnan(nw["after_tax"][end + 1:]).all()          # nobody left: nothing to show
+
+
+def test_net_worth_without_registered_money_or_gains_is_the_total(built):
+    plan, result, _, _ = built
+    avg = result.average
+    zero = {k: (np.zeros_like(v) if k in ("rrsp", "pension") else v) for k, v in avg.balances.items()}
+    proj = replace(avg, balances=zero, unrealized_gains=np.zeros_like(avg.unrealized_gains))
+    nw = report.net_worth(proj, plan)
+    assert np.allclose(nw["after_tax"], nw["total"], equal_nan=True)
+
+
+def test_net_worth_tab_has_a_statement_from_today(built):
+    html = _html(built)
+    assert f'id="{report.NET_WORTH_ID}"' in html and "showTab('tab-net-worth')" in html
+    assert "Net worth after tax" in html and ">Today<" in html
 
 
 def test_income_chart_has_average_and_bad_luck_buttons(built):
@@ -113,6 +159,7 @@ def test_education_section_only_when_the_plan_has_children():
         baseline, ranked = scenarios.rank(plan, paths=20, seed=1)
         html = report.build_report(result, baseline, ranked, generated_at="now")
         assert (f'id="{report.EDUCATION_ID}"' in html) is present
+        assert ("showTab('tab-education')" in html) is present     # no empty tab
         assert ("Canada Student Grants" in html) is present
 
 
@@ -127,10 +174,40 @@ def test_year_table_hides_all_zero_columns_and_keeps_exact_values(built):
     avg = result.average
     table = report._year_table(avg)
     assert table.count("<tbody><tr") == 1 and table.count("</tr>") == len(avg.years) + 2
-    assert ("⚠ Shortfall" in table) == bool((avg.income["shortfall"][:, 0].round() != 0).any())
+    assert (">⚠ Short</th>" in table) == bool((avg.income["shortfall"][:, 0].round() != 0).any())
     assert f"title='{report._money(avg.investments[0, 0])}'" in table
-    for always in ("Spending", "Tax", "Total invested"):
+    for always in ("Spend", "Tax", "Saved", "Jan 1", "Growth"):
         assert f">{always}</th>" in table
+    assert table.count(">Total</th>") == 1                        # the uses' total would repeat it
+    assert "title='January 1'>Jan 1</th>" in table                # the full name on hover
+    for repeat in ("Drawn", "Next January 1"):                    # read off the sources / next row
+        assert f">{repeat}</th>" not in table
+
+
+def test_cash_flow_balances_every_year(built):
+    _, result, _, _ = built
+    for proj in (result.average, result.bad_luck):
+        cf = report.cash_flow(proj)
+        np.testing.assert_allclose(cf["total_sources"], cf["total_uses"], atol=2.0)
+        roll = cf["jan1"] - cf["drawn"] + cf["saved"] + cf["growth"] + cf["added"]
+        np.testing.assert_allclose(roll, cf["next"], atol=0.01)
+        np.testing.assert_allclose(cf["next"][:-1], cf["jan1"][1:])
+
+
+def test_growth_is_the_return_and_other_is_only_real_inflows():
+    import copy
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["home"]["downsize_age"] = None
+    plain = engine.run(inputs.parse(d), paths=20, seed=1).average
+    cf = report.cash_flow(plain)
+    flows = cf["added"][cf["added"] != 0]                         # nothing else hides in growth:
+    np.testing.assert_allclose(flows, rules.CPP["death_benefit"].value)   # only the death benefit
+    assert (cf["growth"] > 0).any()
+    moving = engine.run(inputs.parse(inputs.TEMPLATE), paths=20, seed=1).average
+    t = moving.downsize_step                                      # the sale lands that January 1
+    assert report.cash_flow(moving)["added"][t - 1] > 100_000
+    for c in (cf, report.cash_flow(moving)):                      # the source is the events, not the roll
+        np.testing.assert_array_equal(c["other"], 0.0)
 
 
 def test_headline_says_as_long_as_either_of_you_lives(built):
@@ -209,7 +286,7 @@ def test_report_says_whether_rrsp_room_is_checked(built):
 def test_child_benefit_shows_in_the_year_table_when_paid(built):
     _, result, *_ = built
     avg = result.average
-    assert ("Child benefit" in report._year_table(avg)) == bool((avg.income["ccb"][:, 0] > 0.5).any())
+    assert (">CCB</th>" in report._year_table(avg)) == bool((avg.income["ccb"][:, 0] > 0.5).any())
 
 
 def test_median_age_at_death_rounds_a_half_up_like_the_engine(built):
@@ -275,16 +352,43 @@ def test_report_has_both_dollar_views_and_a_switch(built):
     assert "Future dollars" in html and "Today's dollars" in html
 
 
-def test_charts_scale_into_future_dollars(built):
+def test_charts_rescale_in_place_rather_than_twice(built):
     _, result, _, _ = built
-    avg, bad = result.average, result.bad_luck
-    scale = report.future_scale(result.inputs, len(avg.years))
-    today = report.income_chart(avg, bad)
-    future = report.income_chart(avg, bad, scale)
-    bar = next(i for i, tr in enumerate(today.data) if tr.type == "bar")
-    assert future.data[bar].y[-1] == pytest.approx(today.data[bar].y[-1] * scale[-1])
+    html = _html(built)
+    assert html.count("class='dollars-chart'") == 3          # income, money left, net worth: once each
+    assert html.count("Plotly.newPlot") == 4                  # those three and the gauge
+    scale = report.future_scale(result.inputs, len(result.average.years) + 1)
+    assert f"const SCALE={json.dumps(np.round(scale, 6).tolist())}" in html
 
 
 def test_assumptions_name_the_inflation_and_cost_growth(built):
     html = _html(built)
     assert "Costs rising faster than inflation" in html and "Canada&#x27;s CPI" in html
+
+
+def test_dark_theme_swaps_every_chart_colour_both_ways(built):
+    light, dark = set(report.CHART_DARK), set(report.CHART_DARK.values())
+    assert len(dark) == len(light) and not light & dark      # theme.js inverts the map
+    html = _html(built)
+    assert "window.theme" in html and "[data-theme=dark]" in html
+
+
+def _colours(obj):
+    if isinstance(obj, str):
+        if re.fullmatch(r"#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)", obj):
+            yield obj.lower()
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _colours(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _colours(v)
+
+
+def test_every_figure_colour_has_a_dark_twin(built):
+    plan, result, *_ = built
+    figs = (report.success_meter(0.9, 0.8), report.income_chart(result.average, result.bad_luck),
+            report.money_left_chart(result.simulated, plan),
+            report.net_worth_chart(result.average, result.bad_luck, plan))
+    for fig in figs:                     # the template replaces Plotly's own (unmapped) defaults
+        assert set(_colours(fig.to_plotly_json())) <= set(report.CHART_DARK)

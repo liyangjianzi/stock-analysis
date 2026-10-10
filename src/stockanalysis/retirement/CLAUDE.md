@@ -27,9 +27,9 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 | `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
 | `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers), `rrsp_drawdown` (every `steady_income` target in `DRAWDOWN_TARGETS` + the plan as it stands → `DrawdownTable`; `best("legacy" | "tax" | "success")`, ties keep the lower target) and `best_benefit_ages` (per-person CPP x OAS grid on the expected legacy over `LIFESPAN_DRAWS` lifespans, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
 | `actions.py` | The plan as a to-do list: `plan_actions(result)` reads dated `Action`s from what the average future recorded: `tfsa_top_up`, `income["registered"]`, `lif_steps`, `split_share`, `downsize_step`, the balances, and the RESP schedule. It never re-derives an engine decision from the inputs. `_runs` splits a yearly amount into phases (more than 40% and C$2,000 apart). `missing_inputs(plan)` lists the inputs still estimated. When the engine gains a behaviour the household must act on, record it on `Projection` and read it here |
-| `report.py` | `build_report` (pure; self-contained HTML string), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
+| `report.py` | `build_report` (pure; self-contained HTML string: the summary on top, the other sections grouped into tab panels by `TABS`, which keep their section ids), `net_worth` (the yearly balance sheet: the estate tax rule applied to each January, from `Projection.unrealized_gains`; at `end_step` it equals `legacy`, pinned by a test), `cash_flow` (the Cash flow tab: sources = uses, and January 1 − drawn + saved + `Projection.growth` + `added` = next January 1 (the "Other" column; key `added`, since `other` is the one-time-money source); `added` is `Projection.added`, which the engine records where the money lands — the pension match and any contribution the cash flow didn't pay, and January 1 inflows: home sale, RESP leftovers, CPP death benefit — so the roll is pinned exactly by a test, not backed out by subtraction), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
 | `cli.py` | `stock-analysis retire`. `generate(plan, source, ...)` is **the one report path** (run → rank → build → save → summary); the CLI and the GUI both call it. `_with_balances(plan, path, load=_load_book)` is the one balance-precedence rule; the GUI passes a caching `load` |
-| `gui.py` + `static/planner.html` | `--gui`: stdlib `http.server` plan editor, tabs People / Spending (events, guardrails) / Education / Home / Investing / Optimize / Compare / Advanced (see below) |
+| `gui.py` + `static/planner.html` | `--gui`: stdlib `http.server` plan editor, tabs People / Spending (events, guardrails) / Education / Home / Investing / Inflation / Optimize / Compare / Advanced (see below) |
 
 ## Conventions that are easy to get wrong
 
@@ -200,8 +200,11 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 
 - **Inflation** (`returns.inflation`, default `rules.historical_inflation()`, the
   40-year CPI average from `rules.CPI`). The model stays real.
-  - `draw_inflation` gives each future 5-year blocks of `rules.CPI`, wrapping from
-    2025 to 1986 so every year weighs the same and the lag has no drift (own RNG stream
+  - `draw_inflation` gives each future 5-year blocks of `rules.CPI` (from 1950, so
+    1970s runs are drawn), wrapping from 2025 to 1950 so every year weighs the same.
+    Each year is shifted by `(1+avg₄₀)/(1+avg_all)` so the history averages
+    `inflation_rate` (the last 40 years) and the lag has no drift; don't drop the
+    shift or extend `CPI` without it, or every future loses real return (own RNG stream
     `[seed, INFLATION_STREAM]`, so return and lifespan draws don't change);
     `returns.inflation_shocks=False` or a fixed `returns.inflation` gives a steady
     rate. `lag_returns` turns the drawn returns into lagged real returns;
@@ -269,8 +272,15 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   edit made meanwhile is picked up when it returns.
 - **The page:** vanilla JS with no build step. Plotly comes from
   `plotly.offline.get_plotlyjs()` at `/plotly.js`, so the page works offline.
-  Colours copy `report.py`'s constants. Percent fields store fractions; a slider
-  scales value, min, max and step by 100 together.
+  Colours come from `report.THEME_CSS`, served at `/theme.css`; `/theme.js`
+  (`report.THEME_JS`) is the Auto/Dark/Light switch the report embeds too. Plotly
+  can't read CSS variables, so draw a figure through `theme.draw(gd, data, layout)`,
+  which swaps colours by `report.CHART_DARK`. Every figure takes
+  `report.CHART_TEMPLATE`, so no Plotly default colour escapes the map (a test checks
+  each figure); a new chart colour belongs in both. The report's dollars switch
+  rescales its one copy of each chart in place (`_SET_DOLLARS`).
+  Percent fields store fractions; a slider scales value, min, max and step by
+  100 together.
 - **Packaging:** `static/*.html` is listed under `[tool.setuptools.package-data]`
   in `pyproject.toml`.
 

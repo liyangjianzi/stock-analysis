@@ -14,6 +14,7 @@ A stdlib ``http.server`` on 127.0.0.1 serves one self-contained page
 - ``POST /api/optimize/benefits``       best CPP / OAS start ages (~20 s)
 - ``POST /api/optimize/drawdown``       every yearly RRSP-draw target, best per goal (~15 s)
 - ``POST /api/compare``                 the plan and its saved scenarios, same futures
+- ``GET  /theme.css``, ``/theme.js``  the report's light/dark palette and theme switch
 - ``GET  /reports/<path>``       files under the output root (browsers won't follow
                                  ``file://`` links from an http page)
 
@@ -43,6 +44,8 @@ from .. import config
 from . import cli, engine, inputs, optimize, report, scenarios
 
 PREVIEW_PATHS = 1_000
+THEME_FILES = {"/theme.css": (report.THEME_CSS.encode("utf-8"), "text/css; charset=utf-8"),
+               "/theme.js": (report.THEME_JS.encode("utf-8"), "application/javascript; charset=utf-8")}
 HOST = "127.0.0.1"
 
 
@@ -66,8 +69,8 @@ def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
         "short_years_bad": int(bad.shortfall_years[0]),
         "first_short_age_bad": plan.people[0].age + first if first < len(bad.years) else None,
         "median_return": result.average_return,
-        "gauge": json.loads(report.success_meter(sim.success, previous,
-                                                 title=report.lasts_label(plan)).to_json()),
+        "gauge": json.loads(report.success_meter(sim.success, previous).to_json()),
+        "gauge_title": report.lasts_label(plan),
         "chart": json.loads(chart.to_json()),
         "chart_future": json.loads(report.money_left_chart(sim, plan, scale).to_json()),
         "future_factor": scale[:n].tolist(),
@@ -267,6 +270,9 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/plotly.js":
                 return self._send(HTTPStatus.OK, self.server.plotly_js(), "application/javascript",
                                   cache="max-age=86400")     # ~4.6 MB, fixed per install
+            if path in THEME_FILES:                    # the report's palette and theme switch
+                body, ctype = THEME_FILES[path]
+                return self._send(HTTPStatus.OK, body, ctype)
             if path == "/api/plan":
                 return self._json(self.app.plan_state())
             if path == "/api/report/status":

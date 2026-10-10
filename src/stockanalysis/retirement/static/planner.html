@@ -5,11 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Retirement planner</title>
 <script src="/plotly.js"></script>
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/theme.css">
 <style>
-/* Colours and font copy retirement/report.py, so the planner and the report read as one product. */
-:root{--surface:#fcfcfb;--page:#f9f9f7;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;
-  --axis:#c3c2b7;--blue:#2a78d6;--track:#cde2fb;--good:#006300;--bad:#d03b3b;--amber:#eda100;
-  --font:system-ui,-apple-system,"Segoe UI",sans-serif}
+/* Colours and font come from /theme.css (report.py), so the planner and the report read as one product. */
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--ink);font-family:var(--font);font-size:14px}
 header{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--grid);
@@ -19,7 +18,7 @@ header .meta{color:var(--ink2);font-size:.8rem;flex:1;min-width:260px}
 header .meta a{color:var(--blue);cursor:pointer}
 .dirty{display:none;color:var(--amber);font-weight:600;font-size:.85rem}
 .dirty.on{display:inline}
-button{font:inherit;border:1px solid var(--axis);background:#fff;border-radius:8px;padding:7px 14px;cursor:pointer}
+button{font:inherit;border:1px solid var(--axis);background:var(--field);color:var(--ink);border-radius:8px;padding:7px 14px;cursor:pointer}
 button.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
 button:disabled{opacity:.5;cursor:default}
 #report-status{font-size:.85rem;color:var(--ink2)}
@@ -35,7 +34,7 @@ nav.tabs button{border:none;background:none;border-bottom:3px solid transparent;
   padding:8px 12px;color:var(--ink2)}
 nav.tabs button.on{border-bottom-color:var(--blue);color:var(--ink);font-weight:600}
 .panel{display:none}.panel.on{display:block}
-.card{background:var(--surface);border:1px solid rgba(11,11,11,.10);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
 .card h3{margin:0 0 10px;font-size:1rem;display:flex;align-items:center;gap:8px}
 .card h4{margin:14px 0 6px;font-size:.85rem;color:var(--ink2);text-transform:uppercase;letter-spacing:.04em}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px 18px}
@@ -46,9 +45,10 @@ nav.tabs button.on{border-bottom-color:var(--blue);color:var(--ink);font-weight:
 .field .row{display:flex;gap:8px;align-items:center}
 input[type=range]{flex:1;accent-color:var(--blue)}
 input[type=number],input[type=text]{font:inherit;width:100%;padding:5px 8px;border:1px solid var(--axis);
-  border-radius:6px;background:#fff;font-variant-numeric:tabular-nums}
+  border-radius:6px;background:var(--field);color:var(--ink);font-variant-numeric:tabular-nums}
 .row input[type=number]{width:110px;flex:none}
-.field.invalid input{border-color:var(--bad);background:#fff3f3}
+select{font:inherit;padding:4px 6px;border:1px solid var(--axis);border-radius:6px;background:var(--field);color:var(--ink)}
+.field.invalid input{border-color:var(--bad);background:var(--bad-bg)}
 .field.invalid label{color:var(--bad)}
 .check{display:flex;gap:8px;align-items:center;padding:6px 0;color:var(--ink2)}
 .radio{display:block;padding:4px 0}
@@ -64,13 +64,13 @@ table.ages td.best{font-weight:700;color:var(--good)}
 .x{border:none;background:none;color:var(--muted);font-size:1.1rem;padding:2px 6px}
 aside{position:sticky;top:70px;align-self:start}
 .tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0} .tiles .tile:nth-child(5){grid-column:1/-1}
-.tile{background:var(--surface);border:1px solid rgba(11,11,11,.10);border-radius:10px;padding:10px 12px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .tile .label{color:var(--ink2);font-size:.8rem}.tile .value{font-size:1.35rem;font-weight:600;font-variant-numeric:tabular-nums}
 .tile .sub{font-size:.78rem;color:var(--muted)}
 .up{color:var(--good)}.down{color:var(--bad)}
-#gauge{height:240px}#chart{height:420px}
+#gauge{height:200px}.meter-title{text-align:center;color:var(--ink2);font-size:.9rem}#chart{height:420px}
 .note{color:var(--muted);font-size:.78rem}
-#error{display:none;background:#fff3f3;border:1px solid var(--bad);color:var(--bad);border-radius:8px;padding:8px 12px;margin-bottom:10px}
+#error{display:none;background:var(--bad-bg);border:1px solid var(--bad);color:var(--bad);border-radius:8px;padding:8px 12px;margin-bottom:10px}
 #results.stale{opacity:.45}
 </style>
 </head>
@@ -94,7 +94,7 @@ aside{position:sticky;top:70px;align-self:start}
     <div id="error"></div>
     <div id="results">
       <div id="dollars-switch" class="answer"><label class="check"><input type="checkbox" id="future-dollars"> Show future dollars</label></div>
-      <div class="card" style="padding:4px"><div id="gauge"></div></div>
+      <div class="card" style="padding:10px 4px 4px"><div class="meter-title" id="gauge-title"></div><div id="gauge"></div></div>
       <div class="tiles" id="tiles"></div>
       <div class="card" style="padding:4px"><div id="chart"></div></div>
       <p class="note" id="note"></p>
@@ -104,7 +104,8 @@ aside{position:sticky;top:70px;align-self:start}
 <script>
 "use strict";
 const TABS = [["people", "People"], ["spending", "Spending"], ["education", "Education"], ["home", "Home"],
-              ["investing", "Investing"], ["optimize", "Optimize"], ["compare", "Compare"], ["advanced", "Advanced"]];
+              ["investing", "Investing"], ["inflation", "Inflation"],
+              ["optimize", "Optimize"], ["compare", "Compare"], ["advanced", "Advanced"]];
 const ACCOUNTS = [["pension", "Pension / LIRA"], ["rrsp", "RRSP"], ["tfsa", "TFSA"], ["nonreg", "Non-registered"]];
 let original = null, draft = null, saved = null, strategies = {}, limits = {}, reportPaths = null, lastPreview = null;
 let eduDefaults = {}, kidDefaults = {}, drawDefaults = {}, costDefaults = {}, retDefaults = {};   // from the server: inputs.defaults()
@@ -344,20 +345,8 @@ function investingPanel() {
   return `<div class="card"><h3>Returns after inflation</h3>
       ${slider("returns.mean", "Average yearly return", {min: 0, max: 0.10, step: 0.0025, unit: "%", digits: 2})}
       ${slider("returns.sd", "Ups and downs (volatility)", {min: 0, max: 0.30, step: 0.01, unit: "%"})}
-      ${number("returns.inflation", "Inflation (% a year)", {min: -0.05, max: 0.2, step: 0.001, unit: "%",
-               nullable: true, placeholder: "Canada's last 40 years",
-               help: "Spending and benefits keep pace; it raises the tax on non-registered gains."})}
-      ${check("returns.inflation_shocks", "Inflation shocks: each future replays runs of past inflation, and returns lag it", retDefaults.inflation_shocks)}
       <p class="note">Volatility pulls the typical return below the average · typical (median) return
         <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>
-    </div>
-    <div class="card"><h3>Costs rising faster than inflation (% a year above CPI)</h3><div class="grid2">
-      ${[["base", "Base spending"], ["care", "Care"], ["education", "Education"],
-         ["property_tax", "Property tax"], ["insurance", "Home insurance"]].map(([k, l]) =>
-        number(`cost_growth.${k}`, l, {min: -0.05, max: 0.15, step: 0.001, unit: "%", nullable: true,
-               placeholder: pct(costDefaults[k], 2)})).join("")}
-    </div><p class="note">Blank uses the default shown (Statistics Canada / City of Calgary data).
-      A negative rate means the cost lags inflation.</p>
     </div>
     <div class="card"><h3>Non-registered payouts</h3><div class="grid2">
       ${number("nonreg_income.eligible_dividends", "Canadian dividends (% a year)", {min: 0, max: 0.2, step: 0.001, unit: "%", optional: true, placeholder: "0"})}
@@ -373,6 +362,22 @@ function investingPanel() {
       ${check("withdrawal.tfsa_top_up", "Each January after retiring, move non-registered money into new TFSA room", drawDefaults.tfsa_top_up)}
       <p class="note">Moving shares into a TFSA counts as selling them, so any gain is taxed that year;
         after that, their growth and payouts are tax-free.</p>
+    </div>`;
+}
+function inflationPanel() {
+  return `<div class="card"><h3>General inflation</h3>
+      ${number("returns.inflation", "Inflation (% a year)", {min: -0.05, max: 0.2, step: 0.001, unit: "%",
+               nullable: true, placeholder: "Canada's last 40 years",
+               help: "Spending and benefits keep pace; it raises the tax on non-registered gains."})}
+      ${check("returns.inflation_shocks", "Inflation shocks: each future replays runs of past inflation, and returns lag it", retDefaults.inflation_shocks)}
+    </div>
+    <div class="card"><h3>Costs rising faster than inflation (% a year above CPI)</h3><div class="grid2">
+      ${[["base", "Base spending"], ["care", "Care"], ["education", "Education"],
+         ["property_tax", "Property tax"], ["insurance", "Home insurance"]].map(([k, l]) =>
+        number(`cost_growth.${k}`, l, {min: -0.05, max: 0.15, step: 0.001, unit: "%", nullable: true,
+               placeholder: pct(costDefaults[k], 2)})).join("")}
+    </div><p class="note">Blank uses the default shown (Statistics Canada / City of Calgary data).
+      A negative rate means the cost lags inflation.</p>
     </div>`;
 }
 function advancedPanel() {
@@ -549,7 +554,8 @@ function comparePanel() {
       <p class="note">All on the same ${(lastPreview || saved || {paths: 1000}).paths.toLocaleString()} futures.</p></div>`;
 }
 const PANELS = {people: peoplePanel, spending: spendingPanel, education: educationPanel, home: homePanel,
-                investing: investingPanel, optimize: optimizePanel, compare: comparePanel, advanced: advancedPanel};
+                investing: investingPanel,
+                inflation: inflationPanel, optimize: optimizePanel, compare: comparePanel, advanced: advancedPanel};
 
 function render() {
   $("tabs").innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === activeTab ? "on" : ""}">${l}</button>`).join("");
@@ -746,10 +752,10 @@ function showResults(r) {
   ];
   $("tiles").innerHTML = tiles.map(([a, b, c]) => `<div class="tile"><div class="label">${esc(a)}</div>
     <div class="value">${b}</div><div class="sub">${esc(c)}</div></div>`).join("");
-  const cfg = {displaylogo: false, responsive: true};
-  Plotly.react("gauge", r.gauge.data, r.gauge.layout, cfg);
+  $("gauge-title").textContent = r.gauge_title;
+  theme.draw($("gauge"), r.gauge.data, r.gauge.layout);
   const chart = future ? r.chart_future : r.chart;     // the server scales it (Plotly packs the numbers)
-  Plotly.react("chart", chart.data, Object.assign(chart.layout, {height: 420}), cfg);
+  theme.draw($("chart"), chart.data, Object.assign(chart.layout, {height: 420}));
   $("note").textContent = `Quick estimate over ${r.paths.toLocaleString()} futures, compared with the saved plan on the same futures. ` +
     `The report uses ${(reportPaths || r.paths).toLocaleString()} and adds the what-if suggestions.`;
   if ($("median")) $("median").textContent = pct(r.median_return, 2);

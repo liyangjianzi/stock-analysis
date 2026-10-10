@@ -969,7 +969,8 @@ def test_default_inflation_is_canadas_40_year_average():
     assert Returns().inflation is None
     assert Returns().inflation_rate == pytest.approx(rules.historical_inflation())
     assert 0.02 < rules.historical_inflation() < 0.03
-    assert len(rules.CPI.value) == 40
+    assert min(rules.CPI.value) == 1950 and max(rules.CPI.value) == rules.CPI.year
+    assert rules.historical_inflation() == pytest.approx(0.0242, abs=5e-5)   # still the last 40 years
 
 
 # -- inflation paths and the return lag ----------------------------------------------------
@@ -979,15 +980,29 @@ def _shocky(**ret):
     return replace(p, returns=replace(p.returns, **{"inflation": None, "inflation_shocks": True, **ret}))
 
 
+def _centered_history():
+    hist = np.array([rules.CPI.value[y] for y in sorted(rules.CPI.value)])
+    whole = rules.historical_inflation(len(hist))
+    return list((1 + hist) * (1 + rules.historical_inflation()) / (1 + whole) - 1)
+
+
 def test_inflation_paths_are_5_year_blocks_of_history():
-    hist = [rules.CPI.value[y] for y in sorted(rules.CPI.value)]
+    hist = _centered_history()
     I = engine.draw_inflation(_shocky(), paths=50, years=12, seed=3)
     assert I.shape == (12, 50)
     for n in range(50):
         for start in (0, 5):                      # each full block is a run of history (wrapping)
             block = list(I[start:start + 5, n])
-            assert any((hist + hist)[k:k + 5] == block for k in range(len(hist)))
+            assert any(np.allclose((hist + hist)[k:k + 5], block, rtol=0, atol=1e-12)
+                       for k in range(len(hist)))
     assert np.array_equal(I, engine.draw_inflation(_shocky(), 50, 12, 3))   # seeded
+
+
+def test_inflation_paths_reach_the_1970s_but_centre_on_the_last_40_years():
+    I = engine.draw_inflation(_shocky(), paths=2_000, years=40, seed=4)
+    assert I.max() > 0.10                 # 1981's 12.5%, centred: about 11.3%
+    assert (I > 0.08).sum(axis=0).max() >= 5   # a run of high-inflation years in one future
+    assert np.exp(np.log1p(I).mean()) - 1 == pytest.approx(rules.historical_inflation(), abs=1e-3)
 
 
 def test_paths_cover_horizons_longer_than_the_history():

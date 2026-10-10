@@ -74,14 +74,17 @@ INFLATION_STREAM = 1     # its own random stream: return and lifespan draws don'
 
 def draw_inflation(plan: PlanInputs, paths: int, years: int, seed: int) -> np.ndarray:
     """(years, paths) yearly inflation. Shocks on and no fixed rate: consecutive
-    INFLATION_BLOCK-year runs of rules.CPI from a random start year, wrapping from the
-    last year to the first, so every year is drawn equally often and the paths average
-    the CPI history (the lag in lag_returns then has no drift). Otherwise a steady
-    rate (returns.inflation, else the CPI average)."""
+    INFLATION_BLOCK-year runs of rules.CPI (since 1950, so 1970s runs are drawn) from
+    a random start year, wrapping from the last year to the first, so every year is
+    drawn equally often. Each year is then shifted so the whole history averages the
+    default rate (the last 40 years): runs keep their shape, the paths average
+    returns.inflation_rate, and the lag in lag_returns has no drift. Otherwise a
+    steady rate (returns.inflation, else the CPI average)."""
     r = plan.returns
     if not r.inflation_shocks or r.inflation is not None:
         return np.full((years, paths), r.inflation_rate)
     hist = np.array([rules.CPI.value[y] for y in sorted(rules.CPI.value)])
+    hist = (1 + hist) * (1 + r.inflation_rate) / (1 + rules.historical_inflation(len(hist))) - 1
     blocks = -(-years // INFLATION_BLOCK)
     rng = np.random.default_rng([seed, INFLATION_STREAM])
     starts = rng.integers(0, len(hist), size=(paths, blocks))
@@ -212,6 +215,12 @@ class Projection:
     spousal_rrsp: np.ndarray | None = None      # (T, P, N) spousal RRSP contributions, by contributor
     lif_steps: tuple = ()                       # per person: step the LIF started (-1 before the plan, None never)
     downsize_step: int | None = None            # step the home was sold, None if never
+    unrealized_gains: np.ndarray | None = None  # (T+1, N) non-reg gains not yet taxed, January 1
+    growth: np.ndarray | None = None            # (T, N) the year's investment return in dollars
+    # (T, N) what reaches the investments without passing through cash: the employer's
+    # pension match (contributions the cash flow didn't pay), and on the next January 1
+    # home-sale money, RESP leftovers and the CPP death benefit
+    added: np.ndarray | None = None
 
     @property
     def paths(self) -> int:
@@ -531,6 +540,13 @@ def payroll(people, ages, working, contrib, childcare=None) -> dict:
     return out
 
 
+def estate_tax(prov: str, registered, gains) -> tuple:
+    """(tax on registered money, tax on gains) if everything were cashed in at death:
+    the top marginal rate on RRSP/RRIF + pension/LIF, and on the taxable part of the gains."""
+    top = rules.top_marginal_rate(prov)
+    return top * registered, top * rules.CAPITAL_GAINS_INCLUSION.value * gains
+
+
 def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = None,
              inflation: np.ndarray | None = None) -> Projection:
     """Project ``plan`` over ``returns``: (T, N) real yearly returns. ``deaths`` is a
@@ -578,6 +594,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
     split_rec = np.zeros((T, N))                  # pension-income split share (A->B if positive)
     invest = np.zeros((T + 1, N))
     gains_rec = np.zeros((T + 1, N))            # unrealized non-reg gains each January 1
+    growth_rec = np.zeros((T, N))               # each year's investment return, in dollars
+    added_rec = np.zeros((T, N))                # see Projection.added
     alive_rec = np.zeros((T, P, N), dtype=bool)
     balances = {k: np.zeros((T + 1, N)) for k in ACCOUNTS}
     home_value = np.zeros(T + 1)
@@ -660,6 +678,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                 if cpp_at_65(people[i]) > 0:
                     paid = np.where(first[i], death_benefit, 0.0)
                     bal["nonreg"][j] += paid
+                    if t:
+                        added_rec[t - 1] += paid
                     cost[j] += paid
         rrsp_jan1 = bal["rrsp"].copy()   # before any LIF unlock: that money wasn't here on Jan 1
         for i, p in enumerate(people):
@@ -671,6 +691,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         if home is not None and home.downsize_age is not None and ages[0] == home.downsize_age:
             split = np.where(household, alive / np.maximum(alive.sum(axis=0), 1), 1.0 / P)
             bal["nonreg"] += home.released * split
+            if t:
+                added_rec[t - 1] += (home.released * split).sum(axis=0)
             cost += home.released * split
             downsized, downsize_step = True, t
         if home is not None:
@@ -709,6 +731,8 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
                     bal["rrsp"][i] += aip_share[i] * to_rrsp
                     rrsp_room[i] -= aip_share[i] * to_rrsp
                     bal["nonreg"][i] += aip_share[i] * (back + taxable - resp_tax)
+                    if t:
+                        added_rec[t - 1] += aip_share[i] * (to_rrsp + back + taxable - resp_tax)
                     cost[i] += aip_share[i] * (back + taxable - resp_tax)
             resp_rec[t] = resp_bal
             edu_out[t] = school.contribution[t] + uncovered
@@ -941,6 +965,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         r = returns[t]
         started = np.array([s is not None for s in lif_step])[:, None]
         lif_gain = np.where(started, bal["pension"] * r, 0.0)
+        growth_rec[t] = sum(bal[k].sum(axis=0) for k in ACCOUNTS) * r
         for k in ACCOUNTS:
             bal[k] *= 1 + r
         spousal *= 1 + r
@@ -951,9 +976,12 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
             resp_bal *= 1 + r
             resp_in /= 1 + infl[t]               # contributions come back at face value
             resp_grant /= 1 + infl[t]
+        added_rec[t] -= funded + benefit                         # what the cash flow paid for
         for i in range(P):
             if not working[i].any():
                 continue
+            added_rec[t] += (contrib["pension"][i] + contrib["rrsp"][i] + contrib["spousal_rrsp"][i]
+                             + contrib["tfsa"][i] + contrib["nonreg"][i] + espp_shares[i])
             bal["pension"][i] += contrib["pension"][i]           # the employer's match included
             bal["rrsp"][i] += contrib["rrsp"][i]
             if P == 2:                                           # a spousal RRSP for the partner
@@ -984,12 +1012,14 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         home_value[T] = home.new_value if downsized else home.value
     # The estate: the January 1 after the last death, in each future.
     cols = np.arange(N)
-    top = rules.top_marginal_rate(prov)
     registered = balances["rrsp"][end_step, cols] + balances["pension"][end_step, cols]
-    death_tax = top * registered + top * rules.CAPITAL_GAINS_INCLUSION.value * gains_rec[end_step, cols]
+    death_tax = sum(estate_tax(prov, registered, gains_rec[end_step, cols]))
     final = invest[end_step, cols].copy()
     later = np.arange(T + 1)[:, None] > end_step[None, :]       # nobody left: no estate to track
     invest[later] = np.nan
+    gains_rec[later] = np.nan
+    growth_rec[later[:T]] = np.nan
+    added_rec[later[:T]] = np.nan
     for k in ACCOUNTS:
         balances[k][later] = np.nan
     return Projection(
@@ -1003,6 +1033,7 @@ def simulate(plan: PlanInputs, returns: np.ndarray, deaths: np.ndarray | None = 
         death_ages=deaths, alive=alive_rec, end_step=end_step, final_investments=final,
         premiums=premium_rec, spend_adjust=adjust_rec, tfsa_top_up=topup_rec,
         split_share=split_rec, lif_steps=tuple(lif_step), downsize_step=downsize_step,
+        unrealized_gains=gains_rec, growth=growth_rec, added=added_rec,
         spousal_rrsp=spousal_rec, inflation=infl, price_level=prices)
 
 

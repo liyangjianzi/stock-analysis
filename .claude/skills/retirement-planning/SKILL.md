@@ -57,7 +57,7 @@ stock-analysis retire --gui --port 9000 --no-browser
 ```
 
 A local page (only reachable from this machine) with tabs for People, Spending
-(money events, guardrails), Education, Home, Investing, Optimize, Compare (saved
+(money events, guardrails), Education, Home, Investing, Inflation, Optimize, Compare (saved
 scenarios side by side) and Advanced (pension match, ESPP, RRSP room). Every edit re-runs a quick 1,000-future estimate:
 the report's gauge and money-left chart, plus tiles that show the change against
 the *saved* plan on the same futures. An invalid value is named and highlighted
