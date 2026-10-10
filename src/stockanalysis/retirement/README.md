@@ -271,7 +271,8 @@ out, result = cli.generate(plan, "plan.json balances")        # writes report + 
   and `bonds` by what you pay.
 - **The old model.** `model: "lognormal"` uses `mean` and `sd` (a bell curve of
   returns, unrelated to inflation). The what-ifs include "Smooth returns (old
-  model)", which shows how much the model changes the answer, and "10 points more
+  model, same average and swings)", the old model given your mix's own average and
+  yearly swings, which shows how much the model alone changes the answer, and "10 points more
   bonds".
 
 ## Inflation

@@ -805,12 +805,17 @@ def _returns_fact(plan, result) -> str:
     if r.model == "lognormal":
         return (f"{r.mean:.1%} average, {r.sd:.0%} yearly swings; typical "
                 f"{result.average_return:.2%} a year after inflation")
-    source = (f"FP Canada {rules.RETURN_ASSUMPTIONS.year} guidelines, before fees"
-              if r.stocks is None and r.bonds is None else "your figures")
-    return (f"{mix_label(r.mix)}, rebalanced each January; stocks {r.stock_return:.2%} and bonds "
-            f"{r.bond_return:.2%} a year after inflation ({source}); each future strings together "
-            f"5-year runs of 1928–2025 US stock and bond returns shifted to those averages; typical "
-            f"{result.average_return:.2%} a year")
+    src = lambda own: "your figure" if own is not None else (   # noqa: E731
+        f"FP Canada {rules.RETURN_ASSUMPTIONS.year}, before fees")
+    return (f"{mix_label(r.mix)}, rebalanced each January; stocks {r.stock_return:.2%} ({src(r.stocks)}) "
+            f"and bonds {r.bond_return:.2%} ({src(r.bonds)}) a year after inflation; each future strings "
+            f"together 5-year runs of {_history_years()} US stock and bond returns shifted to those "
+            f"averages; typical {result.average_return:.2%} a year")
+
+
+def _history_years() -> str:
+    """The years the draws come from, e.g. '1928–2025' (moves with the yearly data refresh)."""
+    return f"{engine.HISTORY_FROM}–{rules.CPI.year}"
 
 
 def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=None) -> str:
@@ -832,10 +837,10 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
         ("Returns", _returns_fact(plan, result)),
         ("Inflation", f"{r.inflation_rate:.2%} a year on average"
                       + (" (Canada's CPI, last 40 years)" if r.inflation is None else "")
-                      + (("; each future replays the same 5-year runs of 1928–2025 as the returns, "
+                      + ((f"; each future replays the same 5-year runs of {_history_years()} as the returns, "
                           "centred on that average, so high inflation comes with the returns it brought"
                           if r.model == "history" else
-                          "; each future replays 5-year runs of inflation since 1928 (centred on that "
+                          f"; each future replays 5-year runs of inflation since {engine.HISTORY_FROM} (centred on that "
                           "average) and returns lag it in high-inflation years")
                          if r.inflation_shocks and r.inflation is None else "; steady")
                       + "; spending, benefits and tax brackets keep pace, but the book value of "
@@ -895,8 +900,8 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
         r.model == "history" and result.bad_luck_returns is not None) else None
     if worst is not None:
         facts.insert(next(i for i, f in enumerate(facts) if f[0] == "Inflation") + 1,
-                     ("Worst stretch", f"the bad-luck future's worst 5 years change investments by "
-                                       f"{worst:+.0%} after inflation"))
+                     ("Worst stretch", f"over the bad-luck future's worst 5 years, investments earn "
+                                       f"{worst:+.0%} after inflation (before withdrawals)"))
     rules_rows = "".join(
         f"<tr><td>{_esc(name)}</td><td>{_esc(_rule_value(rule.value))}</td><td>{rule.year}</td>"
         f"<td><a href='{_esc(rule.source)}'>source</a></td></tr>" for name, rule in rules.all_rules())

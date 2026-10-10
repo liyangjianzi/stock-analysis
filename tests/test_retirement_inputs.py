@@ -380,7 +380,8 @@ def test_inflation_shocks_default_on_and_defaults_cover_the_new_inputs():
     assert dflt["returns"] == {"inflation_shocks": True, "model": "history",
                                "stocks": pytest.approx(rules.real_return("canadian_equities")),
                                "bonds": pytest.approx(rules.real_return("fixed_income")),
-                               "mix": [[0, 0.8]]}
+                               "mix": [[0, 0.8]],
+                               "history_years": [min(rules.CPI.value), rules.CPI.year]}
     assert dflt["cost_growth"]["base"] == 0.0 and dflt["cost_growth"]["care"] == rules.COST_GROWTH["care"].value
 
 
@@ -446,3 +447,14 @@ def test_mix_accepts_numpy_numbers():
     p = inputs.parse(copy.deepcopy(inputs.TEMPLATE))
     p = replace(p, returns=replace(p.returns, mix=[[np.int64(50), np.float64(0.7)]]))
     assert inputs.validate(p).returns.mix == ((50, 0.7),)
+
+
+def test_a_null_mix_means_the_default():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"]["mix"] = None
+    assert inputs.parse(d).returns.mix == inputs.DEFAULT_MIX
+
+
+def test_limits_and_defaults_carry_the_mix_age_range_and_history_years():
+    assert inputs.limits("AB")["mix_age"] == (0, inputs.mortality.OMEGA)
+    assert inputs.defaults()["returns"]["history_years"] == [min(rules.CPI.value), rules.CPI.year]

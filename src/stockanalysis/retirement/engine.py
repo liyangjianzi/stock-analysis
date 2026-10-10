@@ -150,6 +150,22 @@ def portfolio_returns(plan: PlanInputs, stocks: np.ndarray, bonds: np.ndarray) -
     return w * stocks + (1 - w) * bonds
 
 
+def _blended_history(plan: PlanInputs, T: int) -> np.ndarray:
+    """(T, years of history): each plan year's mix applied to every centred historical year."""
+    r = plan.returns
+    s, b, _ = history_real()
+    w = _mix_path(plan, T)[:, None]
+    return w * _centre(s, r.stock_return) + (1 - w) * _centre(b, r.bond_return)
+
+
+def matched_lognormal(plan: PlanInputs) -> tuple:
+    """(mean, sd) of the history mode's yearly returns over the plan's years: the
+    lognormal model with the same average and swings, so a comparison shows only the
+    model's effect."""
+    B = _blended_history(plan, steps(plan))
+    return float(B.mean()), float(B.std())
+
+
 def average_returns(plan: PlanInputs, T: int) -> np.ndarray:
     """(T, 1) steady returns of the average future: the median lognormal return, or the
     compound return of the year's mix, rebalanced every year, over the centred history
@@ -158,12 +174,7 @@ def average_returns(plan: PlanInputs, T: int) -> np.ndarray:
     r = plan.returns
     if r.model == "lognormal":
         return np.full((T, 1), median_return(r.mean, r.sd))
-    s, b, _ = history_real()
-    cs, cb = _centre(s, r.stock_return), _centre(b, r.bond_return)
-    w = _mix_path(plan, T)
-    shares, inverse = np.unique(w, return_inverse=True)
-    typical = np.exp(np.log1p(shares[:, None] * cs + (1 - shares[:, None]) * cb).mean(axis=1)) - 1
-    return typical[inverse].reshape(T, 1)
+    return (np.exp(np.log1p(_blended_history(plan, T)).mean(axis=1)) - 1).reshape(T, 1)
 
 
 # -- government benefits ----------------------------------------------------------

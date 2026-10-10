@@ -347,7 +347,7 @@ function returnsCard() {
   const [lo, hi] = limits.expected_return;
   const mix = r.mix ?? retDefaults.mix;
   const rows = mix.map((p, j) => `<tr>
-      <td><input type="number" data-path="returns.mix.${j}.0" step="1" min="0" max="110" value="${p[0]}"></td>
+      <td><input type="number" data-path="returns.mix.${j}.0" step="1" min="${limits.mix_age[0]}" max="${limits.mix_age[1]}" value="${p[0]}"></td>
       <td><input type="number" data-path="returns.mix.${j}.1" data-scale="100" step="5" min="0" max="100"
           value="${+(p[1] * 100).toFixed(4)}"></td>
       <td>${mix.length > 1 ? `<button class="x" data-remove-mix="${j}" title="Remove">×</button>` : ""}</td></tr>`).join("");
@@ -360,7 +360,7 @@ function returnsCard() {
                placeholder: `FP Canada: ${pct(retDefaults.bonds, 2)}`})}
       <table class="changes"><tr class="note"><td>From age (${esc(draft.people[0].name)})</td><td>% stocks</td><td></td></tr>${rows}</table>
       <button id="add-mix" style="margin-top:6px">+ Add an age</button>
-      <p class="note">Each future strings together 5-year runs of 1928–2025 stock and bond returns with the
+      <p class="note">Each future strings together 5-year runs of ${retDefaults.history_years[0]}–${retDefaults.history_years[1]} stock and bond returns with the
         inflation of the same years, shifted to these averages. The mix moves in a straight line between ages
         and is rebalanced every January · typical return
         <span id="median">${lastPreview ? pct(lastPreview.median_return, 2) : "–"}</span>.</p>` : `
@@ -642,7 +642,7 @@ document.addEventListener("click", e => {
     const name = ($("scenario-name").value || "").trim() || `Scenario ${(draft.saved_scenarios || []).length + 1}`;
     const d = diffScalars(original, draft);
     if (!Object.keys(d.changes).length) { alert("Change something first, then save it as a scenario."); return; }
-    if (d.skipped) alert("Edits to lists (events, children, dated changes) and added or removed sections " +
+    if (d.skipped) alert("Edits to lists (events, children, dated changes, the stock/bond mix) and added or removed sections " +
                          "(home, education, ESPP) aren't saved in scenarios; the rest is.");
     const list = clone(draft.saved_scenarios || []);
     draft = clone(original);
@@ -663,10 +663,13 @@ document.addEventListener("click", e => {
   }
   if (el.dataset.removeEvent != null) { draft.events.splice(Number(el.dataset.removeEvent), 1); edited(); }
   if (el.id === "add-mix") {
-    const ret = draftReturns(), mix = ret.mix = clone(ret.mix ?? retDefaults.mix);
+    const ret = draftReturns(), mix = clone(ret.mix ?? retDefaults.mix), top = limits.mix_age[1];
     const [age, share] = mix[mix.length - 1];
-    mix.push([Math.min(age + 10, 110), Math.max(0, +(share - 0.2).toFixed(2))]);
-    edited();
+    if (age < top) {        // the next point: 10 years after the last one, never before people[0]'s age
+      mix.push([Math.min(Math.max(age, draft.people[0].age) + 10, top), Math.max(0, +(share - 0.2).toFixed(2))]);
+      ret.mix = mix;
+      edited();
+    }
   }
   if (el.dataset.removeMix != null) {
     const ret = draftReturns();
