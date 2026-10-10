@@ -528,7 +528,8 @@ def _kpis(result: PlanResult) -> str:
         ("Investments at retirement", _short(avg.investments_at_retirement[0]),
          f"Bad luck: {_short(bad.investments_at_retirement[0])}"),
         ("Rate of return", f"{result.average_return:.2%}",
-         f"After inflation; {r.mean:.0%} average with ups and downs"),
+         f"After inflation; {r.mean:.0%} average with ups and downs" if r.model == "lognormal"
+         else f"After inflation; {mix_label(r.mix)}, historical ups and downs"),
         ("Lifetime taxes", _short(avg.lifetime_tax[0]), "Income tax plus tax at death"),
     ]
     return "<div class='kpis'>" + "".join(_tile(*row) for row in rows) + "</div>"

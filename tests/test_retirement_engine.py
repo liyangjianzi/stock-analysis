@@ -1182,7 +1182,18 @@ def test_average_returns_lognormal_is_unchanged_and_history_follows_the_mix():
     assert np.array_equal(engine.average_returns(lo, 5), np.full((5, 1), engine.median_return(0.05, 0.15)))
     a = person().age
     p = _hist(stocks=0.04, bonds=0.01, mix=((a, 1.0), (a + 2, 0.0)))
-    assert np.allclose(engine.average_returns(p, 3)[:, 0], [0.04, 0.025, 0.01])
+    avg = engine.average_returns(p, 3)[:, 0]
+    assert np.allclose(avg[[0, 2]], [0.04, 0.01])         # all stocks, all bonds: their own averages
+
+
+def test_average_returns_is_the_compound_return_of_the_rebalanced_blend():
+    a = person().age
+    p = _hist(stocks=0.04, bonds=0.01, mix=((a, 0.5),))
+    s, b, _ = engine.history_real()
+    blend = 0.5 * engine._centre(s, 0.04) + 0.5 * engine._centre(b, 0.01)
+    expected = np.exp(np.log1p(blend).mean()) - 1
+    assert engine.average_returns(p, 2)[0, 0] == pytest.approx(expected)
+    assert expected > 0.025                # rebalancing beats the blend of compound averages
 
 
 def test_history_mode_feeds_simulate_without_the_lag():

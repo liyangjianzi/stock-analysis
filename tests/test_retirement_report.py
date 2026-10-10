@@ -419,3 +419,11 @@ def test_assumptions_keep_the_old_lines_for_the_lognormal_model(built):
     lo = replace(plan, returns=replace(plan.returns, model="lognormal"))
     html = report._assumptions(lo, replace(result, inputs=lo, bad_luck_returns=None), None)
     assert "yearly swings" in html and "returns lag it" in html and "Worst stretch" not in html
+
+
+def test_rate_of_return_tile_describes_the_history_mix(built):
+    plan, result, _, _ = built
+    tiles = report._kpis(result)
+    assert "80% stocks" in tiles and f"{plan.returns.mean:.0%} average" not in tiles
+    lo = replace(plan, returns=replace(plan.returns, model="lognormal"))
+    assert f"{plan.returns.mean:.0%} average" in report._kpis(replace(result, inputs=lo))

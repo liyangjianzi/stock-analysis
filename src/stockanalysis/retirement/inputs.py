@@ -11,6 +11,7 @@ Nothing here is personal: the owner's plan lives in the gitignored
 from __future__ import annotations
 
 import json
+import numbers
 import re
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
@@ -143,6 +144,12 @@ class Returns:
     def inflation_rate(self) -> float:
         return rules.historical_inflation() if self.inflation is None else self.inflation
 
+    def __post_init__(self):
+        # JSON lists, apply_changes or library code may hand in lists: keep one shape,
+        # a tuple of tuples, so the frozen plan stays hashable and validate sees pairs
+        mix = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in (self.mix or ()))
+        object.__setattr__(self, "mix", mix)
+
     @property
     def stock_return(self) -> float:
         return rules.real_return("canadian_equities") if self.stocks is None else self.stocks
@@ -157,13 +164,6 @@ def stock_share(mix, age):
     mix points, flat before the first and after the last."""
     ages, shares = zip(*mix)
     return np.interp(age, ages, shares)
-
-
-def _returns(d: dict) -> Returns:
-    d = dict(d)
-    if "mix" in d:      # JSON lists -> tuples, so the frozen plan stays hashable and apply_changes works
-        d["mix"] = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in d["mix"] or ())
-    return Returns(**d)
 
 
 @dataclass(frozen=True)
@@ -342,7 +342,7 @@ def _build(d: dict) -> PlanInputs:
             people=tuple(_person(p) for p in d["people"]),
             spending=Spending(**spending),
             home=None if d.get("home") is None else Home(**d["home"]),
-            returns=_returns(d.get("returns", {})),
+            returns=Returns(**d.get("returns", {})),
             withdrawal=Withdrawal(**d.get("withdrawal", {})),
             accounts=tuple(Account(**a) for a in d.get("balances") or []),
             nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
@@ -412,7 +412,7 @@ def _education(d: dict | None) -> Education | None:
 
 
 def _is_number(x) -> bool:
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and bool(np.isfinite(x))
+    return isinstance(x, numbers.Real) and not isinstance(x, (bool, np.bool_)) and bool(np.isfinite(x))
 
 
 def _is_int(x) -> bool:

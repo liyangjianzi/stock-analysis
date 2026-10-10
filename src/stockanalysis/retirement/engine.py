@@ -152,12 +152,18 @@ def portfolio_returns(plan: PlanInputs, stocks: np.ndarray, bonds: np.ndarray) -
 
 def average_returns(plan: PlanInputs, T: int) -> np.ndarray:
     """(T, 1) steady returns of the average future: the median lognormal return, or the
-    year's mix of the expected stock and bond returns."""
+    compound return of the year's mix, rebalanced every year, over the centred history
+    (the draws' own typical return; rebalancing earns more than the mix of the two
+    compound averages)."""
     r = plan.returns
     if r.model == "lognormal":
         return np.full((T, 1), median_return(r.mean, r.sd))
-    w = _mix_path(plan, T)[:, None]
-    return w * r.stock_return + (1 - w) * r.bond_return
+    s, b, _ = history_real()
+    cs, cb = _centre(s, r.stock_return), _centre(b, r.bond_return)
+    w = _mix_path(plan, T)
+    shares, inverse = np.unique(w, return_inverse=True)
+    typical = np.exp(np.log1p(shares[:, None] * cs + (1 - shares[:, None]) * cb).mean(axis=1)) - 1
+    return typical[inverse].reshape(T, 1)
 
 
 # -- government benefits ----------------------------------------------------------

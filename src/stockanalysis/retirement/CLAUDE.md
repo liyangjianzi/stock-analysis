@@ -231,9 +231,10 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
     mode **never** calls `lag_returns`: history's real returns already hold what
     inflation did, so lagging them would count it twice.
   - `average_returns(plan, T)` is the one source of the average future's returns
-    (`run`, `scenarios.evaluate`, `optimize`): the year's mix of the expected
-    returns, or `median_return(mean, sd)` in lognormal mode. Don't call
-    `median_return` elsewhere.
+    (`run`, `scenarios.evaluate`, `optimize`): the compound return of the year's mix,
+    rebalanced, over the centred history (not `w·stocks + (1−w)·bonds`, which misses
+    the rebalancing gain and ran 0.3–0.5 points a year low), or `median_return(mean,
+    sd)` in lognormal mode. Don't call `median_return` elsewhere.
   - Defaults come from `rules.RETURN_ASSUMPTIONS` via `rules.real_return` (FP Canada,
     geometric, before fees), never hardcoded.
   - The lognormal model is the regression anchor: the engine tests' `plan()` helper

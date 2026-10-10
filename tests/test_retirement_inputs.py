@@ -430,3 +430,19 @@ def test_a_saved_scenario_can_change_a_mix_point():
     d["returns"]["mix"] = [[50, 0.9], [70, 0.5]]
     p = inputs.apply_changes(inputs.parse(d), {"returns.mix.1.1": 0.4})
     assert p.returns.mix == ((50, 0.9), (70, 0.4))
+
+
+@pytest.mark.parametrize("changes", [
+    {"returns.mix": [[0, 0.6], [65, 0.4]]},
+    {"returns.mix.0": [0, 0.5]},
+])
+def test_apply_changes_accepts_a_whole_mix_or_point(changes):
+    p = inputs.validate(inputs.apply_changes(inputs.parse(copy.deepcopy(inputs.TEMPLATE)), changes))
+    assert all(isinstance(pt, tuple) for pt in p.returns.mix)
+
+
+def test_mix_accepts_numpy_numbers():
+    from dataclasses import replace
+    p = inputs.parse(copy.deepcopy(inputs.TEMPLATE))
+    p = replace(p, returns=replace(p.returns, mix=[[np.int64(50), np.float64(0.7)]]))
+    assert inputs.validate(p).returns.mix == ((50, 0.7),)

@@ -263,3 +263,11 @@ def test_page_has_the_mix_table_and_model_switch(server):
     page = _req(server, "GET", "/")[1].decode()
     assert '"returns.model"' in page and "returnsCard()" in page
     assert "add-mix" in page and "data-remove-mix" in page and "removeMix" in page
+
+
+def test_page_tolerates_a_plan_without_returns(server):
+    # plan.json may omit "returns" (Python fills the defaults); the page must not read
+    # draft.returns.* without a guard or render() throws and blanks every panel
+    page = _req(server, "GET", "/")[1].decode()
+    assert "const r = draft.returns ?? {}" in page
+    assert "draft.returns = draft.returns || {}" in page
