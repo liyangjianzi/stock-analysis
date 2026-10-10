@@ -969,7 +969,7 @@ def test_default_inflation_is_canadas_40_year_average():
     assert Returns().inflation is None
     assert Returns().inflation_rate == pytest.approx(rules.historical_inflation())
     assert 0.02 < rules.historical_inflation() < 0.03
-    assert min(rules.CPI.value) == 1950 and max(rules.CPI.value) == rules.CPI.year
+    assert min(rules.CPI.value) == 1928 and max(rules.CPI.value) == rules.CPI.year
     assert rules.historical_inflation() == pytest.approx(0.0242, abs=5e-5)   # still the last 40 years
 
 

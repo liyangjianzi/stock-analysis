@@ -85,3 +85,26 @@ def test_cost_growth_rules_are_rates_above_cpi():
     assert set(rules.COST_GROWTH) == {"care", "education", "property_tax", "insurance"}
     for name, rule in rules.COST_GROWTH.items():
         assert -0.05 <= rule.value <= 0.15, name
+
+
+def test_return_history_covers_the_same_years_as_cpi():
+    years = list(range(1928, rules.CPI.year + 1))
+    assert sorted(rules.CPI.value) == years
+    assert sorted(rules.US_RETURNS.value) == years
+    assert sorted(rules.US_CPI.value) == years
+    assert rules.US_RETURNS.value[1931] == (-0.4384, -0.0256)    # S&P 500, 10-year Treasury
+    assert rules.US_CPI.value[1932] == pytest.approx(-0.09868)
+    assert rules.CPI.value[1948] == pytest.approx(0.14263)
+    assert rules.CPI.value[1986] == pytest.approx(0.04195)       # stored years untouched
+
+
+def test_return_assumptions_are_fp_canadas_made_real():
+    assert rules.RETURN_ASSUMPTIONS.value == {"inflation": 0.021, "fixed_income": 0.032,
+                                              "canadian_equities": 0.063}
+    assert rules.real_return("canadian_equities") == pytest.approx(1.063 / 1.021 - 1)
+    assert rules.real_return("fixed_income") == pytest.approx(1.032 / 1.021 - 1)
+
+
+def test_new_series_are_listed_for_the_yearly_refresh():
+    names = {n.split(".")[0] for n, _ in rules.all_rules()}
+    assert {"us_returns", "us_cpi", "return_assumptions"} <= names
