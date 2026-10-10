@@ -17,18 +17,19 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 
 | Module | Responsibility |
 |---|---|
-| `rules.py` | Every statutory value as `Rule(value, year, source)`: federal/Alberta tax, OAS, CPP, RRIF factors, TFSA, Alberta LIF. `TAX_YEAR`, `is_stale` |
+| `rules.py` | Every statutory value as `Rule(value, year, source)`: federal/Alberta tax, OAS, CPP (incl. survivor, death benefit), RRIF factors, TFSA, Alberta LIF, payroll premiums (`PAYROLL`), the Canada Child Benefit (`CCB`), RRSP room (`RRSP_LIMIT`), child care (`CHILDCARE`). `TAX_YEAR`, `is_stale` |
 | `mortality.py` | Lifespans: the Statistics Canada Alberta life table (`QX`, 2021/2023) and CPP-report improvement (`IMPROVEMENT`) as `Rule`s; `qx`, `death_cdf`, `draw_death_ages` (own seed stream), `median_death_age`. Death age = the age on the January 1 after the last year lived; `OMEGA = 111` |
-| `refund.py` | The tax-refund check, display only: `expected_refund(plan)` (first-year tax withheld without the RRSP deduction minus true tax) vs `actual_refunds(path)` ("TAX REFUND" deposits in the bank CSVs' last 12 months; `retirement/bank/`, gitignored). Never feeds the projection |
-| `tax.py` | Vectorized person tax, household tax, the 5%-step pension-split search (`best_split`) |
-| `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `TEMPLATE` is the invented `--init` plan |
-| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None)`); `draw_futures` (returns over `life_steps` + death ages); `run` simulates the drawn futures and adds the average future (steady median return) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
-| `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success |
+| `refund.py` | The tax-refund check, display only: `expected_refund(plan)` (first-year tax withheld without the RRSP and child care deductions minus true tax, RRSP capped by room) vs `actual_refunds(path)` ("TAX REFUND" deposits in the bank CSVs' last 12 months; `retirement/bank/`, gitignored). Never feeds the projection |
+| `tax.py` | Vectorized person tax (`income_tax(..., salary=, deductions=)`: payroll credits, enhanced-CPP deduction, employment amount), household tax, the 5%-step pension-split search (`best_split`), `payroll_premiums` / `payroll_parts`, `child_benefit`, `childcare_deduction`, `rrsp_new_room` |
+| `inputs.py` | `plan.json` → validated `PlanInputs` (`parse(dict)` / `load_inputs(path)`); `validate` raises `PlanError` (a `ValueError` with `.field`, e.g. `people[0].age`); `limits(province)` is the statutory age/share limits, read from rules.py, that `validate` and the GUI's sliders share; `balances_from_holdings` / `with_holdings` sort holdings into (owner, account type); `Event` (money events), `Espp`; `apply_changes` (dotted-path edits, used by saved scenarios); `TEMPLATE` is the invented `--init` plan |
+| `engine.py` | Year-by-year accounts over N paths (`simulate(plan, returns, deaths=None, inflation=None)`): the alive mask and survivor rules (`roll_over`, `survivor_cpp`), salary-driven working years (`planned_contributions`, `payroll`, `espp_purchase`, `childcare_claims`), money events (`event_flows`), the spending rules (bad-market cut or guardrails); `draw_futures` (returns over `life_steps`, death ages and inflation paths: historical blocks via `draw_history` + `portfolio_returns`, or lognormal via `draw_inflation` + `lag_returns`); `average_returns` (the average future's steady returns); `growth` (cost growth above CPI); `run` simulates the drawn futures and adds the average future (steady returns from `average_returns`) and the bad-luck future (10th-percentile path's returns replayed alone), both over `steps` with `average_deaths` → `PlanResult` |
+| `scenarios.py` | One-change what-ifs on common random numbers; `rank` orders them by change in success; `compare_saved` evaluates the plan and its `saved_scenarios` side by side |
 | `education.py` | The RESP's deterministic schedule (`schedule(plan, T)`): January contributions that earn the largest CESG still available, the grants, each year's school cost, and the start-of-plan contributed/grants (estimated by `estimated_grant_received` when not given). The engine walks the path-dependent RESP balance in `_resp_year` |
 | `optimize.py` | Planning tools: `affordability` (`max_spending` + `earliest_retirement`, bisection on common random numbers), `rrsp_drawdown` (every `steady_income` target in `DRAWDOWN_TARGETS` + the plan as it stands → `DrawdownTable`; `best("legacy" | "tax" | "success")`, ties keep the lower target) and `best_benefit_ages` (per-person CPP x OAS grid on the expected legacy over `LIFESPAN_DRAWS` lifespans, coordinate search, `ProcessPoolExecutor`; `workers=1` runs serially) |
-| `report.py` | `build_report` (pure; self-contained HTML string), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
+| `actions.py` | The plan as a to-do list: `plan_actions(result)` reads dated `Action`s from what the average future recorded: `tfsa_top_up`, `income["registered"]`, `lif_steps`, `split_share`, `downsize_step`, the balances, and the RESP schedule. It never re-derives an engine decision from the inputs. `_runs` splits a yearly amount into phases (more than 40% and C$2,000 apart). `missing_inputs(plan)` lists the inputs still estimated. When the engine gains a behaviour the household must act on, record it on `Projection` and read it here |
+| `report.py` | `build_report` (pure; self-contained HTML string: the summary on top, the other sections grouped into tab panels by `TABS`, which keep their section ids), `net_worth` (the yearly balance sheet: the estate tax rule applied to each January, from `Projection.unrealized_gains`; at `end_step` it equals `legacy`, pinned by a test), `cash_flow` (the Cash flow tab: sources = uses, and January 1 − drawn + saved + `Projection.growth` + `added` = next January 1 (the "Other" column; key `added`, since `other` is the one-time-money source); `added` is `Projection.added`, which the engine records where the money lands — the pension match and any contribution the cash flow didn't pay, and January 1 inflows: home sale, RESP leftovers, CPP death benefit — so the roll is pinned exactly by a test, not backed out by subtraction), `save_report` / `write_summary` / `latest_summary` (I/O). `headline` (the numbers `summary.json` stores), `success_meter` (omits a "0 pts" delta) and `money_left_chart` are reused by the GUI |
 | `cli.py` | `stock-analysis retire`. `generate(plan, source, ...)` is **the one report path** (run → rank → build → save → summary); the CLI and the GUI both call it. `_with_balances(plan, path, load=_load_book)` is the one balance-precedence rule; the GUI passes a caching `load` |
-| `gui.py` + `static/planner.html` | `--gui`: stdlib `http.server` plan editor (see below) |
+| `gui.py` + `static/planner.html` | `--gui`: stdlib `http.server` plan editor, tabs People / Spending (events, guardrails) / Education / Home / Investing / Inflation / Optimize / Compare / Advanced (see below) |
 
 ## Conventions that are easy to get wrong
 
@@ -142,7 +143,39 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   with `preview_paths` and the plan's seed.
 - **An unsorted holdings account stops the run.** It never drops silently.
 - **Household events key on people[0]'s age.** That covers spending stages and
-  `home.downsize_age`.
+  `home.downsize_age`. Money events follow whoever is alive: leftover RESP money goes
+  to people[0], or to the partner once people[0] has died (within their RRSP room),
+  and the bad-market cut starts the first year nobody earns in each future
+  (`bad_ref`), a worker's death included. `retire_ref` / `retire_step` stay on the
+  plan's calendar (they feed "investments at retirement").
+- **Spending rules** (`spending.rule`): `"bad_market"` (the default, one cut keyed on
+  `bad_ref`) or `"guardrails"` (Guyton-Klinger on the base need: the first non-earning
+  year sets `start_rate` = need ÷ investments; later years compare need × `adjust`
+  with that, cutting a `guardrail_step` above the upper band unless people[0] is
+  within `guardrail_stop_years` of `end_age`, raising one below the lower band),
+  clipped to `guardrail_floor`..`guardrail_ceiling`, so a depleted portfolio can't
+  shrink the need until it "succeeds". `start_rate` waits for a year with
+  investments. The rate uses the base × stage need, so planned drops (slow-go,
+  dated changes) and inflows (downsizing, events) can trigger a raise; that's
+  intended. `Projection.spend_adjust` records the factor; the two rules never stack.
+- **Saved scenarios** (`plan.saved_scenarios`: `(name, {dotted.path: value})`):
+  `inputs.apply_changes` sets scalar leaves by 0-based dotted path (as the GUI's
+  `data-path`) through dataclasses, tuples and dicts (contributions, education
+  costs); the GUI only addresses list items in `people` (an index into events or
+  kids would retarget once the list changes), and `validate` checks every scenario applies and validates (errors
+  name `saved_scenarios[i]`). `scenarios.compare_saved` evaluates the plan and each
+  one on the same seed; `cli.generate` passes the rows to the report. The GUI's
+  "Save as scenario" diffs the draft against the saved plan's scalar fields (list
+  edits are skipped) and resets the draft to the plan.
+- **Money events** (`plan.events`, `engine.event_flows(plan, year)`): money in is
+  untaxed cash (source `"other"`), money out is added to the need, both while
+  someone is alive; `kind="income"` is taxed like salary for its person while they
+  live (it joins `work["salary"]` in the tax parts; its CPP/EI premiums are the extra
+  over that person's salary, no CPP from 70) but is not
+  "working": no contributions, RRSP draws continue. Income without an end runs one
+  year; cash repeats every `every` years to `until`.
+- **No CPP survivor reduction under 45.** Service Canada removed it in 2019; the
+  survivor's pension depends only on the survivor being under or over 65.
 
 ## Planning tools (`optimize.py`)
 
@@ -165,6 +198,69 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
 - Deferred ideas are listed under "Future improvements" in `README.md`. Add new
   ones there, not here.
 
+- **Inflation** (`returns.inflation`, default `rules.historical_inflation()`, the
+  40-year CPI average from `rules.CPI`). The model stays real.
+  - `draw_inflation` gives each future 5-year blocks of `rules.CPI` (from 1928, so
+    1930s and 1970s runs are drawn), wrapping from 2025 to 1928 so every year weighs
+    the same (`_block_index`). Each year is shifted by `_centre` so the history averages
+    `inflation_rate` (the last 40 years) and the lag has no drift; don't drop the
+    shift or extend `CPI` without it, or every future loses real return (own RNG stream
+    `[seed, INFLATION_STREAM]`, so return and lifespan draws don't change);
+    `returns.inflation_shocks=False` or a fixed `returns.inflation` gives a steady
+    rate. `lag_returns` turns the drawn returns into lagged real returns;
+    `draw_futures` returns `(returns, deaths, inflation)`.
+  - Inside `simulate`, `infl` (T, N) and the price level `prices` (T+1, N) shrink
+    what is fixed in dollars: the non-registered `cost` base, the RESP's
+    contributions and grants, the C$2,000 pension credit (`part["fixed_scale"]` →
+    `tax.income_tax(fixed_scale=)`), the student grant and the RESP-to-RRSP limit.
+  - `growth(plan, name, t)` compounds `plan.cost_growth.rate(name)`: base spending,
+    property tax and insurance (scaled by downsizing), care; education in
+    `education.schedule`.
+  - Display: `report.future_scale` / `actions.future_factor` turn today's dollars
+    into each year's on the average path; the report's switch and the GUI's
+    "Show future dollars" use them. Never feed future dollars back into the engine.
+  - Refresh `rules.CPI` and `rules.COST_GROWTH` each January with the other rules.
+- **Historical returns** (`returns.model == "history"`, the default).
+  - `draw_history` draws `(stocks, bonds, inflation)` from `history_real()`
+    (`rules.US_RETURNS` made real with `rules.US_CPI`, paired with `rules.CPI` of the
+    same year) with the **same** `_block_index` as `draw_inflation`, so a drawn year
+    is always a whole historical year. Each series goes through `_centre`: stocks to
+    `returns.stock_return`, bonds to `bond_return`, CPI to `inflation_rate`.
+  - `portfolio_returns` blends them by `inputs.stock_share(mix, people[0]'s age)`,
+    rebalanced each January, into the one (T, N) array `simulate` takes. History
+    mode **never** calls `lag_returns`: history's real returns already hold what
+    inflation did, so lagging them would count it twice.
+  - `average_returns(plan, T)` is the one source of the average future's returns
+    (`run`, `scenarios.evaluate`, `optimize`): the compound return of the year's mix,
+    rebalanced, over the centred history (not `w·stocks + (1−w)·bonds`, which misses
+    the rebalancing gain and ran 0.3–0.5 points a year low), or `median_return(mean,
+    sd)` in lognormal mode. Don't call `median_return` elsewhere.
+  - Defaults come from `rules.RETURN_ASSUMPTIONS` via `rules.real_return` (FP Canada,
+    geometric, before fees), never hardcoded.
+  - The lognormal model is the regression anchor: the engine tests' `plan()` helper
+    pins `model="lognormal"`.
+  - Refresh `US_RETURNS` and `US_CPI` each January with `CPI` (Damodaran
+    `histretSP`, BLS CUUR0000SA0 annual average), and `RETURN_ASSUMPTIONS` each
+    spring when FP Canada publishes.
+- **Spousal RRSP** (`contributions.spousal_rrsp`, `engine.CONTRIBUTIONS`). It is
+  a contribution kind, not an account: the money joins the partner's `rrsp`
+  balance, and `spousal` (P, N) tracks how much of it is spousal.
+  - Draws and RRIF minimums use the own money first (`spousal` is capped at the
+    balance after each).
+  - `recent` (3, P, N) keeps the last 3 calendar years of spousal money received,
+    for `_attribute`. That moves the spousal part of a top-up draw, up to
+    `recent`, onto the contributor's ordinary income while they live. RRIF
+    minimums are exempt.
+  - The deduction and the RRSP room belong to the contributor (`payroll`, the
+    room update).
+- **TFSA top-up** (`withdrawal.tfsa_top_up`, `engine._tfsa_top_up`). Each
+  January, before the withdrawals, a retiree's room (`room * retired`) is filled
+  from non-registered money, own account first, then the partner's.
+  - The shares moved realize their pro-rata gain. It goes to `_parts(realized=...)`,
+    so it is taxed in the household loop. Losses are floored at 0.
+  - Workers are skipped, because their planned TFSA contributions fill the room
+    at step 6. The amounts moved are recorded in `Projection.tfsa_top_up`.
+
 ## The GUI (`gui.py`)
 
 - **Structure:** `PlannerApp` holds all behaviour and no HTTP, so it is easy to
@@ -179,6 +275,8 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   - `GET /reports/<path>` serves files that stay inside `out_root`.
   - `POST /api/optimize/affordability` and `POST /api/optimize/benefits` run the
     planning tools on the posted draft.
+  - `POST /api/optimize/drawdown` runs the RRSP-draw tool; `POST /api/compare` compares the
+    plan and its saved scenarios on the same futures.
 - **Saving:** validate first (including balances), copy the old file to
   `plan.json.bak`, then write tmp + `os.replace`. The page posts back the **whole
   original dict** with only known fields changed, so keys it doesn't edit
@@ -196,17 +294,28 @@ tests, docs or commit messages. Tests use invented households (`inputs.TEMPLATE`
   edit made meanwhile is picked up when it returns.
 - **The page:** vanilla JS with no build step. Plotly comes from
   `plotly.offline.get_plotlyjs()` at `/plotly.js`, so the page works offline.
-  Colours copy `report.py`'s constants. Percent fields store fractions; a slider
-  scales value, min, max and step by 100 together.
+  Colours come from `report.THEME_CSS`, served at `/theme.css`; `/theme.js`
+  (`report.THEME_JS`) is the Auto/Dark/Light switch the report embeds too. Plotly
+  can't read CSS variables, so draw a figure through `theme.draw(gd, data, layout)`,
+  which swaps colours by `report.CHART_DARK`. Every figure takes
+  `report.CHART_TEMPLATE`, so no Plotly default colour escapes the map (a test checks
+  each figure); a new chart colour belongs in both. The report's dollars switch
+  rescales its one copy of each chart in place (`_SET_DOLLARS`).
+  Percent fields store fractions; a slider scales value, min, max and step by
+  100 together.
 - **Packaging:** `static/*.html` is listed under `[tool.setuptools.package-data]`
   in `pyproject.toml`.
 
 ## Tests (offline)
 
-`tests/test_retirement_{rules,tax,inputs,engine,scenarios,optimize,report,gui}.py` and
-`tests/test_cli_retire.py`:
+`tests/test_retirement_{rules,mortality,tax,inputs,engine,education,scenarios,optimize,refund,report,gui}.py`
+and `tests/test_cli_retire.py`:
 - Tax is checked against hand-worked federal + Alberta figures.
 - The GUI tests start a real server on port 0 against `TEMPLATE` in `tmp_path`,
   and monkeypatch `holdings.load` to fail if it is read.
+- The engine tests pin the cash identity (sources = need + tax + saved) with
+  salaries, ESPP, deaths, events and guardrails, and `deaths=None` as the regression
+  anchor. CLI tests pass `--bank /nonexistent-bank`, so no test reads the owner's
+  bank CSVs.
 
 Use small path counts (40 for runs, 20 for scenarios) to keep them fast.

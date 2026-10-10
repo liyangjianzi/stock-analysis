@@ -11,8 +11,9 @@ Nothing here is personal: the owner's plan lives in the gitignored
 from __future__ import annotations
 
 import json
+import numbers
 import re
-from dataclasses import MISSING, dataclass, field, fields, replace
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,9 @@ import pandas as pd
 from . import mortality, rules
 
 ACCOUNT_TYPES = ("rrsp", "pension", "tfsa", "nonreg")
+# Yearly contributions can also go to a spousal RRSP: the contributor deducts it, the
+# spouse owns it (withdrawals within 3 years are taxed back to the contributor).
+CONTRIBUTION_TYPES = ACCOUNT_TYPES + ("spousal_rrsp",)
 LIVING = ("home", "away")
 # Yearly cost per student in today's dollars: an editable estimate, not a rule.
 # Home ~ Alberta undergraduate tuition, fees and books; away adds residence and food.
@@ -94,6 +98,12 @@ class Spending:
     bad_market_cut: float = 0.10
     bad_market_trigger: float = 0.80
     survivor_share: float = 0.70    # a lone survivor's share of the couple's budget
+    rule: str = "bad_market"        # "bad_market" (one cut) or "guardrails" (Guyton-Klinger)
+    guardrail_band: float = 0.20    # act when the withdrawal rate moves this far from where it began
+    guardrail_step: float = 0.10    # each cut or raise
+    guardrail_stop_years: int = 15  # no cuts in the plan's last N years
+    guardrail_floor: float = 0.75   # never cut below this share of the planned spending
+    guardrail_ceiling: float = 1.50  # never raise above this share
 
 
 @dataclass(frozen=True)
@@ -106,6 +116,16 @@ class Home:
     property_tax: float = 0.0
     insurance: float = 0.0
 
+    @property
+    def released(self) -> float:
+        """Money freed by downsizing: the sale after costs, less the new home and the move."""
+        return self.value * (1 - self.selling_cost) - self.new_value - self.moving_cost
+
+
+RETURN_MODELS = ("history", "lognormal")
+DEFAULT_MIX = ((0, 0.8),)          # 80% stocks: about today's 15% yearly swings
+RETURN_RANGE = (-0.05, 0.15)       # plan bounds for an expected real return, not rules
+
 
 @dataclass(frozen=True)
 class Returns:
@@ -113,12 +133,44 @@ class Returns:
     sd: float = 0.15
     paths: int = 10_000
     seed: int = 7
+    inflation: float | None = None   # yearly; None: Canada's 40-year average (rules.CPI)
+    inflation_shocks: bool = True    # each future replays runs of past inflation; returns lag it
+    model: str = "history"           # "history": joint runs of 1928- returns and inflation; "lognormal": mean/sd
+    stocks: float | None = None      # expected compound real return; None: FP Canada (rules.RETURN_ASSUMPTIONS)
+    bonds: float | None = None
+    mix: tuple = DEFAULT_MIX         # ((people[0]'s age, stock share), ...): straight lines between, flat outside
+
+    @property
+    def inflation_rate(self) -> float:
+        return rules.historical_inflation() if self.inflation is None else self.inflation
+
+    def __post_init__(self):
+        # JSON lists, apply_changes or library code may hand in lists: keep one shape,
+        # a tuple of tuples, so the frozen plan stays hashable and validate sees pairs
+        mix = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in (self.mix or ()))
+        object.__setattr__(self, "mix", mix)
+
+    @property
+    def stock_return(self) -> float:
+        return rules.real_return("canadian_equities") if self.stocks is None else self.stocks
+
+    @property
+    def bond_return(self) -> float:
+        return rules.real_return("fixed_income") if self.bonds is None else self.bonds
+
+
+def stock_share(mix, age):
+    """The stock share at ``age`` (a number or an array): straight lines between the
+    mix points, flat before the first and after the last."""
+    ages, shares = zip(*mix)
+    return np.interp(age, ages, shares)
 
 
 @dataclass(frozen=True)
 class Withdrawal:
     strategy: str = "rrsp_first"
     steady_income_target: float = 58_000.0
+    tfsa_top_up: bool = True    # each January a retiree moves non-registered money into new TFSA room
 
 
 @dataclass(frozen=True)
@@ -163,6 +215,48 @@ class Education:
     childcare: float = 0.0              # yearly child care paid (already in spending); deducted on line 21400
 
 
+EVENT_KINDS = ("cash", "income")
+SPENDING_RULES = ("bad_market", "guardrails")
+
+
+@dataclass(frozen=True)
+class Event:
+    """A one-time or repeating amount (``kind="cash"``: + money in, untaxed; − money
+    out, spent) or temporary income (``kind="income"``: a yearly amount taxed like
+    salary for ``person``). It starts in calendar ``year`` or at an ``age`` (the
+    person's, else people[0]'s), repeats ``every`` N years, and ends at ``until`` /
+    ``until_age`` (inclusive); income runs every year in between."""
+    label: str
+    amount: float
+    year: int | None = None
+    age: int | None = None
+    every: int | None = None
+    until: int | None = None
+    until_age: int | None = None
+    kind: str = "cash"
+    person: str | None = None
+
+
+COST_KINDS = ("base", "care", "education", "property_tax", "insurance")
+
+
+@dataclass(frozen=True)
+class CostGrowth:
+    """Yearly growth above Canada's CPI per cost, in today's dollars; None = the default
+    (rules.COST_GROWTH; base spending defaults to 0)."""
+    base: float | None = None
+    care: float | None = None
+    education: float | None = None
+    property_tax: float | None = None
+    insurance: float | None = None
+
+    def rate(self, name: str) -> float:
+        value = getattr(self, name)
+        if value is not None:
+            return value
+        return rules.COST_GROWTH[name].value if name in rules.COST_GROWTH else 0.0
+
+
 @dataclass(frozen=True)
 class Account:
     owner: str
@@ -183,7 +277,10 @@ class PlanInputs:
     withdrawal: Withdrawal
     accounts: tuple = ()
     nonreg_income: NonregIncome = NonregIncome()
+    cost_growth: CostGrowth = CostGrowth()
     education: Education | None = None
+    events: tuple = ()
+    saved_scenarios: tuple = ()     # (name, {dotted.path: value}) versions to compare side by side
     holdings: dict = field(default_factory=dict)
     scenarios: dict = field(default_factory=dict)
 
@@ -220,7 +317,7 @@ TEMPLATE = {
                  "survivor_share": 0.70},
     "home": {"value": 900000, "downsize_age": 65, "new_value": 600000, "selling_cost": 0.04,
              "moving_cost": 20000, "property_tax": 6000, "insurance": 2000},
-    "returns": {"mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
+    "returns": {"model": "history", "mix": [[0, 0.8]], "mean": 0.05, "sd": 0.15, "paths": 10000, "seed": 7},
     "withdrawal": {"strategy": "rrsp_first", "steady_income_target": 58000},
     "nonreg_income": {"eligible_dividends": 0.015, "foreign_dividends": 0.01, "interest": 0.0},
     "balances": [
@@ -249,7 +346,11 @@ def _build(d: dict) -> PlanInputs:
             withdrawal=Withdrawal(**d.get("withdrawal", {})),
             accounts=tuple(Account(**a) for a in d.get("balances") or []),
             nonreg_income=NonregIncome(**(d.get("nonreg_income") or {})),
+            cost_growth=CostGrowth(**(d.get("cost_growth") or {})),
             education=_education(d.get("education")),
+            events=tuple(Event(**e) for e in d.get("events") or []),
+            saved_scenarios=tuple((str(s["name"]), dict(s.get("changes") or {}))
+                                  for s in d.get("saved_scenarios") or []),
             holdings=dict(d.get("holdings") or {}),
             scenarios=dict(d.get("scenarios") or {}),
         )
@@ -257,6 +358,33 @@ def _build(d: dict) -> PlanInputs:
         raise ValueError(f"plan.json is missing the field {e}") from e
     except TypeError as e:
         raise ValueError(f"plan.json has an unexpected or missing field: {e}") from e
+
+
+def _set(obj, keys: list, value):
+    key, rest = keys[0], keys[1:]
+    if isinstance(obj, dict):                    # e.g. contributions, education costs
+        new = dict(obj)
+        new[key] = _set(obj[key], rest, value) if rest else value
+        return new
+    if isinstance(obj, tuple):
+        items = list(obj)
+        i = int(key)
+        items[i] = _set(items[i], rest, value) if rest else value
+        return tuple(items)
+    if not is_dataclass(obj) or key not in {f.name for f in fields(obj)}:
+        raise KeyError(key)
+    return replace(obj, **{key: _set(getattr(obj, key), rest, value) if rest else value})
+
+
+def apply_changes(plan: PlanInputs, changes: dict) -> PlanInputs:
+    """``plan`` with each ``{dotted.path: value}`` set, e.g. ``people.0.retire_age``
+    (0-based, as in the GUI). Raises KeyError / IndexError / ValueError on a bad path."""
+    for path, value in changes.items():
+        try:
+            plan = _set(plan, path.split("."), value)
+        except (KeyError, IndexError, ValueError, TypeError, AttributeError) as e:
+            raise ValueError(f"no field {path!r}") from e
+    return plan
 
 
 def _person(d: dict) -> Person:
@@ -283,6 +411,14 @@ def _education(d: dict | None) -> Education | None:
     return Education(kids=kids, costs=costs, **d)
 
 
+def _is_number(x) -> bool:
+    return isinstance(x, numbers.Real) and not isinstance(x, (bool, np.bool_)) and bool(np.isfinite(x))
+
+
+def _is_int(x) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
 def _fail(field_name: str, message: str):
     raise PlanError(field_name, message)
 
@@ -298,7 +434,9 @@ def limits(province: str) -> dict:
             "lif_min_age": lif["min_age"].value,
             "unlock_share": lif["unlock_share"].value,
             "kid_start_age": (15, 30), "kid_years": (1, 10),          # plan bounds, not rules
-            "survivor_share": (0.4, 1.0),
+            "survivor_share": (0.4, 1.0), "expected_return": RETURN_RANGE,
+            "guardrail_band": (0.05, 0.5), "guardrail_step": (0.02, 0.5),
+            "guardrail_floor": (0.3, 1.0), "guardrail_ceiling": (1.0, 3.0),
             "cesg_rate": cesg["rate"], "cesg_lifetime": cesg["lifetime_max"],
             "student_grant_max": rules.STUDENT_GRANT.value["yearly_max"],
             "aip_rrsp_max": aip["rrsp_transfer_max"], "aip_extra_tax": aip["extra_tax"]}
@@ -306,9 +444,26 @@ def limits(province: str) -> dict:
 
 def defaults() -> dict:
     """Defaults for the optional sections the GUI can add, for filling blanks."""
-    flags = {f.name: f.default for f in fields(Education) if isinstance(f.default, bool)}
+    flags = lambda cls: {f.name: f.default for f in fields(cls) if isinstance(f.default, bool)}  # noqa: E731
     kid = {f.name: f.default for f in fields(Kid) if f.default not in (MISSING, None)}
-    return {"education": {**flags, "costs": dict(EDUCATION_COSTS)}, "kid": kid}
+    return {"education": {**flags(Education), "costs": dict(EDUCATION_COSTS)}, "kid": kid,
+            "withdrawal": flags(Withdrawal),
+            "returns": {**flags(Returns), "model": Returns.model,
+                        "stocks": rules.real_return("canadian_equities"),
+                        "bonds": rules.real_return("fixed_income"),
+                        "mix": [list(p) for p in DEFAULT_MIX]},
+            "cost_growth": {name: CostGrowth().rate(name) for name in COST_KINDS}}
+
+
+def event_span(plan: PlanInputs, ev: Event) -> tuple:
+    """(person index, first year, last year or None) of an event. Ages are the event
+    person's, else people[0]'s."""
+    i = next((k for k, p in enumerate(plan.people) if p.id == ev.person), 0)
+    ref = plan.people[i]
+    start = ev.year if ev.year is not None else plan.start_year + ev.age - ref.age
+    end = (ev.until if ev.until is not None else
+           plan.start_year + ev.until_age - ref.age if ev.until_age is not None else None)
+    return i, start, end
 
 
 def validate(plan: PlanInputs) -> PlanInputs:
@@ -327,6 +482,8 @@ def validate(plan: PlanInputs) -> PlanInputs:
         f = f"people[{i}]"
         if not 18 <= p.age < plan.end_age:
             _fail(f"{f}.age", f"{p.age} must be 18 or more and below end_age {plan.end_age}")
+        if p.age >= mortality.OMEGA - 1:
+            _fail(f"{f}.age", f"{p.age} is past the life table (ages up to {mortality.OMEGA - 2})")
         if p.sex is not None and p.sex not in mortality.SEXES:
             _fail(f"{f}.sex", f"{p.sex!r} is not one of {mortality.SEXES} (or leave it out)")
         if p.retire_age < p.age:
@@ -369,10 +526,12 @@ def validate(plan: PlanInputs) -> PlanInputs:
                                ("contributions_when_partner_retired",
                                 p.contributions_when_partner_retired or {})):
             for kind, amount in amounts.items():
-                if kind not in ACCOUNT_TYPES:
-                    _fail(f"{f}.{label}.{kind}", f"unknown account type (use {ACCOUNT_TYPES})")
+                if kind not in CONTRIBUTION_TYPES:
+                    _fail(f"{f}.{label}.{kind}", f"unknown account type (use {CONTRIBUTION_TYPES})")
                 if amount < 0:
                     _fail(f"{f}.{label}.{kind}", "must not be negative")
+                if kind == "spousal_rrsp" and amount > 0 and len(plan.people) < 2:
+                    _fail(f"{f}.{label}.{kind}", "a spousal RRSP needs a spouse in the plan")
     s = plan.spending
     if s.base < 0:
         _fail("spending.base", "must not be negative")
@@ -382,6 +541,14 @@ def validate(plan: PlanInputs) -> PlanInputs:
     lo, hi = lim["survivor_share"]
     if not lo <= s.survivor_share <= hi:
         _fail("spending.survivor_share", f"between {lo} and {hi}")
+    if s.rule not in SPENDING_RULES:
+        _fail("spending.rule", f"{s.rule!r} is not one of {SPENDING_RULES}")
+    for name in ("guardrail_band", "guardrail_step", "guardrail_floor", "guardrail_ceiling"):
+        lo, hi = lim[name]
+        if not lo <= getattr(s, name) <= hi:
+            _fail(f"spending.{name}", f"between {lo} and {hi}")
+    if not s.guardrail_stop_years >= 0:
+        _fail("spending.guardrail_stop_years", "must not be negative")
     if s.slow_go_age > s.no_go_age:
         _fail("spending.slow_go_age", "must not be after no_go_age")
     if s.care < 0:
@@ -398,11 +565,38 @@ def validate(plan: PlanInputs) -> PlanInputs:
         if h.downsize_age is not None and h.downsize_age < plan.people[0].age:
             _fail("home.downsize_age", f"{h.downsize_age} has already passed "
                                        f"(people[0] is {plan.people[0].age}); set today's home value")
-        if h.downsize_age is not None and h.value * (1 - h.selling_cost) - h.new_value - h.moving_cost < 0:
+        if h.downsize_age is not None and h.released < 0:
             _fail("home.new_value", "the sale must cover the new home and the move")
     r = plan.returns
     if r.mean <= -1 or r.sd < 0 or r.paths < 1:
         _fail("returns", "need mean > -1, sd >= 0 and paths >= 1")
+    if r.inflation is not None and not -0.05 <= r.inflation <= 0.20:
+        _fail("returns.inflation", "a yearly rate between -0.05 and 0.20 (e.g. 0.025)")
+    if r.model not in RETURN_MODELS:
+        _fail("returns.model", f"one of {', '.join(RETURN_MODELS)}")
+    lo, hi = RETURN_RANGE
+    for name in ("stocks", "bonds"):
+        v = getattr(r, name)
+        if v is not None and not (_is_number(v) and lo <= v <= hi):
+            _fail(f"returns.{name}", f"an expected real return between {lo} and {hi} (e.g. 0.04)")
+    if not r.mix:
+        _fail("returns.mix", "needs at least one [age, stock share] point")
+    prev = None
+    for i, pt in enumerate(r.mix):
+        if not (isinstance(pt, tuple) and len(pt) == 2 and all(_is_number(x) for x in pt)):
+            _fail(f"returns.mix[{i}]", "an [age, stock share] pair, e.g. [65, 0.6]")
+        age, share = pt
+        if not 0 <= age <= mortality.OMEGA:
+            _fail(f"returns.mix[{i}]", f"age between 0 and {mortality.OMEGA}")
+        if not 0 <= share <= 1:
+            _fail(f"returns.mix[{i}]", "stock share between 0 and 1 (e.g. 0.6)")
+        if prev is not None and age <= prev:
+            _fail(f"returns.mix[{i}]", "ages must increase down the list")
+        prev = age
+    for name in COST_KINDS:
+        v = getattr(plan.cost_growth, name)
+        if v is not None and not (_is_number(v) and -0.05 <= v <= 0.15):
+            _fail(f"cost_growth.{name}", "a yearly rate above inflation between -0.05 and 0.15")
     for name in ("eligible_dividends", "foreign_dividends", "interest"):
         if not 0 <= getattr(plan.nonreg_income, name) <= 0.2:
             _fail(f"nonreg_income.{name}", "a yearly share of the balance between 0 and 0.2")
@@ -434,6 +628,29 @@ def validate(plan: PlanInputs) -> PlanInputs:
             if kid.cesg_received is not None and not (
                     0 <= kid.cesg_received <= rules.RESP["cesg"].value["lifetime_max"]):
                 _fail(f"{f}.cesg_received", "between 0 and the lifetime grant maximum")
+    for j, ev in enumerate(plan.events):
+        f = f"events[{j}]"
+        if not _is_number(ev.amount):
+            _fail(f"{f}.amount", "must be a number")
+        for name in ("year", "age", "every", "until", "until_age"):
+            if getattr(ev, name) is not None and not _is_int(getattr(ev, name)):
+                _fail(f"{f}.{name}", "must be a whole number")
+        if ev.kind not in EVENT_KINDS:
+            _fail(f"{f}.kind", f"{ev.kind!r} is not one of {EVENT_KINDS}")
+        if (ev.year is None) == (ev.age is None):
+            _fail(f"{f}.year", "give exactly one of year or age")
+        if ev.every is not None and ev.every < 1:
+            _fail(f"{f}.every", "repeat every 1 year or more")
+        if ev.kind == "income" and not ev.amount >= 0:
+            _fail(f"{f}.amount", "yearly income must not be negative")
+        if ev.person is not None and ev.person not in ids:
+            _fail(f"{f}.person", f"{ev.person!r} is not one of the people {ids}")
+        _, start, end = event_span(plan, ev)
+        if end is not None and end < start:
+            _fail(f"{f}.until_age" if ev.until_age is not None else f"{f}.until",
+                  "ends before it starts")
+        if start < plan.start_year and ev.every is None and ev.kind == "cash":
+            _fail(f"{f}.year" if ev.year is not None else f"{f}.age", "is before the plan starts")
     for j, a in enumerate(plan.accounts):
         if a.owner not in ids:
             _fail(f"balances[{j}].owner", f"{a.owner!r} is not one of the people {ids}")
@@ -443,6 +660,11 @@ def validate(plan: PlanInputs) -> PlanInputs:
             _fail(f"balances[{j}].balance", "must be a number, not negative")
         if a.cost is not None and not (np.isfinite(a.cost) and a.cost >= 0):
             _fail(f"balances[{j}].cost", "must be a number, not negative")
+    for j, (name, changes) in enumerate(plan.saved_scenarios):
+        try:
+            validate(apply_changes(replace(plan, saved_scenarios=()), changes))
+        except Exception as e:                   # a bad path, a wrong type, an invalid value
+            _fail(f"saved_scenarios[{j}]", f"{name!r}: {e}")
     return plan
 
 

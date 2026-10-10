@@ -41,14 +41,13 @@ def _success(plan: PlanInputs, F: tuple) -> float:
 
 
 def _lifespan_run(plan: PlanInputs, deaths: np.ndarray):
-    """The plan at a steady median return over each of ``deaths``' lifespans."""
-    r = plan.returns
-    g = engine.median_return(r.mean, r.sd)
-    return engine.simulate(plan, np.full((engine.life_steps(plan), deaths.shape[1]), g), deaths)
+    """The plan at the average future's steady returns over each of ``deaths``' lifespans."""
+    g = engine.average_returns(plan, engine.life_steps(plan))
+    return engine.simulate(plan, np.repeat(g, deaths.shape[1], axis=1), deaths)
 
 
 def _expected_legacy(plan: PlanInputs, deaths: np.ndarray) -> float:
-    """Mean after-tax legacy over ``deaths`` at a steady median return: what a start
+    """Mean after-tax legacy over ``deaths`` at the average future's steady returns: what a start
     age is worth once you might not live to collect it."""
     return float(_lifespan_run(plan, deaths).legacy.mean())
 
@@ -234,10 +233,8 @@ def _with_target(plan: PlanInputs, target: float) -> PlanInputs:
 
 def _drawdown_row(plan: PlanInputs, F: tuple, deaths: np.ndarray, target, label: str) -> DrawdownRow:
     life = _lifespan_run(plan, deaths)
-    r = plan.returns
     T = engine.steps(plan)
-    avg = engine.simulate(plan, np.full((T, 1), engine.median_return(r.mean, r.sd)),
-                          engine.average_deaths(plan))
+    avg = engine.simulate(plan, engine.average_returns(plan, T), engine.average_deaths(plan))
     first = float(avg.tax[avg.retire_step, 0]) if avg.retire_step < T else 0.0
     return DrawdownRow(target, label, _success(plan, F), float(life.legacy.mean()),
                        float(life.lifetime_tax.mean()), first)

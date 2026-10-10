@@ -40,13 +40,14 @@ stock-analysis retire --optimize --target 85
 
 Prints the highest safe base spending, the earliest safe retirement (everyone
 moved together), the best yearly RRSP draw for each goal (most legacy, least
-lifetime tax, safest; GUI: "How much to draw from RRSPs") and the best CPP/OAS start ages, ranked by the average future's
-after-tax legacy. It takes about 20 s and writes no report. The GUI's
-**Optimize** tab runs the same tools and adds a table of what every other start
-age costs. When the gain is under 0.5% of the legacy, call it a near tie and say
-so: health, longevity and wanting the income sooner should decide instead. The
-optimizer assumes everyone lives to `end_age`. Deferred ideas are listed in
-`src/stockanalysis/retirement/README.md` under "Future improvements".
+lifetime tax, safest; GUI: "How much to draw from RRSPs") and the best CPP/OAS start
+ages, ranked by the expected after-tax legacy over 300 drawn lifespans (so a late
+start counts only where the person lives to collect it). It takes about 30 s and
+writes no report. The GUI's **Optimize** tab runs the same tools and adds a table
+of what every other start age costs. When the gain is under 0.5% of the legacy,
+call it a near tie and say so: health and wanting the income sooner should decide
+instead. New ideas go in `src/stockanalysis/retirement/README.md` under "Future
+improvements".
 
 ### Edit the plan in a browser (`--gui`)
 
@@ -55,8 +56,9 @@ stock-analysis retire --gui                 # opens http://127.0.0.1:8765/
 stock-analysis retire --gui --port 9000 --no-browser
 ```
 
-A local page (only reachable from this machine) with tabs for People, Spending,
-Home, Investing and Advanced. Every edit re-runs a quick 1,000-future estimate:
+A local page (only reachable from this machine) with tabs for People, Spending
+(money events, guardrails), Education, Home, Investing, Inflation, Optimize, Compare (saved
+scenarios side by side) and Advanced (pension match, ESPP, RRSP room). Every edit re-runs a quick 1,000-future estimate:
 the report's gauge and money-left chart, plus tiles that show the change against
 the *saved* plan on the same futures. An invalid value is named and highlighted
 and never saved. **Save** writes plan.json (the previous file is kept as
@@ -77,14 +79,17 @@ Library: `from stockanalysis.retirement import load_inputs, run` then
 
 | Section | Holds |
 |---|---|
-| `people[]` (1–2) | `age`, `retire_age`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
-| `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), bad-market rule (`bad_market_cut` when investments fall below `bad_market_trigger` × retirement-day value) |
+| `people[]` (1–2) | `age`, `retire_age`, `sex`, `salary`, `pension_match`, `espp`, `rrsp_room`, `cpp_start_age` / `oas_start_age` (60–70 / 65–70), `cpp_at_65` (the My Service Canada figure — prefer it) or `cpp_years` + `cpp_earnings_ratio`, `years_in_canada_at_65`, `rrif_start_age` (default 65), `lif_start_age` (50–71; default max(50, retire_age)), `unlock_share` (≤ 0.5), `tfsa_room` (unused room from past years, *before* this year's limit), `contributions` / `contributions_when_partner_retired` per account (`pension`, `rrsp`, `tfsa`, `nonreg`) |
+| `spending` | after-tax `base` (today's $), dated `changes`, go-go / slow-go / no-go (`slow_go_age`, `slow_go_share`, `no_go_age`, `no_go_share`, `care`), `survivor_share`, `rule` (`bad_market`: one cut when investments fall below `bad_market_trigger` × their value the first year nobody earns; `guardrails`: Guyton-Klinger steps between `guardrail_floor` and `guardrail_ceiling`) |
 | `home` | `value`, `downsize_age` (people[0]'s age; can't be in the past), `new_value`, costs, `property_tax`, `insurance` |
-| `returns` | real `mean`, `sd`, `paths`, `seed` |
+| `returns` | `model` (`history` default / `lognormal`), `stocks` / `bonds` (expected real returns; default FP Canada), `mix` (`[[age, stock share], ...]` on people[0]'s age); real `mean`, `sd` (lognormal only), `paths`, `seed`; `inflation`, `inflation_shocks` |
+| `cost_growth` | yearly growth above inflation for `base`, `care`, `education`, `property_tax`, `insurance` (defaults in `rules.COST_GROWTH`, base 0) |
 | `withdrawal` | `rrsp_first` / `proportional` / `steady_income` (+ `steady_income_target`) |
-| `education` | kids (`age`, `start_age`, `years`, `living` home/away), costs per student-year, family RESP (`resp_balance` from holdings by default; `contribute` while the grant is still earned), `student_grant` (Canada Student Grant, tested on last year's taxable family income, so the withdrawal order matters) |
+| `education` | kids (`age`, `start_age`, `years`, `living` home/away), costs per student-year, family RESP (`resp_balance` from holdings by default; `contribute` while the grant is still earned), `student_grant` (Canada Student Grant, tested on last year's taxable family income, so the withdrawal order matters), `childcare` (for the deduction); the kids also drive the Canada Child Benefit |
 | `nonreg_income` | yearly non-registered payouts as shares of the balance (`eligible_dividends`, `foreign_dividends`, `interest`), taxed every year; with `people[].salary` for the working years |
 | `holdings` | owner keywords (whole words) and explicit `accounts` for names that don't say RRSP / TFSA / RESP / LIRA-LIF / Locked-in; an unsorted account **stops the run** |
+| `events` | money in / out (one-off or every N years) and side income taxed like salary |
+| `saved_scenarios` | named `{dotted.path: value}` versions, compared side by side in the report and the Compare tab |
 | `scenarios` | `downsize_ages` to test (null = never), `cheaper_home_share` |
 
 ## Reading the report (explain it in plain words)
@@ -116,6 +121,9 @@ big decisions.
   page (CRA T4127 + TD1/TD1AB forms, Service Canada OAS/CPP pages, the CRA RRIF
   factor chart, Alberta's Superintendent of Pensions interest-rate tables) —
   **never from memory** — bump `TAX_YEAR`, and run `pytest tests/test_retirement_*.py`.
+  The historical series `CPI`, `US_RETURNS` (Damodaran `histretSP`) and `US_CPI`
+  (BLS CUUR0000SA0 annual average) gain a year each January; `RETURN_ASSUMPTIONS`
+  follows FP Canada's Projection Assumption Guidelines each spring.
   The CPP survivor amounts (`rules.CPP["survivor"]`, `death_benefit`) change every
   January with the rest of `rules.CPP`. The life table in `mortality.py` changes only
   when Statistics Canada publishes a new three-year table (13-10-0114-01) or the
@@ -138,6 +146,11 @@ big decisions.
   `people[].rrsp_room`; without it, contributions above the room are wrongly counted
   as deductible. The Canada Child Benefit is modelled for `education.kids` under 18;
   `education.childcare` adds the child care deduction (lower earner, under 16).
+- To compare alternatives, save them as `saved_scenarios` (GUI: Compare tab) rather
+  than editing the plan back and forth; the report then shows them side by side.
+- Big one-off costs (cars, renovations, weddings), inheritances and part-time work
+  go in `events` (see the package README); don't fake them with permanent spending
+  changes.
 - An ESPP (`people[].espp`) buys discounted employer shares from salary into the
   non-registered account; don't also enter it as a `nonreg` contribution.
 - The report's **Tax refund check** compares the model's expected refund with the
@@ -146,6 +159,6 @@ big decisions.
 
 ## Known simplifications
 
-Both spouses live to `end_age` (no survivor benefits); no GIS, QPP or provinces
-other than Alberta; non-registered payouts as a fixed share of the balance (no fund capital-gains distributions); full-year CPP/OAS
+Lifespans are independent and the year of death is a full year; no GIS, QPP or
+provinces other than Alberta; non-registered payouts as a fixed share of the balance (no fund capital-gains distributions); full-year CPP/OAS
 in the start year; household events (stages, downsizing) key on people[0]'s age.

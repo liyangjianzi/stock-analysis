@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stockanalysis.retirement import inputs
+from stockanalysis.retirement import inputs, rules
 
 
 @pytest.fixture
@@ -240,3 +240,209 @@ def test_rrsp_room_and_childcare_are_optional_and_not_negative():
     with pytest.raises(inputs.PlanError) as e:
         inputs.parse(d)
     assert e.value.field == "education.childcare"
+
+
+def test_ages_past_the_life_table_are_rejected():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["end_age"] = 115
+    d["home"] = None
+    d["people"][0]["age"] = 111
+    d["people"][0]["retire_age"] = 111
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].age"
+
+
+# -- one-time money events -------------------------------------------------------
+
+def test_events_parse_and_default_to_none():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["events"] = [{"label": "Car", "amount": -40_000, "year": 2030, "every": 10},
+                   {"label": "Part-time", "kind": "income", "amount": 30_000, "person": "B",
+                    "age": 60, "until_age": 64}]
+    plan = inputs.parse(d)
+    car, work = plan.events
+    assert (car.label, car.amount, car.year, car.every, car.kind) == ("Car", -40_000, 2030, 10, "cash")
+    assert (work.kind, work.person, work.age, work.until_age) == ("income", "B", 60, 64)
+    no_events = copy.deepcopy(inputs.TEMPLATE)
+    no_events.pop("events", None)
+    assert inputs.parse(no_events).events == ()
+
+
+@pytest.mark.parametrize("bad, field", [
+    ({"label": "x", "amount": 1}, "events[0].year"),                                  # no start
+    ({"label": "x", "amount": 1, "year": 2030, "age": 60}, "events[0].year"),          # both starts
+    ({"label": "x", "amount": 1, "year": 2030, "every": 0}, "events[0].every"),
+    ({"label": "x", "amount": 1, "year": 2030, "until": 2029}, "events[0].until"),
+    ({"label": "x", "amount": 1, "year": 2030, "kind": "gift"}, "events[0].kind"),
+    ({"label": "x", "amount": -1, "year": 2030, "kind": "income"}, "events[0].amount"),
+    ({"label": "x", "amount": 1, "year": 2030, "kind": "income", "person": "Z"}, "events[0].person"),
+    ({"label": "x", "amount": None, "year": 2030}, "events[0].amount"),
+    ({"label": "x", "amount": "5", "year": 2030}, "events[0].amount"),
+    ({"label": "x", "amount": 1, "year": 2030.5}, "events[0].year"),
+    ({"label": "x", "amount": 1, "year": 2020}, "events[0].year"),                  # before the plan, once
+    ({"label": "x", "amount": 1, "year": 2030, "until_age": 40}, "events[0].until_age"),
+])
+def test_bad_events_name_the_field(bad, field):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["events"] = [bad]
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == field
+
+
+def test_guardrail_settings_default_and_validate():
+    s = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).spending
+    assert (s.rule, s.guardrail_band, s.guardrail_step, s.guardrail_stop_years,
+            s.guardrail_floor, s.guardrail_ceiling) == ("bad_market", 0.20, 0.10, 15, 0.75, 1.5)
+    for key, bad in (("rule", "yolo"), ("guardrail_band", 0.0), ("guardrail_step", 0.6),
+                     ("guardrail_stop_years", -1), ("guardrail_floor", 1.2)):
+        d = copy.deepcopy(inputs.TEMPLATE)
+        d["spending"][key] = bad
+        with pytest.raises(inputs.PlanError) as e:
+            inputs.parse(d)
+        assert e.value.field == f"spending.{key}"
+
+
+# -- saved scenarios ------------------------------------------------------------------
+
+def test_saved_scenarios_parse_and_bad_ones_name_the_scenario():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "Retire later", "changes": {"people.0.retire_age": 62}}]
+    assert inputs.parse(d).saved_scenarios == (("Retire later", {"people.0.retire_age": 62}),)
+    for changes in ({"people.0.nope": 1}, {"people.0.retire_age": 10}):    # no such field / invalid
+        d["saved_scenarios"] = [{"name": "Bad", "changes": changes}]
+        with pytest.raises(inputs.PlanError) as e:
+            inputs.parse(d)
+        assert e.value.field == "saved_scenarios[0]"
+
+
+@pytest.mark.parametrize("changes", [{"people.0.retire_age": "62"}, {"spending": 5}, {"home.value": None}])
+def test_wrong_typed_scenario_values_are_plan_errors(changes):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "x", "changes": changes}]
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "saved_scenarios[0]"
+
+
+def test_scenarios_can_change_contributions_and_education_costs():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "More RRSP", "changes": {"people.0.contributions.rrsp": 15_000}}]
+    plan = inputs.parse(d)
+    v = inputs.apply_changes(plan, dict(plan.saved_scenarios[0][1]))
+    assert v.people[0].contributions["rrsp"] == 15_000 and plan.people[0].contributions["rrsp"] != 15_000
+
+
+
+def test_spousal_rrsp_needs_a_spouse():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["people"][0]["contributions"]["spousal_rrsp"] = 5_000
+    assert inputs.parse(d).people[0].contributions["spousal_rrsp"] == 5_000
+    d["people"] = d["people"][:1]
+    d.pop("balances", None)
+    d["balances"] = [{"owner": "A", "type": "rrsp", "balance": 1_000}]
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "people[0].contributions.spousal_rrsp"
+
+
+
+def test_inflation_is_bounded():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"]["inflation"] = 0.5
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "returns.inflation"
+
+
+def test_cost_growth_defaults_come_from_rules_and_base_is_zero():
+    g = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).cost_growth
+    assert g.rate("base") == 0.0
+    for name in ("care", "education", "property_tax", "insurance"):
+        assert g.rate(name) == rules.COST_GROWTH[name].value
+
+
+def test_cost_growth_overrides_and_validation():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["cost_growth"] = {"base": 0.0154, "care": -0.01}
+    g = inputs.parse(d).cost_growth
+    assert g.rate("base") == 0.0154 and g.rate("care") == -0.01
+    d["cost_growth"] = {"care": 0.5}
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == "cost_growth.care"
+
+
+def test_inflation_shocks_default_on_and_defaults_cover_the_new_inputs():
+    assert inputs.parse(copy.deepcopy(inputs.TEMPLATE)).returns.inflation_shocks is True
+    dflt = inputs.defaults()
+    assert dflt["returns"] == {"inflation_shocks": True, "model": "history",
+                               "stocks": pytest.approx(rules.real_return("canadian_equities")),
+                               "bonds": pytest.approx(rules.real_return("fixed_income")),
+                               "mix": [[0, 0.8]]}
+    assert dflt["cost_growth"]["base"] == 0.0 and dflt["cost_growth"]["care"] == rules.COST_GROWTH["care"].value
+
+
+def test_returns_default_to_history_with_fp_canada_averages():
+    r = inputs.parse(copy.deepcopy(inputs.TEMPLATE)).returns
+    assert r.model == "history" and r.mix == ((0, 0.8),)
+    assert r.stock_return == pytest.approx(rules.real_return("canadian_equities"))
+    assert r.bond_return == pytest.approx(rules.real_return("fixed_income"))
+
+
+def test_a_plan_without_the_new_fields_loads_with_the_defaults():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"] = {"mean": 0.05, "sd": 0.15, "paths": 100, "seed": 7}
+    r = inputs.parse(d).returns
+    assert r.model == "history" and r.stocks is None and r.bonds is None and r.mix == inputs.DEFAULT_MIX
+
+
+def test_stock_share_glides_between_points_and_is_flat_outside():
+    mix = ((45, 0.9), (65, 0.6), (80, 0.4))
+    assert inputs.stock_share(mix, 30) == 0.9
+    assert inputs.stock_share(mix, 55) == pytest.approx(0.75)
+    assert inputs.stock_share(mix, 90) == 0.4
+    assert np.allclose(inputs.stock_share(mix, np.array([45, 65, 72.5])), [0.9, 0.6, 0.5])
+    assert inputs.stock_share(((0, 0.8),), 70) == 0.8
+
+
+@pytest.mark.parametrize("ret, field", [
+    ({"model": "bootstrap"}, "returns.model"),
+    ({"stocks": 0.2}, "returns.stocks"),
+    ({"bonds": -0.1}, "returns.bonds"),
+    ({"mix": []}, "returns.mix"),
+    ({"mix": [[60]]}, "returns.mix[0]"),
+    ({"mix": [[60, 1.2]]}, "returns.mix[0]"),
+    ({"mix": [[200, 0.5]]}, "returns.mix[0]"),
+    ({"mix": [[60, 0.5], [60, 0.4]]}, "returns.mix[1]"),
+])
+def test_bad_return_inputs_name_the_field(ret, field):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"].update(ret)
+    with pytest.raises(inputs.PlanError) as e:
+        inputs.parse(d)
+    assert e.value.field == field
+
+
+def test_a_saved_scenario_can_change_a_mix_point():
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"]["mix"] = [[50, 0.9], [70, 0.5]]
+    p = inputs.apply_changes(inputs.parse(d), {"returns.mix.1.1": 0.4})
+    assert p.returns.mix == ((50, 0.9), (70, 0.4))
+
+
+@pytest.mark.parametrize("changes", [
+    {"returns.mix": [[0, 0.6], [65, 0.4]]},
+    {"returns.mix.0": [0, 0.5]},
+])
+def test_apply_changes_accepts_a_whole_mix_or_point(changes):
+    p = inputs.validate(inputs.apply_changes(inputs.parse(copy.deepcopy(inputs.TEMPLATE)), changes))
+    assert all(isinstance(pt, tuple) for pt in p.returns.mix)
+
+
+def test_mix_accepts_numpy_numbers():
+    from dataclasses import replace
+    p = inputs.parse(copy.deepcopy(inputs.TEMPLATE))
+    p = replace(p, returns=replace(p.returns, mix=[[np.int64(50), np.float64(0.7)]]))
+    assert inputs.validate(p).returns.mix == ((50, 0.7),)

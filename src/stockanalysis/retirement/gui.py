@@ -13,6 +13,8 @@ A stdlib ``http.server`` on 127.0.0.1 serves one self-contained page
 - ``POST /api/optimize/affordability``  highest spending / earliest retirement at a target
 - ``POST /api/optimize/benefits``       best CPP / OAS start ages (~20 s)
 - ``POST /api/optimize/drawdown``       every yearly RRSP-draw target, best per goal (~15 s)
+- ``POST /api/compare``                 the plan and its saved scenarios, same futures
+- ``GET  /theme.css``, ``/theme.js``  the report's light/dark palette and theme switch
 - ``GET  /reports/<path>``       files under the output root (browsers won't follow
                                  ``file://`` links from an http page)
 
@@ -39,9 +41,11 @@ from importlib import resources
 from pathlib import Path
 
 from .. import config
-from . import cli, engine, inputs, optimize, report
+from . import cli, engine, inputs, optimize, report, scenarios
 
 PREVIEW_PATHS = 1_000
+THEME_FILES = {"/theme.css": (report.THEME_CSS.encode("utf-8"), "text/css; charset=utf-8"),
+               "/theme.js": (report.THEME_JS.encode("utf-8"), "application/javascript; charset=utf-8")}
 HOST = "127.0.0.1"
 
 
@@ -53,17 +57,25 @@ def _error_body(e: Exception) -> dict:
 def summarize(result: engine.PlanResult, previous: float | None = None) -> dict:
     """The report's headline numbers plus the bad-luck future, the report's gauge
     (against ``previous``, the saved plan's success) and money-left chart."""
-    plan, sim, bad = result.inputs, result.simulated, result.bad_luck
+    plan, sim, bad, avg = result.inputs, result.simulated, result.bad_luck, result.average
     first = int(bad.first_shortfall_step[0])
+    chart = report.money_left_chart(sim, plan)
+    n = len(chart.data[0].x)
+    scale = report.future_scale(plan, max(n, len(avg.years) + 1))    # today's → each year's dollars
+    end = int(avg.end_step[0]) if avg.end_step is not None else len(avg.years)
     return {
         **report.headline(result),
         "legacy_bad": float(bad.legacy[0]),
         "short_years_bad": int(bad.shortfall_years[0]),
         "first_short_age_bad": plan.people[0].age + first if first < len(bad.years) else None,
         "median_return": result.average_return,
-        "gauge": json.loads(report.success_meter(sim.success, previous,
-                                                 title=report.lasts_label(plan)).to_json()),
-        "chart": json.loads(report.money_left_chart(sim, plan).to_json()),
+        "gauge": json.loads(report.success_meter(sim.success, previous).to_json()),
+        "gauge_title": report.lasts_label(plan),
+        "chart": json.loads(chart.to_json()),
+        "chart_future": json.loads(report.money_left_chart(sim, plan, scale).to_json()),
+        "future_factor": scale[:n].tolist(),
+        "legacy_factor": float(scale[min(end, len(scale) - 1)]),
+        "retire_factor": float(scale[min(avg.retire_step, len(scale) - 1)]),
         "education": _education_summary(result),
     }
 
@@ -149,6 +161,11 @@ class PlannerApp:
         plan, _ = self.with_balances(inputs.parse(d))
         res = optimize.best_benefit_ages(plan, paths=self.preview_paths)
         return dataclasses.asdict(dataclasses.replace(res, plan=None))   # the ages are in people
+
+    def compare(self, d: dict) -> dict:
+        plan, _ = self.with_balances(inputs.parse(d))
+        rows = scenarios.compare_saved(plan, paths=self.preview_paths, seed=plan.returns.seed)
+        return {"rows": [dataclasses.asdict(r) for r in rows]}
 
     def drawdown(self, d: dict) -> dict:
         plan, _ = self.with_balances(inputs.parse(d))
@@ -253,6 +270,9 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/plotly.js":
                 return self._send(HTTPStatus.OK, self.server.plotly_js(), "application/javascript",
                                   cache="max-age=86400")     # ~4.6 MB, fixed per install
+            if path in THEME_FILES:                    # the report's palette and theme switch
+                body, ctype = THEME_FILES[path]
+                return self._send(HTTPStatus.OK, body, ctype)
             if path == "/api/plan":
                 return self._json(self.app.plan_state())
             if path == "/api/report/status":
@@ -286,6 +306,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(self.app.affordability(body["plan"], float(body.get("target", 0.9))))
             if self.path == "/api/optimize/benefits":
                 return self._json(self.app.benefits(body["plan"]))
+            if self.path == "/api/compare":
+                return self._json(self.app.compare(body["plan"]))
             if self.path == "/api/optimize/drawdown":
                 return self._json(self.app.drawdown(body["plan"]))
             if self.path == "/api/reload-balances":
@@ -316,12 +338,13 @@ class PlannerServer(ThreadingHTTPServer):
 
 
 def serve(plan_path, *, port: int = 8765, open_browser: bool = True, holdings_path=None,
-          out_root=None, report_paths: int | None = None, scenario_paths: int | None = None) -> None:
+          out_root=None, report_paths: int | None = None, scenario_paths: int | None = None,
+          bank=None) -> None:
     """Run the planner page until Ctrl-C. ``report_paths`` / ``scenario_paths`` are the
     CLI's ``--paths`` / ``--scenario-paths`` for the report button."""
     app = PlannerApp(plan_path, holdings_path=holdings_path, out_root=out_root,
                      report_paths=report_paths, scenario_paths=scenario_paths,
-                     bank=config.DEFAULT_RETIREMENT_BANK)
+                     bank=bank or config.DEFAULT_RETIREMENT_BANK)
     app.read_raw()                      # a missing plan fails here, not in the browser
     server = PlannerServer(app, port)
     print(f"Retirement planner: {server.url}  (editing {app.plan_path}; Ctrl-C to stop)")

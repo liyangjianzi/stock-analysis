@@ -178,3 +178,19 @@ def test_salary_gets_payroll_credits_the_enhanced_cpp_deduction_and_the_employme
 def test_deductions_lower_net_income():
     with_ded = float(tax.income_tax(ordinary=80_000, deductions=10_000, age=40))
     assert with_ded == pytest.approx(float(tax.income_tax(ordinary=70_000, age=40)))
+
+
+def test_unknown_income_means_no_child_benefit():
+    assert float(tax.child_benefit(np.nan, 0, 1)) == 0.0
+
+
+def test_no_cpp_premiums_from_age_70():
+    assert float(tax.payroll_premiums(50_000, age=70)) == pytest.approx(0.0163 * 50_000)
+    assert float(tax.payroll_premiums(50_000, age=69)) > 0.0163 * 50_000
+
+
+def test_the_federal_pension_credit_shrinks_with_prices():
+    full = t(pension=40_000, age=70)
+    shrunk = float(tax.income_tax(pension=40_000, age=70, fixed_scale=0.5))
+    # Half the C$2,000 credit at 14%: 140 more federal tax.
+    assert shrunk - full == pytest.approx(0.14 * 1_000, abs=0.01)

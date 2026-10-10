@@ -8,8 +8,9 @@ import pytest
 from dataclasses import replace
 
 from stockanalysis.retirement import engine, rules, tax
-from stockanalysis.retirement.inputs import (Account, Home, NonregIncome, Person, PlanInputs,
-                                             Returns, Spending, SpendingChange, Withdrawal)
+from stockanalysis.retirement.inputs import (Account, CostGrowth, Education, Espp, Event, Home, Kid,
+                                             NonregIncome, Person, PlanInputs, Returns, Spending,
+                                             SpendingChange, Withdrawal)
 
 
 def person(**kw) -> Person:
@@ -27,7 +28,8 @@ def plan(people=None, accounts=(), base=30_000.0, end_age=63, strategy="rrsp_fir
     spend.update(spend_kw)
     return PlanInputs(province="AB", start_year=2026, end_age=end_age,
                       people=tuple(people or (person(),)), spending=Spending(**spend),
-                      home=home, returns=Returns(0.0, 0.0, 1, 1),
+                      home=home, returns=Returns(0.0, 0.0, 1, 1, inflation=0.0, model="lognormal"),
+                      cost_growth=CostGrowth(0.0, 0.0, 0.0, 0.0, 0.0),
                       withdrawal=Withdrawal(strategy, 58_000.0), accounts=tuple(accounts))
 
 
@@ -217,13 +219,13 @@ def test_bad_luck_is_the_tenth_percentile_path():
 
 def test_run_uses_the_median_return_and_replays_the_bad_luck_path():
     p = plan(accounts=[Account("A", "rrsp", 400_000.0)], base=30_000.0, end_age=80)
-    p = replace(p, returns=Returns(0.05, 0.15, 200, 3))
+    p = replace(p, returns=Returns(0.05, 0.15, 200, 3, model="lognormal"))
     result = engine.run(p)
     assert result.average_return == engine.median_return(0.05, 0.15)
     assert result.average.paths == 1 and result.simulated.paths == 200
     assert len(result.simulated.years) == engine.life_steps(p)
     assert len(result.average.years) == engine.steps(p)
-    R, D = engine.draw_futures(p, 200, 3)
+    R, D, _ = engine.draw_futures(p, 200, 3)
     replay = engine.simulate(p, R[:engine.steps(p), [result.bad_luck_path]], engine.average_deaths(p))
     for s in engine.SOURCES:
         np.testing.assert_allclose(result.bad_luck.income[s], replay.income[s])
@@ -476,7 +478,7 @@ def test_bad_luck_path_is_ranked_on_returns_not_on_lifespans():
              base=30_000.0, end_age=95)
     p = replace(p, returns=Returns(0.05, 0.15, 300, 3))
     result = engine.run(p)
-    R, _ = engine.draw_futures(p, 300, 3)
+    R, _, _ = engine.draw_futures(p, 300, 3)
     T = engine.steps(p)
     fixed = engine.simulate(p, R[:T], np.repeat(engine.average_deaths(p), 300, axis=1))
     assert result.bad_luck_path == engine.bad_luck_index(fixed)
@@ -548,7 +550,6 @@ def test_lifetime_tax_leaves_out_cpp_and_ei_premiums():
 
 # -- ESPP --------------------------------------------------------------------------
 
-from stockanalysis.retirement.inputs import Espp  # noqa: E402
 
 
 def test_espp_buys_discounted_shares_into_nonreg_and_the_discount_is_taxed():
@@ -588,7 +589,6 @@ def test_no_salary_means_no_espp():
 
 # -- child benefit, childcare, RRSP room ------------------------------------------------
 
-from stockanalysis.retirement.inputs import Education, Kid  # noqa: E402
 
 
 def with_kids(p, ages, childcare=0.0):
@@ -664,3 +664,547 @@ def test_a_workers_withdrawals_are_taxed_on_top_of_the_salary():
     extra = float(tax.income_tax(salary=100_000.0, gains=drawn, age=40) - tax.income_tax(salary=100_000.0, age=40))
     pay = float(tax.income_tax(salary=100_000.0, age=40)) + float(tax.payroll_premiums(100_000.0))
     assert proj.tax[0, 0] == pytest.approx(pay + extra, abs=2.0)
+
+
+# -- clean-up: deaths and the household's events ---------------------------------------
+
+def _resp_plan(order):
+    """A retired couple; A has a RRIF, B nothing; one child finishing school in year 2
+    with RESP growth left over."""
+    a = person(id="A", name="A", age=70, retire_age=60, rrif_start_age=65)
+    b = person(id="B", name="B", age=70, retire_age=60, rrif_start_age=65)
+    people = [a, b] if order == "AB" else [b, a]
+    kid = Kid(name="K", age=19)
+    p = plan(people=people, accounts=[Account("B", "rrsp", 600_000.0), Account("B", "tfsa", 300_000.0)],
+             base=40_000.0, end_age=76)
+    return replace(p, education=Education(kids=(kid,), resp_balance=150_000.0, contributed=20_000.0,
+                                          grants=0.0, contribute=False, student_grant=False))
+
+
+def test_leftover_resp_money_goes_to_the_living_parent_whatever_the_order():
+    # A dies after year 0 in both orders; the leftover growth must be taxed as B's income.
+    ab = _resp_plan("AB")
+    ba = _resp_plan("BA")
+    d_ab = np.array([[71], [90]])          # (A, B)
+    d_ba = np.array([[90], [71]])          # (B, A)
+    one = engine.simulate(ab, np.zeros((engine.steps(ab), 1)), d_ab)
+    two = engine.simulate(ba, np.zeros((engine.steps(ba), 1)), d_ba)
+    end = one.school.end_step
+    assert one.tax[end, 0] == pytest.approx(two.tax[end, 0], abs=1.0)
+
+
+def test_the_bad_market_cut_starts_when_the_only_worker_dies():
+    a = person(id="A", name="A", age=50, retire_age=60)                 # works, dies after year 0
+    b = person(id="B", name="B", age=62, retire_age=60)
+    p = plan(people=[a, b], accounts=[Account("B", "tfsa", 2_000_000.0)], base=40_000.0, end_age=70,
+             bad_market_cut=0.10, bad_market_trigger=0.80)
+    returns = np.full((engine.steps(p), 1), -0.30)
+    returns[0] = 0.0
+    proj = engine.simulate(p, returns, np.array([[51], [90]]))
+    assert proj.need[2, 0] == pytest.approx(40_000.0 * 0.70 * 0.90)     # survivor share, then the cut
+
+
+def test_year_0_child_benefit_estimates_last_years_net_income():
+    w = worker(salary=100_000.0, contributions={"rrsp": 20_000.0})
+    proj = run_flat(with_kids(plan(people=[w], base=40_000.0, end_age=50), ages=(10,)))
+    assert proj.income["ccb"][0, 0] == pytest.approx(float(tax.child_benefit(80_000.0, 0, 1)))
+
+
+def test_leftover_resp_growth_into_the_rrsp_respects_rrsp_room():
+    p = plan(people=[person(age=60, rrsp_room=10_000.0)], base=0.0, end_age=62)
+    p = replace(p, education=Education(kids=(Kid(name="K", age=21),), resp_balance=150_000.0,
+                                       contributed=20_000.0, grants=0.0, contribute=False,
+                                       student_grant=False))
+    proj = run_flat(p)
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(10_000.0)
+
+
+# -- one-time money events ----------------------------------------------------------
+
+
+
+def test_money_in_is_saved_untaxed():
+    p = replace(plan(base=0.0, end_age=65), events=(Event("Inheritance", 100_000.0, year=2027),))
+    proj = run_flat(p)
+    assert proj.income["other"][1, 0] == 100_000.0 and proj.tax[1, 0] == 0.0
+    assert proj.investments[2, 0] - proj.investments[1, 0] == pytest.approx(100_000.0)
+
+
+def test_money_out_repeats_every_n_years_until_the_end_year():
+    car = Event("Car", -40_000.0, year=2027, every=3, until=2032)
+    proj = run_flat(replace(plan(accounts=[Account("A", "tfsa", 2_000_000.0)], base=30_000.0, end_age=70),
+                            events=(car,)))
+    assert [proj.need[t, 0] for t in (0, 1, 2, 4, 7)] == [30_000.0, 70_000.0, 30_000.0, 70_000.0, 30_000.0]
+
+
+def test_temporary_income_is_taxed_like_salary_and_stops():
+    job = Event("Part-time", 30_000.0, kind="income", year=2027, until=2028)
+    proj = run_flat(replace(plan(base=0.0, end_age=65), events=(job,)))
+    assert proj.income["earned"][1, 0] == 30_000.0 and proj.income["earned"][3, 0] == 0.0
+    expected = float(tax.income_tax(salary=30_000.0, age=61)) + float(tax.payroll_premiums(30_000.0))
+    assert proj.tax[1, 0] == pytest.approx(expected, abs=1.0)
+
+
+def test_income_by_age_belongs_to_its_person_and_stops_at_death():
+    a = person(id="A", name="A", age=60)
+    b = person(id="B", name="B", age=60)
+    job = Event("B works", 20_000.0, kind="income", person="B", age=62, until_age=65)
+    p = replace(plan(people=[a, b], accounts=[Account("A", "tfsa", 1_000_000.0)], base=30_000.0,
+                     end_age=70), events=(job,))
+    proj = engine.simulate(p, np.zeros((engine.steps(p), 1)), np.array([[90], [64]]))
+    assert [proj.income["earned"][t, 0] for t in (1, 2, 3, 4)] == [0.0, 20_000.0, 20_000.0, 0.0]
+
+
+def test_sources_add_up_with_events():
+    events = (Event("In", 50_000.0, year=2027), Event("Out", -20_000.0, year=2028),
+              Event("Job", 25_000.0, kind="income", year=2026, until=2029))
+    p = replace(plan(accounts=[Account("A", "rrsp", 300_000.0), Account("A", "tfsa", 50_000.0)],
+                     base=40_000.0, end_age=70), events=events)
+    proj = run_flat(p)
+    total = sum(proj.income[s] for s in engine.SOURCES)
+    np.testing.assert_allclose(total, proj.need + proj.tax + proj.saved, atol=2.0)
+
+
+# -- guardrail spending ---------------------------------------------------------------
+
+def _guarded(rate_path, end_age=100, **kw):
+    p = plan(people=[person(age=60)], accounts=[Account("A", "tfsa", 1_000_000.0)], base=40_000.0,
+             end_age=end_age, rule="guardrails", bad_market_cut=0.10, bad_market_trigger=0.80, **kw)
+    return engine.simulate(p, np.full((engine.steps(p), 1), rate_path))
+
+
+def test_guardrails_cut_spending_in_steps_when_the_withdrawal_rate_climbs():
+    proj = _guarded(-0.25)
+    # 4% to start; after one -25% year the rate is 5.6% (> 4.8%): cut 10%, and again.
+    assert proj.need[0, 0] == 40_000.0
+    assert proj.need[1, 0] == pytest.approx(36_000.0)           # the bad-market cut doesn't stack
+    assert proj.need[2, 0] == pytest.approx(32_400.0)
+    assert proj.spend_adjust[2, 0] == pytest.approx(0.81)
+
+
+def test_guardrails_raise_spending_after_strong_years():
+    proj = _guarded(0.30)
+    assert proj.need[1, 0] == pytest.approx(40_000.0)            # 3.21%: not yet below 3.2%
+    assert proj.need[2, 0] == pytest.approx(44_000.0)
+
+
+def test_no_guardrail_cuts_in_the_last_years():
+    proj = _guarded(-0.25, end_age=70)                           # every year is within the last 15
+    assert proj.need[1, 0] == pytest.approx(40_000.0) and proj.need[2, 0] == pytest.approx(40_000.0)
+
+
+def test_the_default_rule_never_adjusts_spending():
+    proj = run_flat(plan(accounts=[Account("A", "tfsa", 1_000_000.0)], base=40_000.0, end_age=70))
+    assert (proj.spend_adjust == 1.0).all()
+
+
+# -- review fixes: events, premiums, guardrails ------------------------------------------
+
+def test_a_one_off_cost_is_paid_from_savings_even_without_salaries():
+    w = worker(salary=None, retire_age=50)
+    base = plan(people=[w], accounts=[Account("A", "tfsa", 500_000.0)], base=40_000.0, end_age=55)
+    with_car = run_flat(replace(base, events=(Event("Car", -100_000.0, year=2027),)))
+    without = run_flat(base)
+    assert without.investments[2, 0] - with_car.investments[2, 0] == pytest.approx(100_000.0, abs=1.0)
+    assert with_car.income["earned"][1, 0] == without.income["earned"][1, 0]
+
+
+def test_side_income_premiums_combine_with_the_salary_and_stop_cpp_at_70():
+    w = worker(salary=105_000.0)
+    job = Event("Consulting", 20_000.0, kind="income", year=2026, until=2026)
+    base = plan(people=[w], base=40_000.0, end_age=50)
+    with_job, without = run_flat(replace(base, events=(job,))), run_flat(base)
+    assert with_job.premiums[0, 0] == pytest.approx(without.premiums[0, 0])     # already past every maximum
+    old = plan(people=[person(age=72)], base=0.0, end_age=75)
+    p = run_flat(replace(old, events=(Event("Part-time", 30_000.0, kind="income", year=2026, until=2026),)))
+    assert p.premiums[0, 0] == pytest.approx(0.0163 * 30_000.0)                    # EI only at 72
+
+
+def test_guardrails_wait_for_a_portfolio_before_setting_the_starting_rate():
+    p = replace(plan(people=[person(age=60)], base=30_000.0, end_age=100, rule="guardrails"),
+                events=(Event("Inheritance", 500_000.0, year=2028),))
+    proj = run_flat(p)
+    assert (proj.spend_adjust[:, 0] <= 1.0 + 1e-9).all()                        # never the endless raise
+
+
+def test_guardrail_cuts_stop_at_the_floor_and_raises_at_the_ceiling():
+    down = _guarded(-0.25)
+    assert down.spend_adjust[:, 0].min() == pytest.approx(0.75)    # 0.9^3 = 0.729 → held at the floor
+    up = _guarded(0.30)
+    assert up.spend_adjust[:, 0].max() <= 1.5 + 1e-9
+
+
+# -- TFSA top-up from non-registered money --------------------------------------------
+
+LIMIT = rules.TFSA["annual_limit"].value
+
+
+def _no_top_up(p):
+    return replace(p, withdrawal=replace(p.withdrawal, tfsa_top_up=False))
+
+
+def test_a_retiree_moves_new_tfsa_room_out_of_non_registered():
+    p = plan(accounts=[Account("A", "nonreg", 500_000.0, cost=500_000.0)], base=0.0)
+    proj = run_flat(p)
+    assert proj.tfsa_top_up[0, 0] == LIMIT and proj.tfsa_top_up[1, 0] == LIMIT
+    assert proj.balances["tfsa"][1, 0] == LIMIT and proj.balances["nonreg"][1, 0] == 500_000 - LIMIT
+    assert proj.investments[1, 0] == pytest.approx(500_000.0)    # a transfer, not spending
+    assert proj.tax[0, 0] == pytest.approx(0.0, abs=1e-6)          # no gain: nothing to tax
+    off = run_flat(_no_top_up(p))
+    assert off.tfsa_top_up[0, 0] == 0.0 and off.balances["tfsa"][1, 0] == 0.0
+
+
+def test_moving_shares_in_realizes_their_gain():
+    # Half the non-registered value is gain, so a 7,000 move realizes 3,500 of gain.
+    p = plan(accounts=[Account("A", "nonreg", 500_000.0, cost=250_000.0)], base=0.0,
+             people=[person(age=60)])
+    proj, off = run_flat(p), run_flat(_no_top_up(p))
+    expected = float(tax.income_tax(gains=LIMIT / 2, age=60))
+    assert proj.tax[0, 0] - off.tax[0, 0] == pytest.approx(expected, abs=1.0)
+
+
+def test_unused_room_carried_in_is_filled_too():
+    p = plan(people=[person(tfsa_room=20_000.0)], base=0.0,
+             accounts=[Account("A", "nonreg", 500_000.0, cost=500_000.0)])
+    assert run_flat(p).tfsa_top_up[0, 0] == 20_000.0 + LIMIT
+
+
+def test_a_partners_non_registered_money_fills_the_room():
+    a, b = person(id="A", name="A"), person(id="B", name="B")
+    p = plan(people=[a, b], base=0.0, accounts=[Account("B", "nonreg", 500_000.0, cost=500_000.0)])
+    proj = run_flat(p)
+    assert proj.tfsa_top_up[0, 0] == 2 * LIMIT                      # both TFSAs, from B's money
+
+
+def test_no_top_up_while_working():
+    p = plan(people=[person(age=55, retire_age=60)], base=0.0, end_age=62,
+             accounts=[Account("A", "nonreg", 500_000.0, cost=500_000.0)])
+    proj = run_flat(p)
+    assert proj.tfsa_top_up[:5, 0].sum() == 0.0 and proj.tfsa_top_up[5, 0] > 0
+
+
+# -- spousal RRSP ---------------------------------------------------------------------
+
+def _couple(a_kw=None, b_kw=None, **plan_kw):
+    a = person(id="A", name="A", **(a_kw or {}))
+    b = person(id="B", name="B", **(b_kw or {}))
+    return plan(people=[a, b], **plan_kw)
+
+
+def test_a_spousal_contribution_lands_in_the_partners_rrsp():
+    worker = {"age": 50, "retire_age": 55, "salary": 120_000.0, "contributions": {"spousal_rrsp": 10_000.0}}
+    p = _couple(worker, {"age": 50, "retire_age": 55}, base=0.0, end_age=56)
+    proj = run_flat(p)
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(10_000.0)       # B's RRSP holds it
+    assert proj.spousal_rrsp[0, 0, 0] == 10_000.0 and proj.spousal_rrsp[0, 1, 0] == 0.0
+    own = _couple({**worker, "contributions": {"rrsp": 10_000.0}}, {"age": 50, "retire_age": 55},
+                  base=0.0, end_age=56)
+    assert proj.tax[0, 0] == pytest.approx(run_flat(own).tax[0, 0], abs=1.0)   # same deduction for A
+
+
+def test_spousal_and_own_contributions_share_the_contributors_room():
+    worker = {"age": 50, "retire_age": 55, "salary": 120_000.0, "rrsp_room": 12_000.0,
+              "contributions": {"rrsp": 8_000.0, "spousal_rrsp": 8_000.0}}
+    proj = run_flat(_couple(worker, {"age": 50, "retire_age": 55}, base=0.0, end_age=56))
+    # 16,000 planned against 12,000 of room: own RRSP trimmed first, 4,000 to the TFSA.
+    assert proj.balances["rrsp"][1, 0] == pytest.approx(12_000.0)
+    assert proj.balances["tfsa"][1, 0] == pytest.approx(4_000.0)
+
+
+def _parts_pair():
+    zero = np.zeros(1)
+    mk = lambda age: {"ordinary": np.array([30_000.0]), "pension": zero.copy(), "gains": zero,
+                      "dividends": zero, "oas": zero, "age": age}
+    return [mk(60), mk(60)]
+
+
+def test_attribution_moves_recent_spousal_withdrawals_to_the_contributor():
+    parts = _parts_pair()
+    draw = np.array([[0.0], [30_000.0]])
+    bal = np.array([[0.0], [50_000.0]])
+    spousal = np.array([[0.0], [40_000.0]])            # B has 10,000 of own money
+    recent = np.zeros((3, 2, 1)); recent[1, 1] = 15_000.0
+    alive = np.ones((2, 1), dtype=bool)
+    engine._attribute(parts, [60, 60], [False, False], draw, bal, spousal, recent, alive)
+    # 30,000 drawn: 10,000 own money first, 20,000 spousal, of which 15,000 is recent.
+    assert parts[1]["ordinary"][0] == pytest.approx(15_000.0)
+    assert parts[0]["ordinary"][0] == pytest.approx(45_000.0)
+
+
+def test_no_attribution_when_own_money_covers_the_draw_or_the_contributor_died():
+    draw = np.array([[0.0], [10_000.0]])
+    bal = np.array([[0.0], [50_000.0]])
+    spousal = np.array([[0.0], [20_000.0]])
+    recent = np.zeros((3, 2, 1)); recent[0, 1] = 20_000.0
+    parts = _parts_pair()
+    engine._attribute(parts, [60, 60], [False, False], draw, bal, spousal, recent,
+                      np.ones((2, 1), dtype=bool))
+    assert parts[0]["ordinary"][0] == parts[1]["ordinary"][0] == 30_000.0
+    parts = _parts_pair()
+    engine._attribute(parts, [60, 60], [False, False], np.array([[0.0], [50_000.0]]), bal, spousal,
+                      recent, np.array([[False], [True]]))
+    assert parts[0]["ordinary"][0] == parts[1]["ordinary"][0] == 30_000.0
+
+
+
+# -- inflation ------------------------------------------------------------------------------
+
+def test_inflation_erodes_the_cost_base_so_gains_are_nominal():
+    # A retiree sells non-registered money bought at today's prices; with 3% inflation
+    # its book value is 3% lower in today's dollars each year, so selling it later
+    # realizes a (nominal) gain and costs tax even with flat real returns.
+    p = plan(accounts=[Account("A", "nonreg", 6_000_000.0, cost=6_000_000.0)], base=400_000.0,
+             end_age=75)
+    p = replace(p, withdrawal=replace(p.withdrawal, tfsa_top_up=False))
+    flat = run_flat(p)
+    hot = run_flat(replace(p, returns=replace(p.returns, inflation=0.03)))
+    assert flat.tax.sum() == pytest.approx(0.0, abs=1.0)              # no real gain, no tax
+    assert hot.tax.sum() > 10_000
+    # Money left at death carries the same nominal gain into the tax at death.
+    q = replace(p, spending=replace(p.spending, base=150_000.0))
+    assert run_flat(replace(q, returns=replace(q.returns, inflation=0.03))).death_tax[0] > run_flat(q).death_tax[0]
+
+
+def test_default_inflation_is_canadas_40_year_average():
+    assert Returns().inflation is None
+    assert Returns().inflation_rate == pytest.approx(rules.historical_inflation())
+    assert 0.02 < rules.historical_inflation() < 0.03
+    assert min(rules.CPI.value) == 1928 and max(rules.CPI.value) == rules.CPI.year
+    assert rules.historical_inflation() == pytest.approx(0.0242, abs=5e-5)   # still the last 40 years
+
+
+# -- inflation paths and the return lag ----------------------------------------------------
+
+def _shocky(**ret):
+    p = plan()
+    return replace(p, returns=replace(p.returns, **{"inflation": None, "inflation_shocks": True, "model": "lognormal", **ret}))
+
+
+def _centered_history():
+    hist = np.array([rules.CPI.value[y] for y in sorted(rules.CPI.value)])
+    whole = rules.historical_inflation(len(hist))
+    return list((1 + hist) * (1 + rules.historical_inflation()) / (1 + whole) - 1)
+
+
+def test_inflation_paths_are_5_year_blocks_of_history():
+    hist = _centered_history()
+    I = engine.draw_inflation(_shocky(), paths=50, years=12, seed=3)
+    assert I.shape == (12, 50)
+    for n in range(50):
+        for start in (0, 5):                      # each full block is a run of history (wrapping)
+            block = list(I[start:start + 5, n])
+            assert any(np.allclose((hist + hist)[k:k + 5], block, rtol=0, atol=1e-12)
+                       for k in range(len(hist)))
+    assert np.array_equal(I, engine.draw_inflation(_shocky(), 50, 12, 3))   # seeded
+
+
+def test_inflation_paths_reach_the_1970s_but_centre_on_the_last_40_years():
+    I = engine.draw_inflation(_shocky(), paths=2_000, years=40, seed=4)
+    assert I.max() > 0.10                 # 1981's 12.5%, centred: about 11.3%
+    assert (I > 0.08).sum(axis=0).max() >= 5   # a run of high-inflation years in one future
+    assert np.exp(np.log1p(I).mean()) - 1 == pytest.approx(rules.historical_inflation(), abs=1e-3)
+
+
+def test_paths_cover_horizons_longer_than_the_history():
+    I = engine.draw_inflation(_shocky(), paths=3, years=73, seed=1)
+    assert I.shape == (73, 3) and np.isfinite(I).all()
+
+
+def test_a_fixed_inflation_rate_means_no_shocks():
+    I = engine.draw_inflation(_shocky(inflation=0.03), paths=4, years=6, seed=1)
+    assert np.all(I == 0.03)
+    off = replace(_shocky(), returns=replace(_shocky().returns, inflation_shocks=False))
+    assert np.allclose(engine.draw_inflation(off, 4, 6, 1), rules.historical_inflation())
+
+
+def test_returns_lag_inflation_only_in_the_short_run():
+    avg = 0.025
+    R = np.array([[0.05], [0.05], [0.05]])
+    I = np.array([[avg], [0.068], [0.003]])
+    lagged = engine.lag_returns(R, I, avg)
+    assert lagged[0, 0] == pytest.approx(0.05)
+    assert lagged[1, 0] < 0.05 and lagged[2, 0] > 0.05
+
+
+def test_inflation_draws_leave_returns_and_lifespans_alone():
+    p = _shocky()
+    R1, D1, I1 = engine.draw_futures(p, 30, 5)
+    steady = replace(p, returns=replace(p.returns, inflation_shocks=False))
+    R0, D0, I0 = engine.draw_futures(steady, 30, 5)
+    assert np.array_equal(D1, D0)
+    unlagged = (1 + R1) * (1 + I1) / (1 + rules.historical_inflation()) - 1
+    assert np.allclose(unlagged, R0)
+
+
+def test_price_level_and_nominal_cost_base_follow_each_path():
+    p = plan(accounts=[Account("A", "nonreg", 1_000_000.0, cost=1_000_000.0)], base=0.0, end_age=63)
+    p = replace(p, withdrawal=replace(p.withdrawal, tfsa_top_up=False))
+    T = engine.steps(p)
+    infl = np.array([[0.10], [0.0], [0.0]])[:T]
+    proj = engine.simulate(p, np.zeros((T, 1)), None, infl)
+    assert proj.price_level[0, 0] == 1.0 and proj.price_level[1, 0] == pytest.approx(1.10)
+    assert proj.inflation[0, 0] == 0.10
+
+
+
+# -- costs that grow faster (or slower) than inflation --------------------------------------
+
+def _grow(p, **rates):
+    return replace(p, cost_growth=CostGrowth(**rates))
+
+
+def test_zero_growth_and_steady_inflation_change_nothing():
+    p = plan(accounts=[Account("A", "rrsp", 500_000.0)], base=40_000.0, end_age=66,
+             home=Home(value=800_000.0, property_tax=6_000.0, insurance=2_000.0))
+    zero = _grow(p, base=0.0, care=0.0, education=0.0, property_tax=0.0, insurance=0.0)
+    np.testing.assert_allclose(run_flat(zero).need[:, 0], 40_000.0)
+
+
+def test_base_and_home_costs_grow_at_their_own_rates():
+    p = plan(base=40_000.0, end_age=66, home=Home(value=800_000.0, property_tax=6_000.0, insurance=2_000.0),
+             accounts=[Account("A", "tfsa", 2_000_000.0)])
+    g = _grow(p, base=0.01, property_tax=0.05, insurance=0.0, care=0.0, education=0.0)
+    need = run_flat(g).need[:, 0]
+    t = 4
+    expected = (40_000 - 8_000) * 1.01 ** t + 6_000 * 1.05 ** t + 2_000
+    assert need[t] == pytest.approx(expected)
+
+
+def test_downsizing_scales_the_grown_home_costs():
+    home = Home(value=800_000.0, downsize_age=62, new_value=400_000.0, property_tax=6_000.0, insurance=2_000.0)
+    p = plan(base=40_000.0, end_age=66, home=home, accounts=[Account("A", "tfsa", 2_000_000.0)])
+    g = _grow(p, base=0.0, property_tax=0.05, insurance=0.0, care=0.0, education=0.0)
+    need = run_flat(g).need[:, 0]
+    t = 3                                            # after downsizing at 62 (age 60 at t=0)
+    expected = 32_000 + (6_000 * 1.05 ** t + 2_000) * 0.5
+    assert need[t] == pytest.approx(expected)
+
+
+def test_spending_can_lag_inflation():
+    p = plan(base=40_000.0, end_age=66, accounts=[Account("A", "tfsa", 2_000_000.0)])
+    need = run_flat(_grow(p, base=-0.01, care=0.0)).need[:, 0]
+    assert need[5] == pytest.approx(40_000 * 0.99 ** 5)
+
+
+def test_cost_growth_without_a_home():
+    p = plan(base=40_000.0, end_age=63, accounts=[Account("A", "tfsa", 1_000_000.0)])
+    need = run_flat(_grow(p, property_tax=0.1, insurance=0.1, base=0.0)).need[:, 0]
+    np.testing.assert_allclose(need, 40_000.0)
+
+
+def test_care_costs_grow():
+    p = plan(base=0.0, end_age=66, accounts=[Account("A", "tfsa", 2_000_000.0)],
+             no_go_age=60, care=10_000.0)
+    need = run_flat(_grow(p, care=0.02, base=0.0)).need[:, 0]
+    assert need[3] == pytest.approx(10_000 * 1.02 ** 3)
+
+
+def test_fixed_amounts_shrink_in_the_engine():
+    p = plan(people=[person(age=70, rrif_start_age=65)], accounts=[Account("A", "rrsp", 400_000.0)],
+             base=30_000.0, end_age=75)
+    p = _grow(p, base=0.0, care=0.0, education=0.0, property_tax=0.0, insurance=0.0)
+    T = engine.steps(p)
+    steady = engine.simulate(p, np.zeros((T, 1)), None, np.zeros((T, 1)))
+    hot = engine.simulate(p, np.zeros((T, 1)), None, np.full((T, 1), 0.10))
+    assert hot.tax[4, 0] > steady.tax[4, 0]              # a smaller pension credit
+
+
+def test_shock_paths_average_the_history_so_the_lag_is_unbiased():
+    I = engine.draw_inflation(_shocky(), paths=20_000, years=40, seed=2)
+    lag = np.log((1 + rules.historical_inflation()) / (1 + I))
+    assert abs(lag.mean()) < 3e-4        # every year of history weighs the same
+
+
+# -- historical returns ---------------------------------------------------------------------
+
+def _hist(**ret):
+    p = plan()
+    return replace(p, returns=replace(p.returns, **{"model": "history", "inflation": None,
+                                                    "inflation_shocks": True, **ret}))
+
+
+def test_history_blocks_are_whole_matched_years():
+    s, b, ca = engine.history_real()
+    S, B, I = engine.draw_history(_hist(stocks=0.04, bonds=0.01), paths=30, years=12, seed=5)
+    cs, cb = engine._centre(s, 0.04), engine._centre(b, 0.01)
+    ci = engine._centre(ca, rules.historical_inflation())
+    for n in range(30):
+        ks = [int(np.flatnonzero(np.isclose(cs, S[t, n], rtol=0, atol=1e-12))[0]) for t in range(12)]
+        assert np.allclose(cb[ks], B[:, n]) and np.allclose(ci[ks], I[:, n])   # one year, three series
+        assert all(ks[t + 1] == (ks[t] + 1) % len(cs) for t in range(11) if t % 5 != 4)
+
+
+def test_history_is_seeded_and_centred_on_the_targets():
+    p = _hist(stocks=0.04, bonds=0.01)
+    S, B, I = engine.draw_history(p, paths=20_000, years=40, seed=2)
+    geo = lambda x: np.exp(np.log1p(x).mean()) - 1    # noqa: E731
+    assert geo(S) == pytest.approx(0.04, abs=2e-3)
+    assert geo(B) == pytest.approx(0.01, abs=1e-3)
+    assert geo(I) == pytest.approx(rules.historical_inflation(), abs=1e-3)
+    assert all(np.array_equal(x, y) for x, y in zip((S, B, I), engine.draw_history(p, 20_000, 40, 2)))
+
+
+def test_history_reaches_the_worst_stretches():
+    S, _, _ = engine.draw_history(_hist(), paths=2_000, years=40, seed=4)
+    worst5 = min(np.prod(1 + S[t:t + 5], axis=0).min() for t in range(36)) - 1
+    assert worst5 < -0.40      # 1937-41 loses 46% in real terms even at the FP Canada average
+
+
+def test_history_with_steady_inflation_keeps_historical_returns():
+    S, _, I = engine.draw_history(_hist(inflation=0.02), 10, 8, 1)
+    assert np.allclose(I, 0.02) and S.std() > 0.05
+    S2, _, I2 = engine.draw_history(_hist(inflation_shocks=False), 10, 8, 1)
+    assert np.allclose(I2, rules.historical_inflation()) and np.array_equal(S, S2)
+
+
+def test_history_wraps_for_horizons_longer_than_the_record():
+    S, B, I = engine.draw_history(_hist(), paths=3, years=150, seed=1)
+    assert S.shape == B.shape == I.shape == (150, 3) and np.isfinite(S).all()
+
+
+def test_lognormal_inflation_uses_the_same_blocks_as_history():
+    _, _, I = engine.draw_history(_hist(), 50, 12, 3)
+    assert np.allclose(engine.draw_inflation(_shocky(), 50, 12, 3), I)
+
+
+def test_portfolio_is_the_mix_of_stocks_and_bonds_by_people0_age():
+    S, B = np.full((4, 2), 0.10), np.full((4, 2), 0.02)
+    a = person().age
+    R = engine.portfolio_returns(_hist(mix=((a, 1.0), (a + 2, 0.0))), S, B)
+    assert np.allclose(R[:, 0], [0.10, 0.06, 0.02, 0.02])
+    assert np.allclose(engine.portfolio_returns(_hist(mix=((0, 1.0),)), S, B), S)
+    assert np.allclose(engine.portfolio_returns(_hist(mix=((0, 0.0),)), S, B), B)
+
+
+def test_average_returns_lognormal_is_unchanged_and_history_follows_the_mix():
+    lo = plan()
+    lo = replace(lo, returns=replace(lo.returns, mean=0.05, sd=0.15))
+    assert np.array_equal(engine.average_returns(lo, 5), np.full((5, 1), engine.median_return(0.05, 0.15)))
+    a = person().age
+    p = _hist(stocks=0.04, bonds=0.01, mix=((a, 1.0), (a + 2, 0.0)))
+    avg = engine.average_returns(p, 3)[:, 0]
+    assert np.allclose(avg[[0, 2]], [0.04, 0.01])         # all stocks, all bonds: their own averages
+
+
+def test_average_returns_is_the_compound_return_of_the_rebalanced_blend():
+    a = person().age
+    p = _hist(stocks=0.04, bonds=0.01, mix=((a, 0.5),))
+    s, b, _ = engine.history_real()
+    blend = 0.5 * engine._centre(s, 0.04) + 0.5 * engine._centre(b, 0.01)
+    expected = np.exp(np.log1p(blend).mean()) - 1
+    assert engine.average_returns(p, 2)[0, 0] == pytest.approx(expected)
+    assert expected > 0.025                # rebalancing beats the blend of compound averages
+
+
+def test_history_mode_feeds_simulate_without_the_lag():
+    p = _hist(stocks=0.04, bonds=0.01, mix=((0, 0.6),))
+    R, _, I = engine.draw_futures(p, paths=10, seed=3)
+    S, B, I2 = engine.draw_history(p, 10, engine.life_steps(p), 3)
+    assert np.allclose(R, 0.6 * S + 0.4 * B) and np.array_equal(I, I2)
+
+
+def test_run_records_the_bad_luck_returns_and_a_steady_average():
+    res = engine.run(_hist(), paths=40, seed=1)
+    assert res.bad_luck_returns.shape == (engine.steps(res.inputs),)
+    lo = engine.run(plan(), paths=40, seed=1)
+    assert lo.average_return == engine.median_return(0.0, 0.0)

@@ -72,9 +72,12 @@ def generate(plan, source, *, paths=None, scenario_paths=None, seed=None, out_ro
     previous = report.latest_summary(root)
     now = dt.datetime.now()
     run_dir = root / now.strftime("%Y-%m-%d_%H%M%S")
+    saved = (scenarios.compare_saved(plan, paths=scenario_paths or result.simulated.paths, seed=seed,
+                                         baseline=baseline)
+             if plan.saved_scenarios else None)
     html_doc = report.build_report(result, baseline, ranked, generated_at=now.strftime("%Y-%m-%d %H:%M"),
                                    holdings_source=source, previous=previous,
-                                   refunds=refund.actual_refunds(bank) if bank else None)
+                                   refunds=refund.actual_refunds(bank) if bank else None, saved=saved)
     out = report.save_report(html_doc, run_dir / "retirement_report.html")
     report.write_summary(result, run_dir / "summary.json")
     return Path(out), result
@@ -90,7 +93,7 @@ def dispatch(args) -> int:
         from . import gui
         gui.serve(path, port=args.port, open_browser=not args.no_browser,
                   holdings_path=args.holdings, out_root=args.out,
-                  report_paths=args.paths, scenario_paths=args.scenario_paths)
+                  report_paths=args.paths, scenario_paths=args.scenario_paths, bank=args.bank)
         return 0
     plan, source = _with_balances(inputs.load_inputs(path), args.holdings)
     if args.optimize:

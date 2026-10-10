@@ -53,6 +53,11 @@ def test_serves_the_page_and_plotly(server):
     assert status == 200 and b"Retirement planner" in page
     status, js = _req(server, "GET", "/plotly.js")
     assert status == 200 and len(js) > 100_000
+    status, css = _req(server, "GET", "/theme.css")
+    assert status == 200 and b"[data-theme=dark]" in css
+    status, js = _req(server, "GET", "/theme.js")
+    assert status == 200 and b"window.theme" in js
+    assert b'href="/theme.css"' in page and b"theme.draw(" in page
 
 
 def test_plan_round_trips_with_a_preview_of_the_saved_plan(server):
@@ -61,6 +66,7 @@ def test_plan_round_trips_with_a_preview_of_the_saved_plan(server):
     saved = st["saved"]
     assert 0 <= saved["success"] <= 1 and saved["paths"] == 40
     assert saved["chart"]["data"] and saved["gauge"]["data"]
+    assert saved["gauge_title"] == "Chance the money lasts as long as either of you lives"
     assert saved["balances_source"] == "plan.json balances"
 
 
@@ -144,9 +150,11 @@ def test_gui_flag_hands_off_to_serve(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(gui, "serve", lambda path, **kw: seen.update(path=path, **kw))
     plan = tmp_path / "plan.json"
-    assert cli.main(["retire", "--gui", "--inputs", str(plan), "--port", "9001", "--no-browser"]) == 0
+    assert cli.main(["retire", "--gui", "--inputs", str(plan), "--port", "9001", "--no-browser",
+                     "--bank", "/nonexistent-bank"]) == 0
     assert seen == {"path": plan, "port": 9001, "open_browser": False, "holdings_path": None,
-                    "out_root": None, "report_paths": None, "scenario_paths": None}
+                    "out_root": None, "report_paths": None, "scenario_paths": None,
+                    "bank": "/nonexistent-bank"}
 
 
 def test_serve_fails_fast_without_a_plan(tmp_path):
@@ -202,3 +210,64 @@ def test_drawdown_endpoint_returns_the_table(server):
 def test_page_edits_rrsp_room_and_childcare(server):
     page = _req(server, "GET", "/")[1].decode()
     assert "${P}.rrsp_room" in page and "education.childcare" in page
+
+
+def test_page_edits_money_events(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert 'id="add-event"' in page and "data-remove-event" in page
+
+
+def test_page_switches_the_spending_rule(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert 'name="spending-rule"' in page and "spending.guardrail_band" in page
+
+
+def test_compare_endpoint_and_tab(server):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["saved_scenarios"] = [{"name": "Spend less", "changes": {"spending.base": 70_000}}]
+    status, r = _req(server, "POST", "/api/compare", {"plan": d})
+    assert status == 200 and [x["name"] for x in r["rows"]] == ["Current plan", "Spend less"]
+    page = _req(server, "GET", "/")[1].decode()
+    assert '"compare"' in page and 'id="save-scenario"' in page and "data-apply-scenario" in page
+
+
+def test_preview_carries_future_dollar_factors(server):
+    status, r = _req(server, "POST", "/api/preview", {"plan": inputs.TEMPLATE})
+    assert status == 200
+    x = r["chart"]["data"][0]["x"]
+    assert len(r["future_factor"]) == len(x) and r["future_factor"][0] == 1.0
+    assert r["legacy_factor"] > 1.0 and r["retire_factor"] >= 1.0
+    page = _req(server, "GET", "/")[1].decode()
+    assert 'id="dollars-switch"' in page and "cost_growth." in page
+
+
+def test_defaults_carry_the_return_assumptions(server):
+    status, st = _req(server, "GET", "/api/plan")
+    assert status == 200
+    ret = st["defaults"]["returns"]
+    assert ret["model"] == "history" and ret["mix"] == [[0, 0.8]]
+    assert st["limits"]["expected_return"] == [-0.05, 0.15]
+
+
+def test_mix_and_model_round_trip_through_save(server):
+    d = copy.deepcopy(inputs.TEMPLATE)
+    d["returns"].update(model="history", stocks=0.04, mix=[[50, 0.9], [75, 0.4]])
+    status, _ = _req(server, "POST", "/api/plan", {"plan": d})
+    assert status == 200
+    on_disk = json.loads(server.app.plan_path.read_text())
+    assert on_disk["returns"]["mix"] == [[50, 0.9], [75, 0.4]] and on_disk["returns"]["stocks"] == 0.04
+    assert inputs.load_inputs(server.app.plan_path).returns.mix == ((50, 0.9), (75, 0.4))
+
+
+def test_page_has_the_mix_table_and_model_switch(server):
+    page = _req(server, "GET", "/")[1].decode()
+    assert '"returns.model"' in page and "returnsCard()" in page
+    assert "add-mix" in page and "data-remove-mix" in page and "removeMix" in page
+
+
+def test_page_tolerates_a_plan_without_returns(server):
+    # plan.json may omit "returns" (Python fills the defaults); the page must not read
+    # draft.returns.* without a guard or render() throws and blanks every panel
+    page = _req(server, "GET", "/")[1].decode()
+    assert "const r = draft.returns ?? {}" in page
+    assert "draft.returns = draft.returns || {}" in page
