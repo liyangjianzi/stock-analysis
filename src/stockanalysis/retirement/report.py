@@ -782,6 +782,36 @@ def _event_text(plan, ev) -> str:
     return f"{ev.label}: {_money(abs(ev.amount))} {sign}, {start}{repeat}{end}"
 
 
+def mix_label(mix) -> str:
+    """'80% stocks', or '90% stocks to age 45, gliding to 60% at 65, then to 40% at 80'."""
+    (a0, s0), rest = mix[0], mix[1:]
+    if not rest:
+        return f"{s0:.0%} stocks"
+    return ", ".join([f"{s0:.0%} stocks to age {a0:g}"]
+                     + [f"{'gliding' if i == 0 else 'then'} to {s:.0%} at {a:g}" for i, (a, s) in enumerate(rest)])
+
+
+def worst_stretch(returns, years: int = 5) -> float | None:
+    """The worst ``years``-year compound change in ``returns``; None when too short."""
+    r = np.asarray(returns, dtype=float)
+    if len(r) < years:
+        return None
+    return float(min(np.prod(1 + r[t:t + years]) for t in range(len(r) - years + 1)) - 1)
+
+
+def _returns_fact(plan, result) -> str:
+    r = plan.returns
+    if r.model == "lognormal":
+        return (f"{r.mean:.1%} average, {r.sd:.0%} yearly swings; typical "
+                f"{result.average_return:.2%} a year after inflation")
+    source = (f"FP Canada {rules.RETURN_ASSUMPTIONS.year} guidelines, before fees"
+              if r.stocks is None and r.bonds is None else "your figures")
+    return (f"{mix_label(r.mix)}, rebalanced each January; stocks {r.stock_return:.2%} and bonds "
+            f"{r.bond_return:.2%} a year after inflation ({source}); each future strings together "
+            f"5-year runs of 1928–2025 US stock and bond returns shifted to those averages; typical "
+            f"{result.average_return:.2%} a year")
+
+
 def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=None) -> str:
     people = "".join(
         f"<tr><td>{_esc(p.name)}</td><td>{p.age}</td><td>{_esc(p.sex or 'not set (average table)')}</td>"
@@ -798,13 +828,15 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
         ("TFSA top-up", "each January after retiring, non-registered money fills new TFSA room "
                         "(gains on the shares moved are taxed that year)"
                         if plan.withdrawal.tfsa_top_up else "off"),
-        ("Returns", f"{r.mean:.1%} average, {r.sd:.0%} yearly swings; typical "
-                    f"{result.average_return:.2%} a year after inflation"),
+        ("Returns", _returns_fact(plan, result)),
         ("Inflation", f"{r.inflation_rate:.2%} a year on average"
                       + (" (Canada's CPI, last 40 years)" if r.inflation is None else "")
-                      + ("; each future replays 5-year runs of inflation since 1950 (centred on that "
-                         "average) and returns lag it in high-inflation years" if r.inflation_shocks and r.inflation is None
-                         else "; steady")
+                      + (("; each future replays the same 5-year runs of 1928–2025 as the returns, "
+                          "centred on that average, so high inflation comes with the returns it brought"
+                          if r.model == "history" else
+                          "; each future replays 5-year runs of inflation since 1928 (centred on that "
+                          "average) and returns lag it in high-inflation years")
+                         if r.inflation_shocks and r.inflation is None else "; steady")
                       + "; spending, benefits and tax brackets keep pace, but the book value of "
                         "non-registered investments doesn't, so their gains are taxed on nominal values"),
         ("Costs rising faster than inflation", ", ".join(
@@ -858,6 +890,12 @@ def _assumptions(plan, result: PlanResult, holdings_source: str | None, refunds=
         ("Balances from", holdings_source or "plan.json"),
         ("Futures simulated", f"{result.simulated.paths:,}"),
     ]
+    worst = worst_stretch(result.bad_luck_returns) if (
+        r.model == "history" and result.bad_luck_returns is not None) else None
+    if worst is not None:
+        facts.insert(next(i for i, f in enumerate(facts) if f[0] == "Inflation") + 1,
+                     ("Worst stretch", f"the bad-luck future's worst 5 years change investments by "
+                                       f"{worst:+.0%} after inflation"))
     rules_rows = "".join(
         f"<tr><td>{_esc(name)}</td><td>{_esc(_rule_value(rule.value))}</td><td>{rule.year}</td>"
         f"<td><a href='{_esc(rule.source)}'>source</a></td></tr>" for name, rule in rules.all_rules())

@@ -392,3 +392,30 @@ def test_every_figure_colour_has_a_dark_twin(built):
             report.net_worth_chart(result.average, result.bad_luck, plan))
     for fig in figs:                     # the template replaces Plotly's own (unmapped) defaults
         assert set(_colours(fig.to_plotly_json())) <= set(report.CHART_DARK)
+
+
+def test_mix_label_reads_the_glide():
+    assert report.mix_label(((0, 0.8),)) == "80% stocks"
+    assert report.mix_label(((45, 0.9), (65, 0.6), (80, 0.4))) == \
+        "90% stocks to age 45, gliding to 60% at 65, then to 40% at 80"
+
+
+def test_worst_stretch_is_the_worst_5_year_real_change():
+    r = np.array([0.1, -0.2, -0.3, 0.0, 0.1, -0.1, 0.2])
+    assert report.worst_stretch(r) == pytest.approx(min(np.prod(1 + r[t:t + 5]) for t in range(3)) - 1)
+    assert report.worst_stretch(np.array([0.1, 0.1])) is None        # shorter than 5 years
+
+
+def test_assumptions_describe_the_history_model(built):
+    plan, result, _, _ = built
+    html = report._assumptions(plan, result, None)
+    assert "80% stocks" in html and f"FP Canada {rules.RETURN_ASSUMPTIONS.year}" in html
+    assert "1928" in html and "Worst stretch" in html
+    assert "returns lag it" not in html
+
+
+def test_assumptions_keep_the_old_lines_for_the_lognormal_model(built):
+    plan, result, _, _ = built
+    lo = replace(plan, returns=replace(plan.returns, model="lognormal"))
+    html = report._assumptions(lo, replace(result, inputs=lo, bad_luck_returns=None), None)
+    assert "yearly swings" in html and "returns lag it" in html and "Worst stretch" not in html
